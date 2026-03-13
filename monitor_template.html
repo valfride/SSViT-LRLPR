@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SROCR Mission Control</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root { --bg: #0b0b0b; --card: #161616; --accent: #3498db; --text: #f0f0f0; --border: #2c2c2c; }
+        
+        /* 1. Viewport Lock: No scrollbars allowed */
+        html, body { 
+            height: 100vh; width: 100vw; margin: 0; padding: 10px; 
+            box-sizing: border-box; background: var(--bg); color: var(--text);
+            font-family: 'Inter', sans-serif; font-size: 13px; overflow: hidden;
+            display: flex; flex-direction: column;
+        }
+        
+        header { display: flex; justify-content: space-between; align-items: center; height: 40px; flex-shrink: 0; padding: 0 10px; margin-bottom: 10px; }
+        .meta-info { display: flex; gap: 20px; align-items: center; }
+        .status-pill { display: flex; align-items: center; gap: 8px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
+        .glow { width: 8px; height: 8px; border-radius: 50%; background: #444; }
+        .glow.active { background: #2ecc71; box-shadow: 0 0 10px #2ecc71; }
+
+        /* 2. Proportional Grid: Top 55% / Bottom 45% */
+        .dashboard { flex-grow: 1; display: grid; grid-template-rows: 58% 38%; gap: 10px; min-height: 0; }
+        .top-row { display: grid; grid-template-columns: 1fr 350px; gap: 10px; min-height: 0; }
+        
+        .card { background: var(--card); border-radius: 8px; border: 1px solid var(--border); overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+        .card-header { padding: 8px 15px; background: #202020; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
+        
+        /* 3. Image Filling Logic: Maximizing Latent Maps */
+        .card-body { flex-grow: 1; min-height: 0; display: flex; flex-direction: column; padding: 5px; }
+        .img-box { background: #000; border-radius: 4px; flex-grow: 1; display: flex; flex-direction: column; gap: 5px; min-height: 0; }
+        
+        /* Images expand to fill available vertical space */
+        img { 
+            flex: 1; width: 100%; min-height: 0; 
+            object-fit: contain; /* Keeps aspect ratio while filling */
+            border: 1px solid #222; 
+        }
+        
+        /* 4. Scrollable Table: Never pushes the page down */
+        .table-container { flex-grow: 1; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #333 transparent; }
+        table { width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+        th { text-align: left; background: #1a1a1a; padding: 8px 12px; color: #666; position: sticky; top: 0; z-index: 10; }
+        td { padding: 4px 12px; border-bottom: 1px solid #1d1d1d; }
+
+        /* 5. Chart area flexibility */
+        .chart-flex { display: flex; gap: 10px; flex-grow: 1; min-height: 0; padding: 10px; }
+        .chart-container { flex: 1; position: relative; min-width: 0; }
+
+        .badge { background: var(--accent); color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; }
+        .ok { color: #2ecc71; } .fail { color: #e74c3c; }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="meta-info">
+            <h1 style="margin:0; font-size:1.2rem; font-weight:200; letter-spacing:2px;">SROCR <span style="color:var(--accent)">MISSION CONTROL</span></h1>
+            <span id="lr-readout" class="badge" style="background:#444">LR: --</span>
+        </div>
+        <div class="status-pill">
+            <div id="status-glow" class="glow"></div>
+            <span id="status-text">Script Offline</span>
+        </div>
+    </header>
+
+    <div class="dashboard">
+        <div class="top-row">
+            <div class="card">
+                <div class="card-header">
+                    <span>LIVE FEATURE & ATTENTION MAPS</span>
+                    <span id="epoch-badge" class="badge">INIT</span>
+                </div>
+                <div class="card-body">
+                    <div class="img-box">
+                        <img id="attn" src="attn_ep.png">
+                        <img id="latent" src="latent_ep.png">
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">LATEST BATCH</div>
+                <div class="table-container" id="monitor-box"></div>
+            </div>
+        </div>
+
+        <div class="bottom-row">
+            <div class="card" style="height: 100%;">
+                <div class="card-header">CONVERGENCE HISTORY</div>
+                <div class="chart-flex">
+                    <div class="chart-container"><canvas id="lossChart"></canvas></div>
+                    <div class="chart-container"><canvas id="accChart"></canvas></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let lossChart, accChart;
+
+        function initCharts() {
+            const cfg = (label, color) => ({
+                type: 'line',
+                data: { labels: [], datasets: [{ label, data: [], borderColor: color, backgroundColor: color+'11', fill: true, tension: 0.1, pointRadius: 2, borderWidth: 1.5 }] },
+                options: { 
+                    responsive: true, maintainAspectRatio: false,
+                    scales: { 
+                        y: { grid: { color: '#1d1d1d' }, ticks: { color: '#555', font: { size: 9 } } }, 
+                        x: { grid: { display: false }, ticks: { color: '#555', font: { size: 9 } } } 
+                    },
+                    plugins: { legend: { position: 'top', align: 'end', labels: { color: '#777', boxWidth: 8, font: { size: 9 } } } }
+                }
+            });
+            lossChart = new Chart(document.getElementById('lossChart'), cfg('Train Loss', '#3498db'));
+            lossChart.data.datasets.push({ label: 'Val Loss', data: [], borderColor: '#e67e22', backgroundColor: 'transparent', fill: false, tension: 0.1, pointRadius: 2, borderWidth: 1.5 });
+            accChart = new Chart(document.getElementById('accChart'), cfg('Val Accuracy', '#2ecc71'));
+        }
+
+        async function update() {
+            const r = Math.random();
+            document.getElementById('attn').src = 'attn_ep.png?r=' + r;
+            document.getElementById('latent').src = 'latent_ep.png?r=' + r;
+            
+            fetch('../last.pth', { method: 'HEAD' }).then(res => {
+                const lastMod = new Date(res.headers.get('Last-Modified'));
+                const isRunning = (new Date() - lastMod) / 1000 < 150;
+                document.getElementById('status-glow').className = isRunning ? 'glow active' : 'glow';
+                document.getElementById('status-text').innerText = isRunning ? 'Active' : 'Stalled';
+            }).catch(() => {});
+
+            fetch('../live_monitor.txt?r=' + r).then(res => res.text()).then(text => {
+                const lines = text.split('\n');
+                const epLine = lines.find(l => l.includes('EPOCH'));
+                if(epLine) document.getElementById('epoch-badge').innerText = epLine.replace(/=/g, '').trim();
+                const rows = lines.filter(l => l.includes('|') && !l.includes('---') && !l.includes('GROUND'));
+                let h = '<table><thead><tr><th>GT</th><th>PRED</th><th>ST</th></tr></thead><tbody>';
+                rows.forEach(row => {
+                    const p = row.split('|').map(s => s.trim());
+                    if(p.length < 3) return;
+                    h += `<tr><td>${p[0]}</td><td>${p[1]}</td><td class="${p[2]==='✅'?'ok':'fail'}">${p[2]}</td></tr>`;
+                });
+                document.getElementById('monitor-box').innerHTML = h + '</tbody></table>';
+            }).catch(() => {});
+
+            fetch('../loss_log.csv?r=' + r).then(res => res.text()).then(text => {
+                const lines = text.trim().split('\n').slice(1);
+                if(lines.length === 0) return;
+                const epochs = [], tLoss = [], vLoss = [], acc = [], lrs = [];
+                lines.forEach(l => {
+                    const c = l.split(',');
+                    epochs.push(c[0]); tLoss.push(c[1]); vLoss.push(c[2]); acc.push(c[3]); lrs.push(c[4]);
+                });
+                document.getElementById('lr-readout').innerText = 'LR: ' + parseFloat(lrs[lrs.length-1]).toExponential(2);
+                lossChart.data.labels = epochs;
+                lossChart.data.datasets[0].data = tLoss;
+                lossChart.data.datasets[1].data = vLoss;
+                lossChart.update('none');
+                accChart.data.labels = epochs;
+                accChart.data.datasets[0].data = acc;
+                accChart.update('none');
+            }).catch(() => {});
+        }
+
+        initCharts();
+        setInterval(update, 5000); 
+        update();
+    </script>
+</body>
+</html>

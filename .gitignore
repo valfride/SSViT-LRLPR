@@ -1,0 +1,23 @@
+# Datasets
+*LMDB*/
+RodoSol*/
+Competition*/
+.vscode*/
+test/*
+*.txt
+!flattened_*.txt
+
+# Checkpoints and Logs
+*.pth
+*.pt
+*.jpg
+*.png
+*.ttf
+*.pdf
+*.zip
+outputs/
+train_features/
+loss_log.csv
+
+# Cache
+__pycache__/

@@ -1,0 +1,75 @@
+alphabet: 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ
+distill_decay_epochs: 50
+epoch_max: 3000
+epoch_save: 50
+force_lr: True
+func_train: SROCR_TRAIN
+func_val: SROCR_VAL
+gpu_ids:
+- 0
+loss:
+  args:
+    ignore_index: -100
+    weights:
+      gan_weight: 0.0
+      ocr_weight: 1.0
+      pixel_weight: 0.0
+  name: SROCR_loss
+model_g:
+  args:
+    feature_dim: 128
+    in_channels: 3
+    mode: hybrid
+    out_channels: 3
+  name: VSR_CURVATURE
+name: VSR_FeatureOCR_Curriculum
+optimizer_sr:
+  args:
+    betas:
+    - 0.5
+    - 0.999
+    lr: 1e-4
+    weight_decay: 0.0001
+  name: adamW
+resume: ./outputs/config_snapshot_94/last.pth
+train_dataset:
+  batch: 8
+  dataset:
+    args:
+      path_split: ./final_competition_split.txt
+      phase: training
+    name: multi_image
+  wrapper:
+    args:
+      anagram_prob: 0.0
+      aug: true
+      background: (127, 127, 127)
+      image_aspect_ratio: 3.0
+      imgH: 32
+      imgW: 96
+      in_images: 5
+      synthetic_prob: 0.33
+      fully_synthetic_prob: 0.33
+      use_cache: false
+    name: VSR_collate_fn
+use_fp16: true
+val_dataset:
+  batch: 8
+  dataset:
+    args:
+      path_split: ./final_competition_split.txt
+      phase: validation
+    name: multi_image
+  wrapper:
+    args:
+      aug: false
+      background: (127, 127, 127)
+      image_aspect_ratio: 3.0
+      imgH: 32
+      imgW: 96
+      in_images: 5
+      synthetic_prob: 0.0
+      test: false
+      use_cache: false
+    name: VSR_collate_fn
+warmup_epochs: 0
