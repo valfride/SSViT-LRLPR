@@ -67,6 +67,24 @@ class PositionalEncoding2D(nn.Module):
         self.register_buffer('pe', pe)
     def forward(self, x): return self.dropout(x + self.pe)
 
+class CosineClassifierHead(nn.Module):
+    def __init__(self, in_features, num_classes):
+        super().__init__()
+        self.weight = nn.Parameter(torch.Tensor(num_classes, in_features))
+        nn.init.xavier_uniform_(self.weight)
+        # Learnable temperature scalar, initialized to 20.0 (common for cosine margins)
+        self.tau = nn.Parameter(torch.tensor(20.0))
+
+    def forward(self, x):
+        # Normalize features (X) and weights (W) to magnitude of 1
+        x_norm = F.normalize(x, p=2, dim=-1)
+        w_norm = F.normalize(self.weight, p=2, dim=-1)
+        
+        # Calculate cosine similarity and scale by temperature
+        # x_norm: (B, 7, 384) | w_norm: (37, 384) -> logits: (B, 7, 37)
+        logits = F.linear(x_norm, w_norm) * self.tau
+        return logits
+
 # ==============================================================================
 # 2. ViT EXPERT (With Teacher Forcing)
 # ==============================================================================
@@ -77,13 +95,13 @@ class ViT_CrossAttn_OCR(nn.Module):
         
         # Inside ViT_CrossAttn_OCR.__init__
         self.patch_embed = nn.Sequential(
-            nn.Conv2d(in_channels, d_model // 2, kernel_size=3, stride=1, padding=1, padding_mode='replicate'), # <--- FIXED
-            nn.BatchNorm2d(d_model // 2), nn.ReLU(True),
+            nn.Conv2d(in_channels, d_model // 2, kernel_size=3, stride=1, padding=1, padding_mode='replicate'),
+            nn.GroupNorm(8, d_model // 2), nn.ReLU(True),
             
-            nn.Conv2d(d_model // 2, d_model, kernel_size=3, stride=2, padding=1, padding_mode='replicate'),     # <--- FIXED
-            nn.BatchNorm2d(d_model), nn.ReLU(True),
+            nn.Conv2d(d_model // 2, d_model, kernel_size=3, stride=2, padding=1, padding_mode='replicate'), 
+            nn.GroupNorm(8, d_model), nn.ReLU(True),
             
-            nn.Conv2d(d_model, d_model, kernel_size=3, stride=2, padding=1, padding_mode='replicate')           # <--- FIXED
+            nn.Conv2d(d_model, d_model, kernel_size=3, stride=2, padding=1, padding_mode='replicate')
         )
         self.input_norm = nn.LayerNorm(d_model)
 
@@ -93,8 +111,15 @@ class ViT_CrossAttn_OCR(nn.Module):
         self.mask_token = nn.Parameter(torch.zeros(1, 1, d_model))
         nn.init.normal_(self.mask_token, std=1.0)
 
-        # Base Queries
-        self.char_queries = nn.Parameter(torch.randn(1, num_chars, d_model) * 1.0)
+        # Base Queries (Initialized with 1D Positional Awareness)
+        self.char_queries = nn.Parameter(torch.zeros(1, num_chars, d_model))
+        position = torch.arange(0, num_chars, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(1, num_chars, d_model)
+        pe[0, :, 0::2] = torch.sin(position * div_term)
+        pe[0, :, 1::2] = torch.cos(position * div_term)
+        # Seed the parameters with the spatial math, but leave them learnable
+        self.char_queries.data.copy_(pe)
         
         # ðTEACHER FORCING: Embedding to convert GT class to d_model vector
         self.char_embed = nn.Embedding(num_classes, d_model)
@@ -105,7 +130,7 @@ class ViT_CrossAttn_OCR(nn.Module):
         )
         self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
 
-        self.head = nn.Sequential(nn.LayerNorm(d_model), nn.Linear(d_model, num_classes))
+        self.head = CosineClassifierHead(d_model, num_classes)
 
     def random_masking(self, x, mask_ratio):
         B, L, D = x.shape
@@ -182,7 +207,7 @@ class ViT_CrossAttn_OCR(nn.Module):
             # No longer skipping index 0
             current_queries = (current_queries * (1.0 - mask)) + (tgt_emb * mask)
 
-        tgt_mask = self.generate_par_mask(B, x.device) if self.training else None
+        tgt_mask = None
         
         final_tokens = None
         loops = refine_iters + 1
@@ -191,8 +216,6 @@ class ViT_CrossAttn_OCR(nn.Module):
         # 5. Native Decoder Loop
         for i in range(loops):
             out_tokens = self.decoder(tgt=current_queries, memory=vis_tokens, tgt_mask=tgt_mask)
-            if i < loops - 1:
-                current_queries = out_tokens
             final_tokens = out_tokens
 
         attention_maps = None
@@ -261,7 +284,7 @@ class CustomOCR(nn.Module):
         # SCHEDULED SAMPLING
         forcing_prob = max(0.0, 0.5 - (epoch * 0.02)) if self.training else 0.0
         
-        iters = 1 if self.training else 2
+        iters = 0
         
         # logits: (B, 7, 37) | all_tokens: (B, 7, 384) | attn_maps: (B, H, 7, 768)
         logits, all_tokens, attn_maps = self.vit_expert(feat, refine_iters=iters, tgt=tgt, forcing_prob=forcing_prob, return_attn=True)

@@ -79,7 +79,7 @@ def get_confusion_weights(dataset, stats_path):
     return torch.DoubleTensor(weights)
 
 def create_scheduler(optimizer, epoch_max):
-    return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=15, min_lr=1e-6)
+    return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5, min_lr=1e-6)
 
 def main(config, save_path):
     local_rank = int(os.environ["LOCAL_RANK"])
@@ -121,6 +121,9 @@ def main(config, save_path):
     optimizer_g = torch.optim.AdamW(optim_groups, weight_decay=1e-4)
     # -----------------------------------------------------------
     
+    # --- 3. Initialize Scheduler BEFORE Resume ---
+    scheduler_g = create_scheduler(optimizer_g, epoch_max)
+    
     # --- 4. Resume Logic ---
     start_epoch = 1; best_accuracy = 0.0
     resume_path = config.get('resume')
@@ -145,25 +148,30 @@ def main(config, save_path):
                 try: 
                     optimizer_g.load_state_dict(checkpoint['optimizer_g'])
                     
-                    # NEW: Conditional LR Force
+                    # NEW: Conditional LR and Scheduler Force
                     if config.get('force_lr', False):
                         if is_main_process(): 
-                            print(f"🔥 FORCE_LR is True: Overriding loaded LR to {base_lr}")
+                            print(f"🔥 FORCE_LR is True: Overriding loaded LR to {base_lr} and resetting Scheduler.")
                         
-                        # Group 0: Base Params (2e-4)
+                        # Group 0: Base Params
                         optimizer_g.param_groups[0]['lr'] = base_lr          
                         
-                        # Group 1: Deform Offset Params (2e-4 * 10 = 2e-3)
+                        # Group 1: Deform Offset Params
                         if len(optimizer_g.param_groups) > 1:
                             optimizer_g.param_groups[1]['lr'] = base_lr * 10.0
+                            
+                        # Re-create scheduler to wipe its patience/history
+                        scheduler_g = create_scheduler(optimizer_g, epoch_max)
+                        
+                    else:
+                        # If NOT forcing LR, load the old scheduler state to continue smoothly
+                        if 'scheduler_g' in checkpoint:
+                            if is_main_process(): print("✅ Loading previous Scheduler state.")
+                            scheduler_g.load_state_dict(checkpoint['scheduler_g'])
                     
                 except Exception as e:
-                    if is_main_process(): print(f"⚠️ Optimizer resume failed: {e}")
+                    if is_main_process(): print(f"⚠️ Optimizer/Scheduler resume failed: {e}")
 
-    # After the resume logic block:
-    if config.get('force_lr', False):
-        # Re-initialize scheduler to reset the patience counter and 'best' tracking
-        scheduler_g = create_scheduler(optimizer_g, epoch_max)
     if not DEBUG: model_g = DDP(model_g, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False)
         
     loss_fn = losses.make(config['loss']).to(local_rank)
@@ -230,8 +238,11 @@ def main(config, save_path):
                 log_to_csv(save_path, epoch, train_loss, val_loss, accuracy, current_lr)
                 
                 checkpoint = {
-                    'epoch': epoch, 'model_g_sd': model_g.module.state_dict() if hasattr(model_g, 'module') else model_g.state_dict(),
-                    'optimizer_g': optimizer_g.state_dict(), 'best_acc': best_accuracy 
+                    'epoch': epoch, 
+                    'model_g_sd': model_g.module.state_dict() if hasattr(model_g, 'module') else model_g.state_dict(),
+                    'optimizer_g': optimizer_g.state_dict(), 
+                    'scheduler_g': scheduler_g.state_dict(), # <--- ADD THIS LINE
+                    'best_acc': best_accuracy 
                 }
                 torch.save(checkpoint, save_path / 'last.pth')
                 

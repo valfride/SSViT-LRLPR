@@ -207,7 +207,14 @@ class Sequential_Sequence_sr(Dataset):
         return len(self.grouped_dataset)
 
     def __getitem__(self, idx):
-        sequence_items = self.grouped_dataset[idx]
+        raw_sequence_items = self.grouped_dataset[idx]
+        
+        # --- THE FIX: Filter out any HR images before processing the sequence ---
+        sequence_items = [item for item in raw_sequence_items if not item['name'].startswith('hr-')]
+        
+        # Safety check: if a track somehow ONLY had an HR image, prevent a crash
+        if len(sequence_items) == 0:
+            raise ValueError(f"Track index {idx} has no LR images! (Only found HR files or it was empty)")
         
         # We need exactly self.in_images (e.g., 5). 
         # Pad or truncate if necessary, though they should ideally be exactly 5.

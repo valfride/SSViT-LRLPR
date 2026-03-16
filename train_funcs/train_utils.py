@@ -92,6 +92,7 @@ def decode_batch_logits(logits, converter):
         decoded_preds.append("".join(chars))
     return decoded_preds
 
+
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2.0, alpha=0.25, ignore_index=0): 
         super().__init__()
@@ -100,23 +101,36 @@ class FocalLoss(nn.Module):
         self.ignore_index = ignore_index
 
     def forward(self, logits, targets):
-        # --- THE FIX: Change .view() to .reshape() ---
         if logits.dim() == 3: logits = logits.reshape(-1, logits.shape[-1])
         if targets.dim() == 2: targets = targets.reshape(-1)
         
+        # --- NUMERICAL STABILITY FIX: Force Float32 ---
+        # This prevents FP16 underflow/overflow during exponentiation
+        logits = logits.float()
+        
+        # Calculate log probabilities and probabilities
         log_probs = F.log_softmax(logits, dim=-1)
         probs = torch.exp(log_probs)
         
+        # Gather the probabilities of the true targets
         log_pt = log_probs.gather(1, targets.unsqueeze(1)).squeeze(1)
         pt = probs.gather(1, targets.unsqueeze(1)).squeeze(1)
+
+        # --- SAFETY CLAMP ---
+        # Prevent 'pt' from being exactly 1.0, which makes (1 - pt) exactly 0.0
+        # 0.0 ** gamma can cause gradient spikes
+        pt = torch.clamp(pt, min=1e-7, max=1.0 - 1e-7)
 
         focal_weight = (1 - pt) ** self.gamma
         loss = self.alpha * focal_weight * (-log_pt)
         
         if self.ignore_index >= 0:
             mask = targets != self.ignore_index
-            if mask.sum() > 0: loss = loss[mask]
-            else: return torch.tensor(0.0, device=logits.device)
+            if mask.sum() > 0: 
+                loss = loss[mask]
+            else: 
+                return torch.tensor(0.0, device=logits.device, requires_grad=True)
+                
         return loss.mean()
 
 class AdvancedAttentionLoss(nn.Module):
@@ -175,12 +189,12 @@ class AdvancedAttentionLoss(nn.Module):
         # Distance to Top Focus (F1)
         dx_f1 = (self.x_flat - f1_x) * self.aspect_ratio
         dy_f1 = self.y_flat - f1_y
-        dist_to_f1 = torch.sqrt((dx_f1)**2 + (dy_f1)**2 + 1e-8)
+        dist_to_f1 = torch.sqrt((dx_f1)**2 + (dy_f1)**2 + 1e-6)
         
         # Distance to Bottom Focus (F2)
         dx_f2 = (self.x_flat - f2_x) * self.aspect_ratio
         dy_f2 = self.y_flat - f2_y
-        dist_to_f2 = torch.sqrt((dx_f2)**2 + (dy_f2)**2 + 1e-8)
+        dist_to_f2 = torch.sqrt((dx_f2)**2 + (dy_f2)**2 + 1e-6)
         
         # The Elliptical Rule: The sum of the distances defines the boundary
         sum_of_distances = dist_to_f1 + dist_to_f2
@@ -318,7 +332,7 @@ def visualize_feature_maps(latent_tensor, original_images, batch_idx, epoch, sav
     for i in range(grid_items.shape[0]):
         c_min = grid_items[i].min()
         c_max = grid_items[i].max()
-        grid_items[i] = (grid_items[i] - c_min) / (c_max - c_min + 1e-8)
+        grid_items[i] = (grid_items[i] - c_min) / (c_max - c_min + 1e-6)
 
     # 3. Create the Grids
     # Save the original image as its own tiny file (32x96)
@@ -407,7 +421,7 @@ def visualize_vit_attention(image_tensor, latent_tensor, attn_weights, query_tex
         attn_map = attn[i].view(grid_h, grid_w).numpy()
         
         # Calculate Center of Mass [0 to 1]
-        a_norm = attn_map / (attn_map.sum() + 1e-8)
+        a_norm = attn_map / (attn_map.sum() + 1e-6)
         cx = np.sum(a_norm * x_grid)
         cy = np.sum(a_norm * y_grid)
         center_px = (int(cx * lr_w), int(cy * lr_h))
@@ -416,7 +430,7 @@ def visualize_vit_attention(image_tensor, latent_tensor, attn_weights, query_tex
         attn_map_resized = cv2.resize(attn_map, (lr_w, lr_h), interpolation=cv2.INTER_NEAREST)
         
         # Normalize and apply colormap
-        attn_map_norm = (attn_map_resized - attn_map_resized.min()) / (attn_map_resized.max() - attn_map_resized.min() + 1e-8)
+        attn_map_norm = (attn_map_resized - attn_map_resized.min()) / (attn_map_resized.max() - attn_map_resized.min() + 1e-6)
         attn_heatmap = (attn_map_norm * 255).astype(np.uint8)
         attn_color = cv2.applyColorMap(attn_heatmap, cv2.COLORMAP_HOT)
         
@@ -582,7 +596,7 @@ def SROCR_TRAIN(train_loader, model_g, model_d, optimizer_g, optimizer_d, loss_f
 
             if batch_idx % 10 == 0:
                 write_live_monitor(save_root / 'live_monitor.txt', text_label, decoded_s, decoded_s, current_epoch, batch_idx)
-
+        
     total_failures = epoch_tracker.get_worst_pairs_dict(top_k=50) 
     with open(save_root / 'confusion_stats.json', 'w') as f: json.dump(total_failures, f, indent=4)
     

@@ -10,11 +10,14 @@ import utils
 import os
 import numpy as np
 
+# Import the Viterbi Decoder from your training utilities!
+from train_funcs.train_utils import viterbi_plate_decoder
+
 # ==============================================================================
 # 1. CONVERTERS (Standardized)
 # ==============================================================================
 class strLabelConverter(object):
-    """Decodes Logits to Strings (Pure & Simple)"""
+    """Decodes Logits to Strings"""
     def __init__(self, alphabet="0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"):
         self.alphabet = ['-'] + list(alphabet) # 0 is blank/pad
         self.dict = {char: i for i, char in enumerate(self.alphabet)}
@@ -92,10 +95,10 @@ if __name__ == "__main__":
                             break
                 
                 if is_compatible:
-                     print(f"  ✅ [INCLUDE] {pth.name}")
-                     valid_state_dicts.append(clean_sd)
+                    print(f"  ✅ [INCLUDE] {pth.name}")
+                    valid_state_dicts.append(clean_sd)
                 else:
-                     print(f"  ⚠️ [SKIP]    {pth.name} (Shape/Arch Mismatch)")
+                    print(f"  ⚠️ [SKIP]    {pth.name} (Shape/Arch Mismatch)")
             except Exception as e:
                 print(f"  ❌ [ERROR]   {pth.name}: {e}")
 
@@ -112,18 +115,21 @@ if __name__ == "__main__":
         print("✅ SWA Weights Loaded.")
 
     else:
-        last_ckpt = ckpt_dir / 'last.pth'
-        # Try finding the best acc model if last doesn't exist
-        if not last_ckpt.exists():
-            pth_files = list(ckpt_dir.glob("model_acc_*.pth"))
-            if pth_files:
-                pth_files.sort(key=lambda x: float(x.stem.split('_')[2]), reverse=True)
-                last_ckpt = pth_files[0]
+        # 1. Try to find the best accuracy model first
+        pth_files = list(ckpt_dir.glob("model_acc_*.pth"))
+        if pth_files:
+            # Sort by the accuracy float in the filename
+            pth_files.sort(key=lambda x: float(x.stem.split('_')[2]), reverse=True)
+            best_ckpt = pth_files[0]
+            print(f"\nLoading Best Checkpoint: {best_ckpt}")
+        else:
+            # 2. Fallback to last.pth if no best models are found
+            best_ckpt = ckpt_dir / 'last.pth'
+            
+        print(f"\nLoading Single Checkpoint: {best_ckpt}")
+        if not best_ckpt.exists(): raise FileNotFoundError(f"Checkpoint not found: {best_ckpt}")
         
-        print(f"\nLoading Single Checkpoint: {last_ckpt}")
-        if not last_ckpt.exists(): raise FileNotFoundError(f"Checkpoint not found: {last_ckpt}")
-        
-        raw_sd = torch.load(last_ckpt, map_location=device)['model_g_sd']
+        raw_sd = torch.load(best_ckpt, map_location=device)['model_g_sd']
         state_dict = {k.replace('module.', ''): v for k, v in raw_sd.items()}
         model.load_state_dict(state_dict, strict=False)
 
@@ -151,36 +157,58 @@ if __name__ == "__main__":
     failures = []
     submission_lines = []
 
-    # --- INFERENCE LOOP (PURE) ---
+    # --- INFERENCE LOOP (ALIGNED WITH SROCR_VAL) ---
     with torch.no_grad():
-        pbar = tqdm(val_loader, desc="Evaluating (Pure)")
+        pbar = tqdm(val_loader, desc=f"Evaluating ({args.mode.upper()} Mode)")
         for batch in pbar:
-            lr_tensor = batch['lr'].to(device)
-            gt_text = batch['gt'][0] if 'gt' in batch and batch['gt'][0] else ""
-            track_name = batch['name'][0].rsplit('_f', 1)[0]
+            # 1. Fetch the sequence tensor (NOT 'lr')
+            lr_seqs = batch['lr_seq'].to(device)
             
-            with torch.amp.autocast('cuda', enabled=config.get('use_fp16', True)):
-                # 1. Forward Pass
-                output = model(lr_tensor, temporal_pool=True) 
+            # Ground truth for val mode
+            gt_text = batch['gt'][0] if 'gt' in batch and batch['gt'][0] else ""
+            
+            # Safely extract track name 
+            # Sequence collate_fn usually returns a list of lists for names: [['track1_f1', 'track1_f2', ...]]
+            try:
+                raw_name = batch['names'][0][0] if 'names' in batch else batch['name'][0][0]
+            except:
+                # Fallback if structure is flat
+                raw_name = batch['names'][0] if 'names' in batch else batch['name'][0]
                 
-                # 2. Unpack Output (Handle Dict or Tuple)
-                if isinstance(output, tuple):
-                    preds_dict = output[0]
-                else:
-                    preds_dict = output
-                
-                # 3. Get Logits
-                logits = preds_dict['logits'] # [B, 7, 37]
-                
-                # 4. Calculate Probabilities (For Confidence Score Only)
-                probs = logits.softmax(dim=-1)
-                conf_scores, _ = probs.max(dim=-1)
-                avg_conf = conf_scores.mean().item()
+            track_name = raw_name.rsplit('_f', 1)[0]
+            
+            B, Seq_Len, C, H, W = lr_seqs.shape
+            
+            # 2. Flatten for the model forward pass
+            flat_imgs = lr_seqs.view(B * Seq_Len, C, H, W)
 
-            # 5. PURE DECODING (No Rules, No Dictionaries)
-            # We trust the model 100%. If it predicts 'Q' instead of '0', so be it.
-            indices = logits.argmax(dim=-1)
-            final_pred_str = true_converter.decode(indices)[0]
+            with torch.amp.autocast('cuda', enabled=config.get('use_fp16', True)):
+                output = model(flat_imgs, temporal_pool=True) 
+                if isinstance(output, tuple): output = output[0]
+                logits = output['logits']
+
+            # 3. Use the Viterbi Decoder (Enforcing Plate Rules)
+            all_decoded_preds, all_scores = viterbi_plate_decoder(logits, true_converter, return_scores=True)
+
+            # 4. SMART MAJORITY VOTE LOGIC (Exactly like validation)
+            pred_tracker = {}
+            for pred_str, conf_score in zip(all_decoded_preds, all_scores):
+                if pred_str not in pred_tracker:
+                    pred_tracker[pred_str] = {'votes': 0, 'confidence': 0.0}
+                pred_tracker[pred_str]['votes'] += 1
+                pred_tracker[pred_str]['confidence'] += conf_score.item()
+            
+            sorted_preds = sorted(
+                pred_tracker.items(), 
+                key=lambda item: (item[1]['votes'], item[1]['confidence']), 
+                reverse=True
+            )
+            
+            # The winner!
+            final_pred_str = sorted_preds[0][0]
+            
+            # Approximate sequence confidence (average confidence of the winning votes)
+            avg_conf = sorted_preds[0][1]['confidence'] / sorted_preds[0][1]['votes'] 
 
             # --- METRICS & LOGGING ---
             total_plates += 1
@@ -188,21 +216,18 @@ if __name__ == "__main__":
                 if final_pred_str == gt_text:
                     correct_plates += 1
                 else:
-                    # Log failure for analysis
                     failures.append(f"{track_name} | Pred: {final_pred_str} | GT: {gt_text}")
-                
-                pbar.set_postfix({'Acc': f"{correct_plates/total_plates:.1%}"})
+                pbar.set_postfix({'SeqAcc': f"{correct_plates/total_plates:.1%}"})
             else:
-                # Format: filename,plate_string;confidence
                 submission_lines.append(f"{track_name},{final_pred_str};{avg_conf:.4f}")
 
     # 5. FINAL RESULTS
     if args.mode == 'val':
         acc = (correct_plates / total_plates) * 100.0 if total_plates > 0 else 0
-        print(f"\n🏆 FINAL PURE ACCURACY: {acc:.2f}% ({correct_plates}/{total_plates})")
+        print(f"\n🏆 FINAL SEQUENCE ACCURACY: {acc:.2f}% ({correct_plates}/{total_plates})")
         
         if failures:
-            fail_path = "validation_failures_pure.txt"
+            fail_path = "validation_failures_sequence.txt"
             with open(fail_path, "w") as f: 
                 f.write("\n".join(failures))
             print(f"❌ Failures saved to {fail_path}")
