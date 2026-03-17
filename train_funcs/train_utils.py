@@ -46,7 +46,7 @@ gpu_degrader = K.AugmentationSequential(
     K.RandomGaussianBlur(kernel_size=(7, 7), sigma=(0.1, 2.0), p=1.0),
     GPULanczosSimulator(scale_min=0.16, scale_max=0.18), # Replaces the dangerous crop!
     K.ColorJitter(brightness=0.1, contrast=0.1, p=0.6),
-    K.RandomJPEG(jpeg_quality=(95, 100), p=0.8),
+    # K.RandomJPEG(jpeg_quality=(95, 100), p=0.8),
     data_keys=["input"]
 )
 # ==============================================================================
@@ -117,12 +117,14 @@ def get_layout_label(text):
     return 1 if text[4].isalpha() else 0
 
 def decode_batch_logits(logits, converter):
-    indices = logits.argmax(dim=-1)
+    # THE FIX: Move the entire tensor to the CPU memory once!
+    indices = logits.argmax(dim=-1).cpu().numpy() 
+    
     decoded_preds = []
     for b in range(len(indices)):
         chars = []
         for t in range(7):
-            idx = indices[b, t].item()
+            idx = indices[b, t] # Already on CPU, no sync delay!
             char = converter.alphabet[idx]
             if char != '-': chars.append(char)
         decoded_preds.append("".join(chars))
@@ -175,7 +177,7 @@ class HyperAttentionLoss(nn.Module):
         # --- NEW: Fully Learnable Iris Scale ---
         # Starts at 0.5 (medium pressure). The Meta-Optimizer will pull 
         # this down as it mathematically proves that a tighter focus helps validation.
-        self.iris_scale = nn.Parameter(torch.tensor(0.5))
+        self.iris_scale = nn.Parameter(torch.tensor(2.0))
         
         # Hypergradient Parameters
         self.v_stretch = nn.Parameter(torch.tensor(1.2)) 
@@ -419,7 +421,11 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
     for batch_idx, batch in enumerate(pbar):
         if batch is None: continue
 
-        lr_batch = batch['lr'].to(device, non_blocking=True)
+        # lr_batch = batch['lr'].to(device, non_blocking=True)
+        
+        lr_batch = batch['lr'].to(device, non_blocking=True, memory_format=torch.channels_last)
+        if batch_idx == 0:
+            print(f"Is image NHWC? {lr_batch.is_contiguous(memory_format=torch.channels_last)}")
         is_hr_mask = batch['is_hr'].to(device, non_blocking=True)
         text_label = batch['gt'] 
         true_targets = true_converter.encode_list(text_label).to(device)
@@ -440,7 +446,7 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
         # ====================================================================
         # THE "TRUE" HYPERGRADIENT META-STEP (Every 10 Batches)
         # ====================================================================
-        if batch_idx % 50 == 0 and batch_idx > 0:
+        if batch_idx % 5 == 0 and batch_idx > 0:
             # 1. Grab a fresh validation batch
             try:
                 val_batch = next(val_iter)
@@ -449,10 +455,13 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
                 val_batch = next(val_iter)
             
             if 'lr' in val_batch:
-                val_lr = val_batch['lr'].to(device, non_blocking=True)
+                # Add it directly here if it's already 4D
+                val_lr = val_batch['lr'].to(device, non_blocking=True, memory_format=torch.channels_last)
             elif 'lr_seq' in val_batch:
                 seq = val_batch['lr_seq'].to(device, non_blocking=True)
                 val_lr = seq[:, seq.shape[1] // 2, :, :, :] if seq.dim() == 5 else seq
+                # Add it here after slicing the 5D down to 4D
+                val_lr = val_lr.contiguous().to(memory_format=torch.channels_last)
             else:
                 raise KeyError("Validation batch contains neither 'lr' nor 'lr_seq'.")
 
@@ -637,7 +646,7 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
 
             if batch_idx % 50 == 0:
                 write_live_monitor(save_root / 'live_monitor.txt', text_label, decoded_s, decoded_s, current_epoch, batch_idx)
-        
+
     total_failures = epoch_tracker.get_worst_pairs_dict(top_k=50) 
     with open(save_root / 'confusion_stats.json', 'w') as f: json.dump(total_failures, f, indent=4)
     
@@ -661,7 +670,7 @@ def SROCR_VAL(val_loader, model_g, model_d, loss_fn, config, **kwargs):
 
             B, Seq_Len, C, H, W = lr_seqs.shape
             flat_imgs = lr_seqs.view(B * Seq_Len, C, H, W)
-
+            flat_imgs = flat_imgs.contiguous().to(memory_format=torch.channels_last)
             with torch.amp.autocast('cuda', enabled=config.get('use_fp16', False)):
                 output = model_g(flat_imgs, temporal_pool=True) 
                 if isinstance(output, (tuple, list)): output = output[0]

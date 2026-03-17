@@ -95,13 +95,13 @@ class ViT_CrossAttn_OCR(nn.Module):
         
         # Inside ViT_CrossAttn_OCR.__init__
         self.patch_embed = nn.Sequential(
-            nn.Conv2d(in_channels, d_model // 2, kernel_size=3, stride=1, padding=1, padding_mode='replicate'),
+            nn.Conv2d(in_channels, d_model // 2, kernel_size=3, stride=1, padding=1),
             nn.GroupNorm(8, d_model // 2), nn.ReLU(True),
             
-            nn.Conv2d(d_model // 2, d_model, kernel_size=3, stride=2, padding=1, padding_mode='replicate'), 
+            nn.Conv2d(d_model // 2, d_model, kernel_size=3, stride=2, padding=1), 
             nn.GroupNorm(8, d_model), nn.ReLU(True),
             
-            nn.Conv2d(d_model, d_model, kernel_size=3, stride=2, padding=1, padding_mode='replicate')
+            nn.Conv2d(d_model, d_model, kernel_size=3, stride=2, padding=1)
         )
         self.input_norm = nn.LayerNorm(d_model)
 
@@ -234,9 +234,7 @@ class ViT_CrossAttn_OCR(nn.Module):
 # ==============================================================================
 # 3. WRAPPER CLASS
 # ==============================================================================
-# ==============================================================================
-# 3. WRAPPER CLASS
-# ==============================================================================
+
 class CustomOCR(nn.Module):
     def __init__(self, input_shape=(128, 64, 192), num_classes=37, num_chars=7, d_model=384, num_heads=16):
         super().__init__()
@@ -245,7 +243,7 @@ class CustomOCR(nn.Module):
         # --- NEW: ADVANCED SEMANTIC STEM ---
         self.stem = nn.Sequential(
             # 1. Initial Projection & Noise Cleanup 
-            nn.Conv2d(in_channels, 128, 3, 1, 1, padding_mode='replicate'),
+            nn.Conv2d(in_channels, 128, 3, 1, 1),
             nn.GroupNorm(8, 128),
             HighContrastGate(128), 
             
@@ -255,7 +253,7 @@ class CustomOCR(nn.Module):
             FReLU(256), 
             
             # 3. Final Semantic Refinement 
-            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1, padding_mode='replicate'), 
+            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1), 
             nn.GroupNorm(8, 256),
             FReLU(256)
         )

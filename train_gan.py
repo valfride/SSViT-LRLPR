@@ -97,6 +97,7 @@ def main(config, save_path):
 
     if is_main_process(): print("Creating Teacherless VSR Model...")
     model_g = models.make(config['model_g']).to(local_rank)
+    model_g = model_g.to(memory_format=torch.channels_last)
     
     # --- UPDATED: Optimizer Setup (WITH LAYOUT MULTIPLIER) ---
     base_lr = float(config['optimizer_sr']['args']['lr'])

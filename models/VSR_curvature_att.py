@@ -21,11 +21,11 @@ class MDTA(nn.Module):
         
         self.qkv_dwconv_h = nn.Conv2d(
             channels * 3, channels * 3, kernel_size=(1, 3), padding=(0, 1), 
-            groups=channels * 3, padding_mode='replicate', bias=False
+            groups=channels * 3, bias=False
         )
         self.qkv_dwconv_v = nn.Conv2d(
             channels * 3, channels * 3, kernel_size=(3, 1), padding=(1, 0), 
-            groups=channels * 3, padding_mode='replicate', bias=False
+            groups=channels * 3, bias=False
         )
         self.project_out = nn.Conv2d(channels, channels, kernel_size=1, bias=False)
 
@@ -56,7 +56,7 @@ class GDFN(nn.Module):
         self.project_in = nn.Conv2d(channels, hidden_channels * 2, kernel_size=1, bias=False)
         self.dwconv = nn.Conv2d(
             hidden_channels * 2, hidden_channels * 2, kernel_size=3, padding=1, 
-            groups=hidden_channels * 2, padding_mode='replicate', bias=False
+            groups=hidden_channels * 2, bias=False
         )
         self.act = FReLU(hidden_channels) 
         self.project_out = nn.Conv2d(hidden_channels, channels, kernel_size=1, bias=False)
@@ -85,7 +85,7 @@ class LatentUpsampler(nn.Module):
         super().__init__()
         # 1. Project to higher channel depth
         self.conv1 = nn.Conv2d(
-            dim, dim * (upscale_factor ** 2), kernel_size=3, padding=1, padding_mode='replicate'
+            dim, dim * (upscale_factor ** 2), kernel_size=3, padding=1
         )
         # 2. Shuffle channels into spatial resolution
         self.upsample = nn.PixelShuffle(upscale_factor)
@@ -93,7 +93,7 @@ class LatentUpsampler(nn.Module):
         # --- THE FIX: Smoothing Convolution ---
         # 3. Blend the shuffled pixels together to destroy the checkerboard artifact
         self.conv2 = nn.Conv2d(
-            dim, dim, kernel_size=3, padding=1, padding_mode='replicate'
+            dim, dim, kernel_size=3, padding=1
         )
         
         self.norm = nn.GroupNorm(8, dim)
@@ -121,26 +121,30 @@ class DeformableProj(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, offset_groups=4):
         super().__init__()
         self.padding = kernel_size // 2
+        
+        # 1. The Offset Calculator gets 'replicate' to protect it from the black edge cliff!
         self.offset_conv = nn.Conv2d(
             in_channels, 2 * kernel_size * kernel_size * offset_groups, 
             kernel_size=kernel_size, padding=self.padding, padding_mode='replicate'
         )
         nn.init.constant_(self.offset_conv.weight, 0)
         nn.init.constant_(self.offset_conv.bias, 0)
-        self.pad = nn.ReplicationPad2d(self.padding)
-        self.deform_conv = ops.DeformConv2d(in_channels, out_channels, kernel_size=kernel_size, padding=0)
+        
+        # 2. The native C++ operator gets standard zero padding (it will use the safe offsets)
+        self.deform_conv = ops.DeformConv2d(
+            in_channels, out_channels, kernel_size=kernel_size, padding=self.padding
+        )
 
     def forward(self, x):
         offsets = self.offset_conv(x)
-        x_padded = self.pad(x) 
-        return self.deform_conv(x_padded, offsets)
+        return self.deform_conv(x, offsets)
 
 class FReLU(nn.Module):
     def __init__(self, in_channels):
         super().__init__()
         self.spatial_condition = nn.Conv2d(
             in_channels, in_channels, kernel_size=3, stride=1, padding=1, 
-            groups=in_channels, padding_mode='replicate'
+            groups=in_channels
         )
         self.norm = nn.GroupNorm(8, in_channels)
 
@@ -158,7 +162,7 @@ class SpatialFeatureExtractor(nn.Module):
         # 1. STEM (3 channels -> feature_dim)
         # Replaces the temporal fusion with a robust spatial stem
         self.stem = nn.Sequential(
-            nn.Conv2d(in_channels, feature_dim, 3, 1, 1, padding_mode='replicate'),
+            nn.Conv2d(in_channels, feature_dim, 3, 1, 1),
             nn.GroupNorm(8, feature_dim),
             HighContrastGate(feature_dim)
         )
@@ -166,14 +170,14 @@ class SpatialFeatureExtractor(nn.Module):
         # 2. COORDINATE INJECTION PROJECTION
         # Expects feature_dim (from stem) + 2 (X, Y grids)
         self.coord_proj = nn.Sequential(
-            nn.Conv2d(feature_dim + 2, feature_dim, 3, 1, 1, padding_mode='replicate'),
+            nn.Conv2d(feature_dim + 2, feature_dim, 3, 1, 1),
             nn.GroupNorm(8, feature_dim),
             FReLU(feature_dim)
         )
         
         # 3. DEEP RESTORATION (Optimized Restormer)
         self.body = nn.Sequential(*[RestormerBlock(feature_dim, num_heads=8) for _ in range(2)])
-        self.conv_after_body = nn.Conv2d(feature_dim, feature_dim, 3, 1, 1, padding_mode='replicate')
+        self.conv_after_body = nn.Conv2d(feature_dim, feature_dim, 3, 1, 1)
         
         # 4. Feature Hallucination Layer (Super-Resolution)
         self.latent_sr = LatentUpsampler(feature_dim, upscale_factor=2)
