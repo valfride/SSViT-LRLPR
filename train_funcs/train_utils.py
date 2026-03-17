@@ -14,6 +14,14 @@ import matplotlib.pyplot as plt
 import os
 import math
 from collections import Counter
+import higher # Add this at the top of train_utils.py
+from torch.nn.attention import SDPBackend
+def is_main_process():
+    """Independent helper to check DDP status without importing from train_gan."""
+    if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+        return True
+    return torch.distributed.get_rank() == 0
+
 # ==============================================================================
 # 1. HELPERS
 # ==============================================================================
@@ -38,9 +46,6 @@ class strLabelConverter(object):
         return texts
 
 def viterbi_plate_decoder(batch_logits, converter, return_scores=False):
-    """
-    Enforces Brazilian Plate Formats (Old: LLL-NNNN, Mercosur: LLL-NLNN)
-    """
     B, T, C = batch_logits.shape
     if T != 7: 
         if return_scores:
@@ -48,12 +53,11 @@ def viterbi_plate_decoder(batch_logits, converter, return_scores=False):
             return decode_batch_logits(batch_logits, converter), scores
         return decode_batch_logits(batch_logits, converter)
 
-    # Masks: 0=Allowed, -inf=Forbidden
     L_mask = torch.full((C,), float('-inf'), device=batch_logits.device)
-    L_mask[11:37] = 0.0 # A-Z
+    L_mask[11:37] = 0.0 
     
     N_mask = torch.full((C,), float('-inf'), device=batch_logits.device)
-    N_mask[1:11] = 0.0 # 0-9
+    N_mask[1:11] = 0.0 
 
     path_old = torch.stack([L_mask, L_mask, L_mask, N_mask, N_mask, N_mask, N_mask])
     path_mercosur = torch.stack([L_mask, L_mask, L_mask, N_mask, L_mask, N_mask, N_mask])
@@ -70,7 +74,6 @@ def viterbi_plate_decoder(batch_logits, converter, return_scores=False):
     decoded_preds = decode_batch_logits(final_logits, converter)
     
     if return_scores:
-        # Get the actual log probabilities of the final chosen path
         final_scores = torch.where(is_mercosur.squeeze(-1).squeeze(-1), score_mercosur, score_old)
         return decoded_preds, final_scores
         
@@ -92,49 +95,40 @@ def decode_batch_logits(logits, converter):
         decoded_preds.append("".join(chars))
     return decoded_preds
 
-
-class FocalLoss(nn.Module):
-    def __init__(self, gamma=2.0, alpha=0.25, ignore_index=0): 
+class SmoothPoly1Loss(nn.Module):
+    def __init__(self, epsilon=2.0, smoothing=0.1):
         super().__init__()
-        self.gamma = gamma
-        self.alpha = alpha
-        self.ignore_index = ignore_index
+        # epsilon is the polynomial coefficient (usually 2.0 is optimal)
+        self.epsilon = epsilon
+        self.smoothing = smoothing
 
     def forward(self, logits, targets):
-        if logits.dim() == 3: logits = logits.reshape(-1, logits.shape[-1])
-        if targets.dim() == 2: targets = targets.reshape(-1)
-        
-        # --- NUMERICAL STABILITY FIX: Force Float32 ---
-        # This prevents FP16 underflow/overflow during exponentiation
-        logits = logits.float()
-        
-        # Calculate log probabilities and probabilities
-        log_probs = F.log_softmax(logits, dim=-1)
-        probs = torch.exp(log_probs)
-        
-        # Gather the probabilities of the true targets
-        log_pt = log_probs.gather(1, targets.unsqueeze(1)).squeeze(1)
-        pt = probs.gather(1, targets.unsqueeze(1)).squeeze(1)
+        # logits: (B, 7, 37) | targets: (B, 7)
+        logits_flat = logits.view(-1, logits.size(-1))
+        targets_flat = targets.view(-1)
 
-        # --- SAFETY CLAMP ---
-        # Prevent 'pt' from being exactly 1.0, which makes (1 - pt) exactly 0.0
-        # 0.0 ** gamma can cause gradient spikes
-        pt = torch.clamp(pt, min=1e-7, max=1.0 - 1e-7)
+        # 1. Base Cross Entropy with Smoothing (The Shock Absorber)
+        ce_loss = F.cross_entropy(
+            logits_flat, 
+            targets_flat, 
+            label_smoothing=self.smoothing, 
+            reduction='none'
+        )
 
-        focal_weight = (1 - pt) ** self.gamma
-        loss = self.alpha * focal_weight * (-log_pt)
-        
-        if self.ignore_index >= 0:
-            mask = targets != self.ignore_index
-            if mask.sum() > 0: 
-                loss = loss[mask]
-            else: 
-                return torch.tensor(0.0, device=logits.device, requires_grad=True)
-                
-        return loss.mean()
+        # 2. Extract the actual prediction probability (pt)
+        with torch.no_grad():
+            clean_ce = F.cross_entropy(logits_flat, targets_flat, reduction='none')
+            pt = torch.exp(-clean_ce)
 
-class AdvancedAttentionLoss(nn.Module):
-    def __init__(self, grid_h=16, grid_w=48, margin=0.035, monotonic_weight=2.0, ortho_weight=0.2, vertical_stretch=2.0):
+        # 3. Apply the Poly-1 Expansion
+        # Instead of multiplying (like Focal Loss), PolyLoss ADDS the polynomial term.
+        # This preserves the healthy gradients for normal images while boosting the hard ones.
+        poly1_loss = ce_loss + self.epsilon * (1.0 - pt)
+
+        return poly1_loss.mean()
+
+class HyperAttentionLoss(nn.Module):
+    def __init__(self, grid_h=16, grid_w=48):
         super().__init__()
         x_coords = torch.linspace(0, 1, grid_w)
         y_coords = torch.linspace(0, 1, grid_h)
@@ -143,121 +137,77 @@ class AdvancedAttentionLoss(nn.Module):
         self.register_buffer('x_flat', x_grid.flatten())
         self.register_buffer('y_flat', y_grid.flatten())
         
-        # Calculate physical aspect ratio once during initialization
-        self.aspect_ratio = grid_w / grid_h # e.g., 48 / 16 = 3.0
-        self.margin_sq = margin ** 2
-        self.monotonic_weight = monotonic_weight
-        self.ortho_weight = ortho_weight
-        self.vertical_stretch = vertical_stretch
+        self.aspect_ratio = grid_w / grid_h 
+        
+        # --- NEW: Fully Learnable Iris Scale ---
+        # Starts at 0.5 (medium pressure). The Meta-Optimizer will pull 
+        # this down as it mathematically proves that a tighter focus helps validation.
+        self.iris_scale = nn.Parameter(torch.tensor(0.5))
+        
+        # Hypergradient Parameters
+        self.v_stretch = nn.Parameter(torch.tensor(1.2)) 
+        self.monotonic_scale = nn.Parameter(torch.tensor(15.0))
+        self.boundary_scale = nn.Parameter(torch.tensor(20.0))
+        self.ortho_scale = nn.Parameter(torch.tensor(5.0))
 
-    def forward(self, multi_head_attn, current_epoch=0, max_decay_epoch=2):
-        # multi_head_attn shape: (B, Num_Heads=16, Num_Queries=7, Num_Tokens=768)
+    def forward(self, multi_head_attn, current_epoch=0):
+        # Note: current_epoch is kept in the signature so it doesn't break 
+        # your train_utils.py calls, but the math is now 100% time-free!
+        
         B, H, Q, T = multi_head_attn.shape
+        avg_attn = multi_head_attn.mean(dim=1) 
         
-        # --- 1. Average across heads for Macro Rules ---
-        avg_attn = multi_head_attn.mean(dim=1)
-        
-        # Calculate Center of Mass (cx, cy)
-        cx = torch.sum(avg_attn * self.x_flat, dim=-1, keepdim=True)
-        cy = torch.sum(avg_attn * self.y_flat, dim=-1, keepdim=True)
+        cx = torch.sum(avg_attn * self.x_flat, dim=-1, keepdim=True) 
+        cy = torch.sum(avg_attn * self.y_flat, dim=-1, keepdim=True) 
+        cx_flat = cx.squeeze(-1) 
 
-        # ================================================================
-        # DECAY MULTIPLIER (The "Closing Iris" mechanism)
-        # ================================================================
-        if current_epoch < max_decay_epoch:
-            progress = current_epoch / max_decay_epoch
-            decay_multiplier = 0.5 * (1.0 + math.cos(math.pi * progress))
-        else:
-            decay_multiplier = 0.0
+        # ==========================================
+        # A. Spread (Now Autonomous)
+        # ==========================================
+        # We add 0.05 so the scale never mathematically hits absolute zero
+        base_iris = torch.abs(self.iris_scale) + 0.05
+        v_s = torch.abs(self.v_stretch)
+        
+        dist_sq = ((self.x_flat - cx) * self.aspect_ratio)**2 + ((self.y_flat - cy) * v_s)**2
+        
+        # Dividing by base_iris allows the Meta-Optimizer to directly control 
+        # the strictness of the spatial penalty without relying on a schedule.
+        spread_loss = (torch.sum(avg_attn * dist_sq, dim=-1) / base_iris).mean()
 
-        # ----------------------------------------------------------------
-        # A. Spread Penalty (Closing Iris Ellipses + Aspect Ratio)
-        # ----------------------------------------------------------------
-        target_focal_offset = 0.15
-        target_major_axis_length = 0.50
-        expansion_factor = 0.20 # Starts 20% larger in Epoch 1
-        
-        current_focal_offset = target_focal_offset + (target_focal_offset * expansion_factor * decay_multiplier)
-        current_major_axis_length = target_major_axis_length + (target_major_axis_length * expansion_factor * decay_multiplier)
-
-        # Define the exact coordinates of the Top and Bottom Foci
-        f1_x = cx
-        f1_y = cy - current_focal_offset # Top Focus
-        f2_x = cx
-        f2_y = cy + current_focal_offset # Bottom Focus
-        
-        # Distance to Top Focus (F1)
-        dx_f1 = (self.x_flat - f1_x) * self.aspect_ratio
-        dy_f1 = self.y_flat - f1_y
-        dist_to_f1 = torch.sqrt((dx_f1)**2 + (dy_f1)**2 + 1e-6)
-        
-        # Distance to Bottom Focus (F2)
-        dx_f2 = (self.x_flat - f2_x) * self.aspect_ratio
-        dy_f2 = self.y_flat - f2_y
-        dist_to_f2 = torch.sqrt((dx_f2)**2 + (dy_f2)**2 + 1e-6)
-        
-        # The Elliptical Rule: The sum of the distances defines the boundary
-        sum_of_distances = dist_to_f1 + dist_to_f2
-        
-        # Penalty applies only if the sum of distances exceeds the major axis length
-        penalized_dist = F.relu(sum_of_distances - current_major_axis_length)
-        
-        # We square the penalty to heavily punish outliers
-        spread_loss = torch.sum(avg_attn * (penalized_dist ** 2), dim=-1).mean()
-
-        # ----------------------------------------------------------------
-        # B. Monotonic Penalty (Dynamic Slack Band with Overlap Allowance)
-        # ----------------------------------------------------------------
-        cx_flat = cx.squeeze(-1)
+        # ==========================================
+        # B. Monotonic
+        # ==========================================
         dx = cx_flat[:, 1:] - cx_flat[:, :-1]
-        
-        # Calculate exactly what 1 pixel is on your 48-width grid
         pixel_w = 1.0 / 48.0
-        
-        # --- Controlled Overlap ---
-        # We allow a 1.5 pixel overlap to handle merged characters.
-        # So, centers can get as close as 4.5 pixels before triggering a penalty.
-        min_center_dist = 4.5 * pixel_w
-        
-        # We still prevent them from drifting too far apart (max 2 pixel gap)
-        # 6 pixel width + 2 pixel gap = 8 pixels max center distance
-        max_center_dist = 8.0 * pixel_w
-        
-        # Penalty 1: Triggers heavily if they overlap TOO much (dx < 4.5 pixels)
+        min_center_dist = 4.5 * pixel_w 
+        max_center_dist = 8.5 * pixel_w 
         overlap_penalty = F.relu(min_center_dist - dx)
-        
-        # Penalty 2: Triggers heavily if they drift too far apart (dx > 8.0 pixels)
         drift_penalty = F.relu(dx - max_center_dist)
-        
-        monotonic_penalty = (overlap_penalty ** 2) + (drift_penalty ** 2)
-        
-        # Multiply by 10.0 to ensure the squared penalty has enough tension
-        monotonic_loss = monotonic_penalty.mean() * (self.monotonic_weight * 5.0)
+        monotonic_loss = ((overlap_penalty ** 2) + (drift_penalty ** 2)).mean() * torch.abs(self.monotonic_scale)
 
-        # ----------------------------------------------------------------
-        # C. Aggressive Orthogonality Penalty (Cosine Similarity)
-        # ----------------------------------------------------------------
-        # 1. Normalize each head so the penalty is about % of overlap, not brightness
+        # ==========================================
+        # C. Orthogonality
+        # ==========================================
         norm_attn = F.normalize(multi_head_attn, p=2, dim=-1)
-        
-        # 2. Calculate Similarity (Overlap %)
-        attn_by_query = norm_attn.transpose(1, 2) # (B, Q, H, T)
+        attn_by_query = norm_attn.transpose(1, 2)
         overlap_matrix = torch.matmul(attn_by_query, attn_by_query.transpose(-2, -1))
-        
-        # 3. Mask out self-overlap (the diagonal)
         device = multi_head_attn.device
         identity_mask = torch.eye(H, device=device).view(1, 1, H, H)
         off_diagonal_overlap = overlap_matrix * (1.0 - identity_mask)
-        
-        # 4. THE MARGIN: Allow up to 50% overlap
-        max_overlap = 0.50
-        clumping_penalty = F.relu(off_diagonal_overlap - max_overlap)
-        
-        # 5. Square the penalty to create a "Wall"
-        ortho_loss = (clumping_penalty ** 2).mean() * (self.ortho_weight * 20.0)
+        clumping_penalty = F.relu(off_diagonal_overlap - 0.50) 
+        ortho_loss = (clumping_penalty ** 2).mean() * torch.abs(self.ortho_scale)
 
-        # Return the final loss sum
-        return spread_loss + ortho_loss + monotonic_loss
+        # ==========================================
+        # D. Boundary
+        # ==========================================
+        left_bound = F.relu(0.15 - cx_flat[:, 0])
+        right_bound = F.relu(cx_flat[:, -1] - 0.88)
+        avg_cy = cy.mean(dim=1).squeeze(-1)
+        top_bound = F.relu(0.10 - avg_cy).mean()
+        bottom_bound = F.relu(avg_cy - 0.90).mean()
+        boundary_loss = ((left_bound**2).mean() + (right_bound**2).mean() + top_bound**2 + bottom_bound**2) * torch.abs(self.boundary_scale)
+
+        return spread_loss + ortho_loss + monotonic_loss + boundary_loss
 
 class ConfusionTracker:
     def __init__(self, alphabet="0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"):
@@ -294,93 +244,60 @@ def robust_unpack_loss(loss):
 # ==============================================================================
 # 2. VISUALIZATION MODULES
 # ==============================================================================
-
 def visualize_feature_maps(latent_tensor, original_images, batch_idx, epoch, save_dir='./train_features', num_channels=16):
-    """
-    Saves a visualization of the early fusion feature maps using pure torchvision.
-    """
-    import os
-    import torch
-    import torchvision.utils as vutils
-    
     os.makedirs(save_dir, exist_ok=True)
-    
-    # 1. Get the Raw LR Image (32x96)
     if original_images.dim() == 5:
         center_frame_idx = original_images.shape[1] // 2
         orig_img = original_images[0, center_frame_idx].detach().cpu()
     else:
         orig_img = original_images[0].detach().cpu()
 
-    # Un-normalize the original image to [0, 1]
     if orig_img.min() < 0:
         orig_img = (orig_img * 0.5) + 0.5
     orig_img = torch.clamp(orig_img, 0, 1)
 
-    # 2. Get the Latent Channels (64x192)
-    feat_map = latent_tensor[0].detach().cpu() # Shape: (Channels, 64, 192)
+    feat_map = latent_tensor[0].detach().cpu() 
+    mean_activation = feat_map.mean(dim=0, keepdim=True) 
+    channels_to_plot = feat_map[:15] 
     
-    # We will grab the mean activation + the first 15 individual channels
-    mean_activation = feat_map.mean(dim=0, keepdim=True) # Shape: (1, 64, 192)
-    channels_to_plot = feat_map[:15] # Shape: (15, 64, 192)
-    
-    # Combine them into a single batch of 16 grayscale images
-    # Shape becomes: (16, 1, 64, 192)
     grid_items = torch.cat([mean_activation.unsqueeze(0), channels_to_plot.unsqueeze(1)], dim=0)
 
-    # Normalize each channel independently so features pop out
     for i in range(grid_items.shape[0]):
         c_min = grid_items[i].min()
         c_max = grid_items[i].max()
         grid_items[i] = (grid_items[i] - c_min) / (c_max - c_min + 1e-6)
 
-    # 3. Create the Grids
-    # Save the original image as its own tiny file (32x96)
     vutils.save_image(orig_img, os.path.join(save_dir, f'raw_input_ep.png'))
-    
-    # Save the 16 latent channels as a 4x4 grid. 
-    # Because each is 64x192, the final image will be exactly 256x768 pixels.
     vutils.save_image(
         grid_items, 
         os.path.join(save_dir, f'latent_ep.png'), 
         nrow=4, 
         padding=1, 
-        normalize=False # We already normalized manually
+        normalize=False 
     )
 
 def visualize_vit_attention(image_tensor, latent_tensor, attn_weights, query_texts, epoch, batch_idx, save_dir="attn_maps"):
-    import os
     import cv2
-    import torch
-    import numpy as np
-    import torchvision.utils as vutils
-    import math
-    
     os.makedirs(save_dir, exist_ok=True)
 
-    # 1. PROCESS ATTENTION WEIGHTS (Native 16x48)
     if attn_weights.dim() == 4:
         attn_weights = attn_weights.mean(dim=1)
-    attn = attn_weights[0].detach().cpu() # Shape: (7, 768)
-    num_queries = attn.shape[0] # 7
+    attn = attn_weights[0].detach().cpu() 
+    num_queries = attn.shape[0] 
     grid_h, grid_w = 16, 48
 
-    # 2. PROCESS ORIGINAL LR IMAGE (Native 32x96)
     if image_tensor.dim() == 5:
         img = image_tensor[0, image_tensor.shape[1] // 2].detach().cpu() 
     else:
         img = image_tensor[0].detach().cpu()
 
-    # Un-normalize LR image to [0, 1]
     if img.min() < 0: 
         img = (img * 0.5) + 0.5 
-    img_lr_tensor = torch.clamp(img, 0, 1) # (3, 32, 96)
+    img_lr_tensor = torch.clamp(img, 0, 1) 
     
-    # Convert to numpy for OpenCV drawing (H, W, C) in [0, 255]
     img_lr_np = (img_lr_tensor.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
-    lr_h, lr_w = img_lr_np.shape[:2] # 32x96
+    lr_h, lr_w = img_lr_np.shape[:2] 
 
-    # --- CALCULATE THE CLOSING IRIS MATH ---
     max_decay_epoch = 50
     if epoch < max_decay_epoch:
         progress = epoch / max_decay_epoch
@@ -400,11 +317,10 @@ def visualize_vit_attention(image_tensor, latent_tensor, attn_weights, query_tex
     b_sq = max(0, a**2 - c**2)
     minor_axis_length = math.sqrt(b_sq) * 2.0
 
-    aspect_ratio = grid_w / grid_h  # 3.0
+    aspect_ratio = grid_w / grid_h  
     logical_height = current_major_axis_length
     logical_width = minor_axis_length / aspect_ratio 
 
-    # Map to LR Image Coordinates (32x96)
     major_px_y = int((logical_height / 2.0) * lr_h)
     minor_px_x = int((logical_width / 2.0) * lr_w)
     axes_length = (minor_px_x, major_px_y)
@@ -413,44 +329,28 @@ def visualize_vit_attention(image_tensor, latent_tensor, attn_weights, query_tex
     y_coords = np.linspace(0, 1, grid_h)
     x_grid, y_grid = np.meshgrid(x_coords, y_coords)
 
-    # 3. BUILD THE GRID ITEMS
-    # We will collect tensors of shape (3, 32, 96)
     grid_items = [img_lr_tensor]
 
     for i in range(num_queries):
         attn_map = attn[i].view(grid_h, grid_w).numpy()
-        
-        # Calculate Center of Mass [0 to 1]
         a_norm = attn_map / (attn_map.sum() + 1e-6)
         cx = np.sum(a_norm * x_grid)
         cy = np.sum(a_norm * y_grid)
         center_px = (int(cx * lr_w), int(cy * lr_h))
         
-        # Resize attention map to LR size using NEAREST
         attn_map_resized = cv2.resize(attn_map, (lr_w, lr_h), interpolation=cv2.INTER_NEAREST)
-        
-        # Normalize and apply colormap
         attn_map_norm = (attn_map_resized - attn_map_resized.min()) / (attn_map_resized.max() - attn_map_resized.min() + 1e-6)
         attn_heatmap = (attn_map_norm * 255).astype(np.uint8)
         attn_color = cv2.applyColorMap(attn_heatmap, cv2.COLORMAP_HOT)
-        
-        # Convert BGR to RGB
         attn_color = cv2.cvtColor(attn_color, cv2.COLOR_BGR2RGB)
         
-        # Blend original image and heatmap
         blended = cv2.addWeighted(img_lr_np, 0.4, attn_color, 0.6, 0)
-        
-        # Draw the red ellipse (1 pixel thick on a 32x96 image)
         cv2.ellipse(blended, center_px, axes_length, 0, 0, 360, (255, 0, 0), 1)
         
-        # Convert back to tensor [0, 1]
         blended_tensor = torch.from_numpy(blended).permute(2, 0, 1).float() / 255.0
         grid_items.append(blended_tensor)
 
-    # Stack all items: 1 original + 7 queries = 8 images
-    grid_tensor = torch.stack(grid_items) # Shape: (8, 3, 32, 96)
-    
-    # Save as a single image grid (2 rows of 4)
+    grid_tensor = torch.stack(grid_items) 
     vutils.save_image(
         grid_tensor, 
         os.path.join(save_dir, f'attn_ep.png'), 
@@ -462,8 +362,10 @@ def visualize_vit_attention(image_tensor, latent_tensor, attn_weights, query_tex
 # ==============================================================================
 # 3. TRAINING LOOP
 # ==============================================================================
+import higher  # MUST BE AT THE TOP OF train_utils.py
+
 @register('SROCR_TRAIN')
-def SROCR_TRAIN(train_loader, model_g, model_d, optimizer_g, optimizer_d, loss_fn, config, **kwargs):
+def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimizer_d, optimizer_hyper, loss_fn_spread, config, **kwargs):
     device = next(model_g.parameters()).device
     true_converter = strLabelConverter(config.get('alphabet', "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
     use_fp16 = config.get('use_fp16', False)
@@ -471,21 +373,15 @@ def SROCR_TRAIN(train_loader, model_g, model_d, optimizer_g, optimizer_d, loss_f
     pbar = tqdm(train_loader, leave=False)
     
     save_root = kwargs.get('save_path', Path('.'))
-    
-    # Removed 'layout_acc' from tracking
     loss_stats = {'total': [], 'cls': [], 'spread': []}
     acc_seq_accum = []
     acc_char_accum = [] 
-    
     current_epoch = kwargs.get('epoch', 0)
-    
-    loss_fn_spatial = FocalLoss(gamma=3.0, ignore_index=0).to(device)
-    loss_fn_spread = AdvancedAttentionLoss(grid_h=16,
-                                        grid_w=48,
-                                        margin=0.035,
-                                        monotonic_weight=2.0,
-                                        ortho_weight=0.2).to(device)
+    loss_fn_spatial = SmoothPoly1Loss(epsilon=3.0, smoothing=0.1).to(device)
     epoch_tracker = ConfusionTracker()
+
+    # --- NEW: Validation Iterator for Meta-Learning ---
+    val_iter = iter(val_loader)
 
     for batch_idx, batch in enumerate(pbar):
         if batch is None: continue
@@ -493,40 +389,136 @@ def SROCR_TRAIN(train_loader, model_g, model_d, optimizer_g, optimizer_d, loss_f
         lr_batch = batch['lr'].to(device, non_blocking=True)
         text_label = batch['gt'] 
         true_targets = true_converter.encode_list(text_label).to(device)
-        
-        # REMOVED: layout_targets = ...
-        
+
+        # ====================================================================
+        # THE "TRUE" HYPERGRADIENT META-STEP (Every 10 Batches)
+        # ====================================================================
+        if batch_idx % 10 == 0 and batch_idx > 0:
+            # 1. Grab a fresh validation batch
+            try:
+                val_batch = next(val_iter)
+            except StopIteration:
+                val_iter = iter(val_loader)
+                val_batch = next(val_iter)
+            
+            if 'lr' in val_batch:
+                val_lr = val_batch['lr'].to(device, non_blocking=True)
+            elif 'lr_seq' in val_batch:
+                seq = val_batch['lr_seq'].to(device, non_blocking=True)
+                val_lr = seq[:, seq.shape[1] // 2, :, :, :] if seq.dim() == 5 else seq
+            else:
+                raise KeyError("Validation batch contains neither 'lr' nor 'lr_seq'.")
+
+            val_targets = true_converter.encode_list(val_batch['gt']).to(device)
+
+            # Micro-Batch Slicing (Memory Protection)
+            meta_bs = 4 
+            m_lr = lr_batch[:meta_bs]
+            m_tgt = true_targets[:meta_bs]
+            m_val_lr = val_lr[:meta_bs]
+            m_val_tgt = val_targets[:meta_bs]
+
+            # --- THE FIREWALL FIX ---
+            # Save the original gradient states and freeze the entire CNN backbone.
+            # By only leaving the ViT/Transformer unfrozen, the double-backward 
+            # will never reach the Deformable Convolutions.
+            orig_grad_states = {}
+            for name, param in model_g.named_parameters():
+                orig_grad_states[name] = param.requires_grad
+                # Freeze everything that isn't part of the ViT/Transformer
+                if 'vit' not in name.lower() and 'transformer' not in name.lower():
+                    param.requires_grad = False
+
+            optimizer_hyper.zero_grad()
+
+            # --- THE ATTENTION FIX ---
+            # Temporarily disable FlashAttention/MemEfficient kernels and force PyTorch 
+            # to use standard math, which fully supports double-backward derivatives!
+            with torch.nn.attention.sdpa_kernel(SDPBackend.MATH):
+                
+                # 2. Create the "Virtual" computational graph
+                with higher.innerloop_ctx(model_g, optimizer_g, copy_initial_weights=False) as (fmodel, diffopt):
+                    
+                    # --- INNER LOOP (Using Micro-Batch) ---
+                    with torch.amp.autocast('cuda', enabled=use_fp16):
+                        train_preds = fmodel(
+                            m_lr, temporal_pool=True, tgt=m_tgt, 
+                            epoch=current_epoch, return_attn=True
+                        )
+                        if isinstance(train_preds, (tuple, list)): train_preds = train_preds[0]
+                        
+                        loss_cls_train = loss_fn_spatial(train_preds['logits'], m_tgt)
+                        if loss_cls_train.dim() > 0: loss_cls_train = loss_cls_train.mean()
+                        
+                        loss_spread_train = 0.0
+                        if train_preds['attn_maps'] is not None:
+                            loss_spread_train = loss_fn_spread(train_preds['attn_maps'], current_epoch=current_epoch)
+                            
+                        simulated_train_loss = loss_cls_train + loss_spread_train
+                    
+                    diffopt.step(simulated_train_loss)
+
+                    # --- OUTER LOOP (Using Validation Micro-Batch) ---
+                    with torch.amp.autocast('cuda', enabled=use_fp16):
+                        val_preds = fmodel(
+                            m_val_lr, temporal_pool=True, tgt=m_val_tgt, 
+                            epoch=current_epoch, return_attn=False
+                        )
+                        if isinstance(val_preds, (tuple, list)): val_preds = val_preds[0]
+                        
+                        loss_cls_val = loss_fn_spatial(val_preds['logits'], m_val_tgt)
+                        if loss_cls_val.dim() > 0: loss_cls_val = loss_cls_val.mean()
+
+                    # 3. BACKPROP THROUGH TIME
+                    scaler.scale(loss_cls_val).backward()
+
+            # 4. Update the Spatial Penalties
+            scaler.unscale_(optimizer_hyper)
+            optimizer_hyper.step()
+            scaler.update() 
+            
+            # --- THE RESTORE ---
+            # Flawlessly restore the exact original states for the main training step
+            for name, param in model_g.named_parameters():
+                param.requires_grad = orig_grad_states[name]
+                    
+            if is_main_process():
+                # Extract all 5 values
+                i_val = loss_fn_spread.iris_scale.item()
+                v_val = loss_fn_spread.v_stretch.item()
+                m_val = loss_fn_spread.monotonic_scale.item()
+                b_val = loss_fn_spread.boundary_scale.item()
+                o_val = loss_fn_spread.ortho_scale.item()
+                
+                # Add "I: {i_val:.2f} |" to the front of the string!
+                hyper_str = f"I: {i_val:.2f} | V: {v_val:.2f} | M: {m_val:.1f} | B: {b_val:.1f} | O: {o_val:.1f}"
+                
+                # The JS dashboard reads exactly what is written here
+                hyper_path = save_root / 'train_features' / 'hyper.txt'
+                with open(hyper_path, 'w') as f:
+                    f.write(hyper_str)
+
+        # ====================================================================
+        # STANDARD TRAINING STEP (Using the real model)
+        # ====================================================================
         optimizer_g.zero_grad()
+        # ... (Rest of the standard forward pass continues below)
             
         with torch.amp.autocast('cuda', enabled=use_fp16):
-
-            # 1. Forward Pass
             preds_lr = model_g(
-                lr_batch, 
-                temporal_pool=True, 
-                tgt=true_targets, 
-                epoch=current_epoch,
-                return_attn=True 
+                lr_batch, temporal_pool=True, tgt=true_targets, 
+                epoch=current_epoch, return_attn=True 
             )
 
             if isinstance(preds_lr, (tuple, list)): preds_lr = preds_lr[0]
 
-            # 2. Character Classification Loss 
             loss_cls_lr = loss_fn_spatial(preds_lr['logits'], true_targets)
             if loss_cls_lr.dim() > 0: loss_cls_lr = loss_cls_lr.mean()
             
-            # REMOVED: loss_layout = ...
-
-            # 3. Attention Penalties (Spread + Sequence + Orthogonality)
             loss_spread = 0.0
             if preds_lr['attn_maps'] is not None:
-                loss_spread = loss_fn_spread(
-                    preds_lr['attn_maps'], 
-                    current_epoch=current_epoch, 
-                    max_decay_epoch=2 
-                )
+                loss_spread = loss_fn_spread(preds_lr['attn_maps'], current_epoch=current_epoch)
 
-            # 4. Total Loss (Layout removed)
             total_loss = loss_cls_lr + loss_spread
 
         if not torch.isfinite(total_loss):
@@ -538,35 +530,29 @@ def SROCR_TRAIN(train_loader, model_g, model_d, optimizer_g, optimizer_d, loss_f
         scaler.step(optimizer_g)
         scaler.update()
 
+        # ====================================================================
+        # METRICS & VISUALIZATION
+        # ====================================================================
         with torch.no_grad():
             loss_stats['total'].append(total_loss.item())
             loss_stats['cls'].append(loss_cls_lr.item()) 
-            loss_stats['spread'].append(loss_spread.item())
-            
-            # REMOVED: layout_preds, acc_l, and loss_stats['layout_acc']
+            loss_stats['spread'].append(loss_spread.item() if isinstance(loss_spread, torch.Tensor) else loss_spread)
             
             decoded_s = decode_batch_logits(preds_lr['logits'], true_converter)
             
             if batch_idx % 10 == 0:
                 if 'latent_lr' in preds_lr:
                     visualize_feature_maps(
-                        latent_tensor=preds_lr['latent_lr'], 
-                        original_images=lr_batch, 
-                        batch_idx=batch_idx,
-                        epoch=current_epoch,
-                        save_dir=save_root / 'train_features'
+                        latent_tensor=preds_lr['latent_lr'], original_images=lr_batch, 
+                        batch_idx=batch_idx, epoch=current_epoch, save_dir=save_root / 'train_features'
                     )
                 
                 if 'attn_maps' in preds_lr and preds_lr['attn_maps'] is not None:
                     sample_pr = decoded_s[0]
                     visualize_vit_attention(
-                        image_tensor=lr_batch,             
-                        latent_tensor=preds_lr['latent_lr'], # <--- ADD THIS LINE
-                        attn_weights=preds_lr['attn_maps'],
-                        query_texts=sample_pr,             
-                        epoch=current_epoch,
-                        batch_idx=batch_idx,
-                        save_dir=save_root / 'train_features'
+                        image_tensor=lr_batch, latent_tensor=preds_lr['latent_lr'], 
+                        attn_weights=preds_lr['attn_maps'], query_texts=sample_pr,             
+                        epoch=current_epoch, batch_idx=batch_idx, save_dir=save_root / 'train_features'
                     )
 
             acc_s = sum([1 for p, t in zip(decoded_s, text_label) if p == t]) / len(text_label)
@@ -580,13 +566,13 @@ def SROCR_TRAIN(train_loader, model_g, model_d, optimizer_g, optimizer_d, loss_f
             epoch_tracker.update(decoded_s, text_label) 
 
             if batch_idx % 5 == 0:
-                # REMOVED: 'Lyt%' from progress bar
                 pbar.set_postfix({
                     'Loss': f"{np.mean(loss_stats['total']):.4f}",
                     'Spd': f"{np.mean(loss_stats['spread']):.4f}",
                     'Cls': f"{np.mean(loss_stats['cls']):.4f}",
-                    'Seq%': f"{np.mean(acc_seq_accum):.1%}",
-                    'Chr%': f"{np.mean(acc_char_accum):.1%}", 
+                    'Seq%': f"{np.mean(acc_seq_accum):.1%}", # The weighted history
+                    'B_Seq': f"{acc_s:.1%}",                 # <--- NEW: Instant Batch Accuracy
+                    'Chr%': f"{np.mean(acc_char_accum):.1%}",
                 })
             
             if batch_idx % 50 == 0:
@@ -610,7 +596,6 @@ def SROCR_VAL(val_loader, model_g, model_d, loss_fn, config, **kwargs):
     
     correct_sequences = 0
     total_sequences = 0
-    
     correct_chars = 0
     total_chars = 0
 
@@ -627,40 +612,31 @@ def SROCR_VAL(val_loader, model_g, model_d, loss_fn, config, **kwargs):
                 if isinstance(output, (tuple, list)): output = output[0]
                 logits = output['logits']
 
-            # --- Extract both text AND confidence scores ---
             all_decoded_preds, all_scores = viterbi_plate_decoder(logits, true_converter, return_scores=True)
 
-            # --- SMART MAJORITY VOTE LOGIC ---
             for b in range(B):
                 seq_preds = all_decoded_preds[b * Seq_Len : (b + 1) * Seq_Len]
                 seq_scores = all_scores[b * Seq_Len : (b + 1) * Seq_Len]
                 
-                # Dictionary to track votes and cumulative confidence
                 pred_tracker = {}
-                
                 for pred_str, conf_score in zip(seq_preds, seq_scores):
                     if pred_str not in pred_tracker:
                         pred_tracker[pred_str] = {'votes': 0, 'confidence': 0.0}
                     
                     pred_tracker[pred_str]['votes'] += 1
-                    # Sum the log-probabilities (closer to 0 is better)
                     pred_tracker[pred_str]['confidence'] += conf_score.item()
                 
-                # Sort first by 'votes' (Descending), then by 'confidence' (Descending)
                 sorted_preds = sorted(
                     pred_tracker.items(), 
                     key=lambda item: (item[1]['votes'], item[1]['confidence']), 
                     reverse=True
                 )
                 
-                # The winner is the first item in the sorted list
                 winning_prediction = sorted_preds[0][0]
-                
                 gt = text_labels[b]
                 
                 total_sequences += 1
-                if winning_prediction == gt: 
-                    correct_sequences += 1
+                if winning_prediction == gt: correct_sequences += 1
                 
                 total_chars += len(gt)
                 correct_chars += sum(1 for pc, gc in zip(winning_prediction, gt) if pc == gc)

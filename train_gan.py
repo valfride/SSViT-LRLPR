@@ -16,7 +16,8 @@ from torch.utils.data import DataLoader
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 import shutil
-# --- Debug / Distributed Flags ---
+from train_funcs.train_utils import HyperAttentionLoss
+
 DEBUG = os.getenv("DEBUG", "True").lower() == "true"
 if DEBUG:
     if "CUDA_VISIBLE_DEVICES" not in os.environ: os.environ["CUDA_VISIBLE_DEVICES"] = "0"
@@ -118,7 +119,15 @@ def main(config, save_path):
         print(f"Base params: {len(base_params)} | Deform: {len(deform_offset_params)}")
         print(f"Base LR: {base_lr} | Deform LR: {base_lr * 10.0} ")
 
-    optimizer_g = torch.optim.AdamW(optim_groups, weight_decay=1e-4)
+    optimizer_g = torch.optim.Adam(optim_groups)
+    loss_fn_spread = HyperAttentionLoss(grid_h=16, grid_w=48).to(local_rank)
+    hyper_groups = [
+        {'params': [loss_fn_spread.v_stretch], 'lr': 1e-3},
+        {'params': [loss_fn_spread.monotonic_scale, 
+                    loss_fn_spread.boundary_scale, 
+                    loss_fn_spread.ortho_scale], 'lr': 1e-2}
+    ]
+    optimizer_hyper = torch.optim.Adam(hyper_groups)
     # -----------------------------------------------------------
     
     # --- 3. Initialize Scheduler BEFORE Resume ---
@@ -144,6 +153,21 @@ def main(config, save_path):
             if is_main_process(): print("✅ Perfect Match. Full Resume.")
             start_epoch = checkpoint.get('epoch', 0) + 1
             best_accuracy = checkpoint.get('best_acc', 0.0)
+            
+            if 'optimizer_hyper' in checkpoint and 'loss_hyper_sd' in checkpoint:
+                if is_main_process(): print("✅ Resuming Hyper-Weights.")
+                
+                # --- THE FIX 1: strict=False ---
+                # This allows new parameters (like iris_scale) to be ignored by the old checkpoint
+                # and initialize safely at their default values (0.5).
+                loss_fn_spread.load_state_dict(checkpoint['loss_hyper_sd'], strict=False)
+                
+                # --- THE FIX 2: Safe Optimizer Loading ---
+                try:
+                    optimizer_hyper.load_state_dict(checkpoint['optimizer_hyper'])
+                    if is_main_process(): print("✅ Resuming Hyper-Optimizer State.")
+                except ValueError:
+                    if is_main_process(): print("⚠️ Hyper-Optimizer state mismatch (new parameters added). Starting fresh optimizer for hyper-weights.")
             if 'optimizer_g' in checkpoint: 
                 try: 
                     optimizer_g.load_state_dict(checkpoint['optimizer_g'])
@@ -178,19 +202,19 @@ def main(config, save_path):
     train_step = train_funcs.make(config['func_train']) 
     val_step = train_funcs.make(config['func_val'])
 
-    import shutil # Add this at the top of train_gan.py if not already there
-
     stats_path = save_path / 'confusion_stats.json'
     best_models = [] 
 
     # --- DASHBOARD & LOG INITIALIZATION ---
     if is_main_process():
-        # 1. Initialize loss_log.csv if it's missing
+        # 1. Initialize loss_log.csv with an "Epoch 0" row so the LR shows up immediately
         csv_file = save_path / 'loss_log.csv'
         if not os.path.isfile(csv_file):
             with open(csv_file, mode='w', newline='') as file:
                 writer = csv.writer(file)
                 writer.writerow(['Epoch', 'Train_Loss', 'Val_Loss', 'Accuracy', 'LR'])
+                # Pre-seed Epoch 0 so the dashboard has immediate data
+                writer.writerow([0, 0.0, 0.0, 0.0, base_lr]) 
 
         # 2. Deploy Dashboard Template
         viz_dir = save_path / 'train_features'
@@ -205,6 +229,12 @@ def main(config, save_path):
         else:
             print("⚠️ Warning: monitor_template.html not found. Dashboard not deployed.")
 
+        # 3. NEW: Pre-seed hyper.txt with initial values to prevent UI placeholders
+        hyper_path = viz_dir / 'hyper.txt'
+        with open(hyper_path, 'w') as f:
+            f.write("V: 1.20 | M: 15.0 | B: 20.0 | O: 5.0")
+        
+
     try:
         for epoch in range(start_epoch, epoch_max + 1):
             # 1. Properly set the epoch for Distributed Training shuffles
@@ -214,18 +244,21 @@ def main(config, save_path):
             
             model_g.train()
             
-            # --- THE FIX: Use the original train_loader! ---
+            # --- THE FIX: Perfectly aligned arguments (8 total + kwargs) ---
             train_loss = train_step(
-                train_loader,           # <--- Passed train_loader directly
+                train_loader,
+                val_loader,      # <--- YOU MUST ADD THIS LINE HERE
                 model_g, 
-                None, 
+                None,            # model_d
                 optimizer_g, 
-                None, 
-                loss_fn, 
-                config, 
+                None,            # optimizer_d (Fixed the missing argument)
+                optimizer_hyper, # optimizer_hyper
+                loss_fn_spread,  # loss_fn_spread
+                config,          # config
                 epoch=epoch, 
                 save_path=save_path
             )
+            
             val_loss, accuracy, _ = val_step(val_loader, model_g, None, loss_fn, config)
     
             if scheduler_g: 
@@ -241,7 +274,9 @@ def main(config, save_path):
                     'epoch': epoch, 
                     'model_g_sd': model_g.module.state_dict() if hasattr(model_g, 'module') else model_g.state_dict(),
                     'optimizer_g': optimizer_g.state_dict(), 
-                    'scheduler_g': scheduler_g.state_dict(), # <--- ADD THIS LINE
+                    'optimizer_hyper': optimizer_hyper.state_dict(), 
+                    'loss_hyper_sd': loss_fn_spread.state_dict(),    
+                    'scheduler_g': scheduler_g.state_dict(),
                     'best_acc': best_accuracy 
                 }
                 torch.save(checkpoint, save_path / 'last.pth')

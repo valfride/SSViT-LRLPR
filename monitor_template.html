@@ -7,7 +7,6 @@
     <style>
         :root { --bg: #0b0b0b; --card: #161616; --accent: #3498db; --text: #f0f0f0; --border: #2c2c2c; }
         
-        /* 1. Viewport Lock: No scrollbars allowed */
         html, body { 
             height: 100vh; width: 100vw; margin: 0; padding: 10px; 
             box-sizing: border-box; background: var(--bg); color: var(--text);
@@ -16,48 +15,43 @@
         }
         
         header { display: flex; justify-content: space-between; align-items: center; height: 40px; flex-shrink: 0; padding: 0 10px; margin-bottom: 10px; }
-        .meta-info { display: flex; gap: 20px; align-items: center; }
+        .meta-info { display: flex; gap: 10px; align-items: center; } /* Reduced gap to fit badges nicely */
         .status-pill { display: flex; align-items: center; gap: 8px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
         .glow { width: 8px; height: 8px; border-radius: 50%; background: #444; }
         .glow.active { background: #2ecc71; box-shadow: 0 0 10px #2ecc71; }
 
-        /* 2. Proportional Grid: Top 55% / Bottom 45% */
         .dashboard { flex-grow: 1; display: grid; grid-template-rows: 58% 38%; gap: 10px; min-height: 0; }
         .top-row { display: grid; grid-template-columns: 1fr 350px; gap: 10px; min-height: 0; }
         
         .card { background: var(--card); border-radius: 8px; border: 1px solid var(--border); overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
         .card-header { padding: 8px 15px; background: #202020; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
         
-        /* 3. Image Filling Logic: Maximizing Latent Maps */
         .card-body { flex-grow: 1; min-height: 0; display: flex; flex-direction: column; padding: 5px; }
         .img-box { background: #000; border-radius: 4px; flex-grow: 1; display: flex; flex-direction: column; gap: 5px; min-height: 0; }
         
-        /* Images expand to fill available vertical space */
-        img { 
-            flex: 1; width: 100%; min-height: 0; 
-            object-fit: contain; /* Keeps aspect ratio while filling */
-            border: 1px solid #222; 
-        }
+        img { flex: 1; width: 100%; min-height: 0; object-fit: contain; border: 1px solid #222; }
         
-        /* 4. Scrollable Table: Never pushes the page down */
         .table-container { flex-grow: 1; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #333 transparent; }
         table { width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
         th { text-align: left; background: #1a1a1a; padding: 8px 12px; color: #666; position: sticky; top: 0; z-index: 10; }
         td { padding: 4px 12px; border-bottom: 1px solid #1d1d1d; }
 
-        /* 5. Chart area flexibility */
         .chart-flex { display: flex; gap: 10px; flex-grow: 1; min-height: 0; padding: 10px; }
         .chart-container { flex: 1; position: relative; min-width: 0; }
 
         .badge { background: var(--accent); color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; }
         .ok { color: #2ecc71; } .fail { color: #e74c3c; }
+        
+        /* New custom color for the hyper-weights badge */
+        .badge-hyper { background: #8e44ad; } 
     </style>
 </head>
 <body>
     <header>
         <div class="meta-info">
-            <h1 style="margin:0; font-size:1.2rem; font-weight:200; letter-spacing:2px;">SROCR <span style="color:var(--accent)">MISSION CONTROL</span></h1>
+            <h1 style="margin:0; font-size:1.2rem; font-weight:200; letter-spacing:2px; margin-right: 10px;">SROCR <span style="color:var(--accent)">MISSION CONTROL</span></h1>
             <span id="lr-readout" class="badge" style="background:#444">LR: --</span>
+            <span id="hyper-readout" class="badge badge-hyper">Hyper: --</span>
         </div>
         <div class="status-pill">
             <div id="status-glow" class="glow"></div>
@@ -160,6 +154,11 @@
                 accChart.data.labels = epochs;
                 accChart.data.datasets[0].data = acc;
                 accChart.update('none');
+            }).catch(() => {});
+
+            // NEW: Fetch the hyper-weights text file
+            fetch('hyper.txt?r=' + r).then(res => res.text()).then(text => {
+                if(text) document.getElementById('hyper-readout').innerText = text.trim();
             }).catch(() => {});
         }
 
