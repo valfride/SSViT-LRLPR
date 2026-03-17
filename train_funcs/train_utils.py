@@ -237,9 +237,12 @@ class HyperAttentionLoss(nn.Module):
         # ==========================================
         left_bound = F.relu(0.15 - cx_flat[:, 0])
         right_bound = F.relu(cx_flat[:, -1] - 0.88)
-        avg_cy = cy.mean(dim=1).squeeze(-1)
-        top_bound = F.relu(0.10 - avg_cy).mean()
-        bottom_bound = F.relu(avg_cy - 0.90).mean()
+        
+        # THE FIX: Evaluate every character's Y-coordinate independently!
+        cy_flat = cy.squeeze(-1) 
+        top_bound = F.relu(0.10 - cy_flat).mean()
+        bottom_bound = F.relu(cy_flat - 0.90).mean()
+        
         boundary_loss = ((left_bound**2).mean() + (right_bound**2).mean() + top_bound**2 + bottom_bound**2) * torch.abs(self.boundary_scale)
 
         return spread_loss + ortho_loss + monotonic_loss + boundary_loss
@@ -424,8 +427,7 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
         # lr_batch = batch['lr'].to(device, non_blocking=True)
         
         lr_batch = batch['lr'].to(device, non_blocking=True, memory_format=torch.channels_last)
-        if batch_idx == 0:
-            print(f"Is image NHWC? {lr_batch.is_contiguous(memory_format=torch.channels_last)}")
+        
         is_hr_mask = batch['is_hr'].to(device, non_blocking=True)
         text_label = batch['gt'] 
         true_targets = true_converter.encode_list(text_label).to(device)
@@ -446,7 +448,7 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
         # ====================================================================
         # THE "TRUE" HYPERGRADIENT META-STEP (Every 10 Batches)
         # ====================================================================
-        if batch_idx % 5 == 0 and batch_idx > 0:
+        if batch_idx % 10 == 0 and batch_idx > 0:
             # 1. Grab a fresh validation batch
             try:
                 val_batch = next(val_iter)
@@ -604,7 +606,7 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
             
             decoded_s = decode_batch_logits(preds_lr['logits'], true_converter)
             
-            if batch_idx % 50 == 0:
+            if batch_idx % 10 == 0:
                 if 'latent_lr' in preds_lr:
                     visualize_feature_maps(
                         latent_tensor=preds_lr['latent_lr'], original_images=lr_batch, 
@@ -644,7 +646,7 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
                 sample_pr = decoded_s[0]
                 # tqdm.write(f"🔎 [B{batch_idx}] GT: {sample_gt} | Pr: {sample_pr}")
 
-            if batch_idx % 50 == 0:
+            if batch_idx % 10 == 0:
                 write_live_monitor(save_root / 'live_monitor.txt', text_label, decoded_s, decoded_s, current_epoch, batch_idx)
 
     total_failures = epoch_tracker.get_worst_pairs_dict(top_k=50) 

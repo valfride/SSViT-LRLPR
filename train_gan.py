@@ -129,7 +129,8 @@ def main(config, save_path):
     optimizer_g = torch.optim.Adam(optim_groups)
     loss_fn_spread = HyperAttentionLoss(grid_h=16, grid_w=48).to(local_rank)
     hyper_groups = [
-        {'params': [loss_fn_spread.v_stretch], 'lr': 1e-3},
+        # Added iris_scale here!
+        {'params': [loss_fn_spread.v_stretch, loss_fn_spread.iris_scale], 'lr': 1e-2},
         {'params': [loss_fn_spread.monotonic_scale, 
                     loss_fn_spread.boundary_scale, 
                     loss_fn_spread.ortho_scale], 'lr': 1e-2}
