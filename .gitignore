@@ -6,6 +6,7 @@ Competition*/
 test/*
 *.txt
 !flattened_*.txt
+tst/*
 
 # Checkpoints and Logs
 *.pth
