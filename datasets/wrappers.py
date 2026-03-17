@@ -1,5 +1,6 @@
 import numpy as np
 import cv2
+cv2.setNumThreads(0)
 import torch
 import random
 import albumentations as A
@@ -111,59 +112,92 @@ class Sequential_lr_sr(Dataset):
     def __len__(self):
         return len(self.dataset)
 
-    def __getitem__(self, idx):
-        # 1. Fetch the decoded dictionary from the LMDBDataset
-        item = self.dataset[idx]
+    # def __getitem__(self, idx):
+    #     # 1. Fetch the decoded dictionary from the LMDBDataset
+    #     item = self.dataset[idx]
         
-        # 2. Extract the pre-loaded data
-        img_raw = item['img_raw']      # ALREADY decoded and converted to RGB!
+    #     # 2. Extract the pre-loaded data
+    #     img_raw = item['img_raw']      # ALREADY decoded and converted to RGB!
+    #     plate_gt = item['gt']          
+    #     filename = item['name']
+    #     image_path_str = item['img_path'] 
+        
+    #     is_hr_file = filename.startswith("hr-")
+
+    #     # ---> REMOVED: cv2.cvtColor(cv2.imread(image_path_str), cv2.COLOR_BGR2RGB) <---
+        
+    #     # 3. Generate the LR Image (The rest of your code remains exactly the same!)
+    #     if is_hr_file:
+    #         # If the dataset provides HR, we aggressively degrade it...
+    #         hr_img = cv2.resize(img_raw, (self.imgW, self.imgH), interpolation=cv2.INTER_CUBIC)
+            
+    #         if self.aug and not self.test:
+    #             lr_img = self.hr_to_lr_degrade(image=hr_img)['image']
+    #         else:
+    #             lr_img = hr_img
+    #     else:
+    #         # If the dataset is already LR, just resize it to the expected dimensions
+    #         lr_img = cv2.resize(img_raw, (self.imgW, self.imgH), interpolation=cv2.INTER_CUBIC)
+
+    #     # 4. Apply Single-Image Geometric Augmentations
+    #     if self.aug and not self.test:
+    #         # Applied directly to the base resolution, no double-resize!
+    #         augmented = self.geo_aug(image=lr_img)
+    #         lr_img = augmented['image']
+
+    #     # 5. Convert to Tensors 
+    #     t_lr = self.normalize(ToTensor()(lr_img.copy())).unsqueeze(0)
+        
+    #     # Removed HR tensor return entirely
+    #     return {
+    #         'lr': t_lr,       
+    #         'gt': plate_gt,
+    #         'name': filename,
+    #         'img_path': image_path_str
+    #     }
+
+    # def collate_fn(self, batch):
+    #     # Removed 'hr' from the stacked batch dictionary
+    #     return {
+    #         'lr': torch.stack([b['lr'] for b in batch]),
+    #         'gt': [b['gt'] for b in batch],
+    #         'name': [b['name'] for b in batch],
+    #         'img_path': [b['img_path'] for b in batch]
+    #     }
+    def __getitem__(self, idx):
+        item = self.dataset[idx]
+        img_raw = item['img_raw']      
         plate_gt = item['gt']          
         filename = item['name']
-        image_path_str = item['img_path'] 
         
+        # 1. Flag if this is an HR image
         is_hr_file = filename.startswith("hr-")
-
-        # ---> REMOVED: cv2.cvtColor(cv2.imread(image_path_str), cv2.COLOR_BGR2RGB) <---
         
-        # 3. Generate the LR Image (The rest of your code remains exactly the same!)
-        if is_hr_file:
-            # If the dataset provides HR, we aggressively degrade it...
-            hr_img = cv2.resize(img_raw, (self.imgW, self.imgH), interpolation=cv2.INTER_CUBIC)
-            
-            if self.aug and not self.test:
-                lr_img = self.hr_to_lr_degrade(image=hr_img)['image']
-            else:
-                lr_img = hr_img
-        else:
-            # If the dataset is already LR, just resize it to the expected dimensions
-            lr_img = cv2.resize(img_raw, (self.imgW, self.imgH), interpolation=cv2.INTER_CUBIC)
+        # 2. Resize everything to base dimensions immediately (CPU is fast at this)
+        img_resized = cv2.resize(img_raw, (self.imgW, self.imgH), interpolation=cv2.INTER_CUBIC)
 
-        # 4. Apply Single-Image Geometric Augmentations
+        # 3. Apply standard geometric shifts
         if self.aug and not self.test:
-            # Applied directly to the base resolution, no double-resize!
-            augmented = self.geo_aug(image=lr_img)
-            lr_img = augmented['image']
+            augmented = self.geo_aug(image=img_resized)
+            img_resized = augmented['image']
 
-        # 5. Convert to Tensors 
-        t_lr = self.normalize(ToTensor()(lr_img.copy())).unsqueeze(0)
+        # 4. Convert to Tensor and Normalize [-1, 1]
+        t_lr = self.normalize(ToTensor()(img_resized.copy()))
         
-        # Removed HR tensor return entirely
         return {
             'lr': t_lr,       
             'gt': plate_gt,
             'name': filename,
-            'img_path': image_path_str
+            'is_hr': is_hr_file # <--- Pass the flag to the GPU!
         }
 
     def collate_fn(self, batch):
-        # Removed 'hr' from the stacked batch dictionary
         return {
             'lr': torch.stack([b['lr'] for b in batch]),
             'gt': [b['gt'] for b in batch],
             'name': [b['name'] for b in batch],
-            'img_path': [b['img_path'] for b in batch]
+            'is_hr': torch.tensor([b['is_hr'] for b in batch], dtype=torch.bool) # <--- Stack the flags
         }
-
 @register('VSR_Sequence_collate_fn')
 class Sequential_Sequence_sr(Dataset):
     """

@@ -77,8 +77,8 @@ class CosineClassifierHead(nn.Module):
 
     def forward(self, x):
         # Normalize features (X) and weights (W) to magnitude of 1
-        x_norm = F.normalize(x, p=2, dim=-1)
-        w_norm = F.normalize(self.weight, p=2, dim=-1)
+        x_norm = F.normalize(x, p=2, dim=-1, eps=1e-6)
+        w_norm = F.normalize(self.weight, p=2, dim=-1, eps=1e-6)
         
         # Calculate cosine similarity and scale by temperature
         # x_norm: (B, 7, 384) | w_norm: (37, 384) -> logits: (B, 7, 37)
@@ -295,7 +295,7 @@ class CustomOCR(nn.Module):
         
         # REMOVED: global_token and layout_logits calculation
         
-        z_vector = F.normalize(self.projector(char_tokens), p=2, dim=-1)
+        z_vector = F.normalize(self.projector(char_tokens), p=2, dim=-1, eps=1e-6)
         
         # --- RETURN THE CLEANED DICTIONARY ---
         return {

@@ -16,15 +16,48 @@ import math
 from collections import Counter
 import higher # Add this at the top of train_utils.py
 from torch.nn.attention import SDPBackend
+
+
+import kornia.augmentation as K
+import torch.nn.functional as F
+import random
+import torch.nn as nn
+
+# 1. We build a custom module that safely downscales and upscales the whole batch
+class GPULanczosSimulator(nn.Module):
+    def __init__(self, scale_min=0.16, scale_max=0.18):
+        super().__init__()
+        self.scale_min = scale_min
+        self.scale_max = scale_max
+
+    def forward(self, x):
+        # x is (B, C, H, W)
+        scale = random.uniform(self.scale_min, self.scale_max)
+        down_h, down_w = max(1, int(x.shape[2] * scale)), max(1, int(x.shape[3] * scale))
+        
+        # Downscale
+        x_down = F.interpolate(x, size=(down_h, down_w), mode='bicubic', align_corners=False)
+        # Upscale back to original
+        x_up = F.interpolate(x_down, size=(x.shape[2], x.shape[3]), mode='bicubic', align_corners=False)
+        return x_up
+
+# 2. Your new, safe pipeline
+gpu_degrader = K.AugmentationSequential(
+    K.RandomGaussianBlur(kernel_size=(7, 7), sigma=(0.1, 2.0), p=1.0),
+    GPULanczosSimulator(scale_min=0.16, scale_max=0.18), # Replaces the dangerous crop!
+    K.ColorJitter(brightness=0.1, contrast=0.1, p=0.6),
+    K.RandomJPEG(jpeg_quality=(95, 100), p=0.8),
+    data_keys=["input"]
+)
+# ==============================================================================
+# 1. HELPERS
+# ==============================================================================
 def is_main_process():
     """Independent helper to check DDP status without importing from train_gan."""
     if not torch.distributed.is_available() or not torch.distributed.is_initialized():
         return True
     return torch.distributed.get_rank() == 0
 
-# ==============================================================================
-# 1. HELPERS
-# ==============================================================================
 class strLabelConverter(object):
     def __init__(self, alphabet="0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"):
         self.alphabet = ['-'] + list(alphabet) 
@@ -387,13 +420,27 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
         if batch is None: continue
 
         lr_batch = batch['lr'].to(device, non_blocking=True)
+        is_hr_mask = batch['is_hr'].to(device, non_blocking=True)
         text_label = batch['gt'] 
         true_targets = true_converter.encode_list(text_label).to(device)
 
         # ====================================================================
+        # THE KORNIA GPU DEGRADATION ENGINE
+        # ====================================================================
+        with torch.no_grad():
+            if is_hr_mask.any():
+                # 1. Un-normalize HR images from [-1, 1] -> [0, 1]
+                hr_subset = (lr_batch[is_hr_mask] * 0.5) + 0.5
+                
+                # 2. Strike them with the GPU Degrader (Natively 4D!)
+                degraded_subset = gpu_degrader(hr_subset)
+                
+                # 3. Re-normalize [0, 1] -> [-1, 1] and drop them back
+                lr_batch[is_hr_mask] = (degraded_subset - 0.5) / 0.5
+        # ====================================================================
         # THE "TRUE" HYPERGRADIENT META-STEP (Every 10 Batches)
         # ====================================================================
-        if batch_idx % 10 == 0 and batch_idx > 0:
+        if batch_idx % 50 == 0 and batch_idx > 0:
             # 1. Grab a fresh validation batch
             try:
                 val_batch = next(val_iter)
@@ -422,52 +469,60 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
             # Save the original gradient states and freeze the entire CNN backbone.
             # By only leaving the ViT/Transformer unfrozen, the double-backward 
             # will never reach the Deformable Convolutions.
+            # --- THE FIREWALL FIX ---
             orig_grad_states = {}
+            active_vit_params = [] # NEW: We will collect exactly what is left active
+            
             for name, param in model_g.named_parameters():
                 orig_grad_states[name] = param.requires_grad
-                # Freeze everything that isn't part of the ViT/Transformer
                 if 'vit' not in name.lower() and 'transformer' not in name.lower():
                     param.requires_grad = False
+                else:
+                    active_vit_params.append(param) # Collect active ViT params
 
             optimizer_hyper.zero_grad()
 
+            # --- THE VRAM EXPLOSION FIX ---
+            # Create a lightweight SGD optimizer just for the lookahead step!
+            # This completely stops 'higher' from building a 35GB Adam momentum graph.
+            current_lr = optimizer_g.param_groups[0]['lr']
+            meta_opt = torch.optim.SGD(active_vit_params, lr=current_lr)
+
             # --- THE ATTENTION FIX ---
-            # Temporarily disable FlashAttention/MemEfficient kernels and force PyTorch 
-            # to use standard math, which fully supports double-backward derivatives!
             with torch.nn.attention.sdpa_kernel(SDPBackend.MATH):
                 
-                # 2. Create the "Virtual" computational graph
-                with higher.innerloop_ctx(model_g, optimizer_g, copy_initial_weights=False) as (fmodel, diffopt):
+                # Use our new 'meta_opt' instead of 'optimizer_g'
+                with higher.innerloop_ctx(model_g, meta_opt, copy_initial_weights=False) as (fmodel, diffopt):
                     
                     # --- INNER LOOP (Using Micro-Batch) ---
-                    with torch.amp.autocast('cuda', enabled=use_fp16):
-                        train_preds = fmodel(
-                            m_lr, temporal_pool=True, tgt=m_tgt, 
-                            epoch=current_epoch, return_attn=True
-                        )
-                        if isinstance(train_preds, (tuple, list)): train_preds = train_preds[0]
+                    # with torch.amp.autocast('cuda', enabled=use_fp16):
+                    train_preds = fmodel(
+                        m_lr, temporal_pool=True, tgt=m_tgt, 
+                        epoch=current_epoch, return_attn=True
+                    )
+                    if isinstance(train_preds, (tuple, list)): train_preds = train_preds[0]
+                    
+                    loss_cls_train = loss_fn_spatial(train_preds['logits'], m_tgt)
+                    if loss_cls_train.dim() > 0: loss_cls_train = loss_cls_train.mean()
+                    
+                    loss_spread_train = 0.0
+                    if train_preds['attn_maps'] is not None:
+                        loss_spread_train = loss_fn_spread(train_preds['attn_maps'], current_epoch=current_epoch)
                         
-                        loss_cls_train = loss_fn_spatial(train_preds['logits'], m_tgt)
-                        if loss_cls_train.dim() > 0: loss_cls_train = loss_cls_train.mean()
-                        
-                        loss_spread_train = 0.0
-                        if train_preds['attn_maps'] is not None:
-                            loss_spread_train = loss_fn_spread(train_preds['attn_maps'], current_epoch=current_epoch)
-                            
-                        simulated_train_loss = loss_cls_train + loss_spread_train
+                    simulated_train_loss = loss_cls_train + loss_spread_train
                     
                     diffopt.step(simulated_train_loss)
 
                     # --- OUTER LOOP (Using Validation Micro-Batch) ---
-                    with torch.amp.autocast('cuda', enabled=use_fp16):
-                        val_preds = fmodel(
-                            m_val_lr, temporal_pool=True, tgt=m_val_tgt, 
-                            epoch=current_epoch, return_attn=False
-                        )
-                        if isinstance(val_preds, (tuple, list)): val_preds = val_preds[0]
-                        
-                        loss_cls_val = loss_fn_spatial(val_preds['logits'], m_val_tgt)
-                        if loss_cls_val.dim() > 0: loss_cls_val = loss_cls_val.mean()
+                    # with torch.amp.autocast('cuda', enabled=use_fp16):
+                    val_preds = fmodel(
+                        m_val_lr, temporal_pool=True, tgt=m_val_tgt, 
+                        epoch=current_epoch, return_attn=False
+                    )
+                    if isinstance(val_preds, (tuple, list)): val_preds = val_preds[0]
+                    
+                    loss_cls_val = loss_fn_spatial(val_preds['logits'], m_val_tgt)
+                    if loss_cls_val.dim() > 0: loss_cls_val = loss_cls_val.mean()
 
                     # 3. BACKPROP THROUGH TIME
                     scaler.scale(loss_cls_val).backward()
@@ -540,7 +595,7 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
             
             decoded_s = decode_batch_logits(preds_lr['logits'], true_converter)
             
-            if batch_idx % 10 == 0:
+            if batch_idx % 50 == 0:
                 if 'latent_lr' in preds_lr:
                     visualize_feature_maps(
                         latent_tensor=preds_lr['latent_lr'], original_images=lr_batch, 
@@ -578,9 +633,9 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
             if batch_idx % 50 == 0:
                 sample_gt = text_label[0]
                 sample_pr = decoded_s[0]
-                tqdm.write(f"🔎 [B{batch_idx}] GT: {sample_gt} | Pr: {sample_pr}")
+                # tqdm.write(f"🔎 [B{batch_idx}] GT: {sample_gt} | Pr: {sample_pr}")
 
-            if batch_idx % 10 == 0:
+            if batch_idx % 50 == 0:
                 write_live_monitor(save_root / 'live_monitor.txt', text_label, decoded_s, decoded_s, current_epoch, batch_idx)
         
     total_failures = epoch_tracker.get_worst_pairs_dict(top_k=50) 

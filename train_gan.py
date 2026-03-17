@@ -53,9 +53,15 @@ def make_dataloader(spec, tag=''):
         shuffle = False 
 
     loader = DataLoader(
-        dataset, batch_size=spec['batch'], shuffle=shuffle, sampler=sampler,
-        num_workers=8 if not DEBUG else 24, pin_memory=True, collate_fn=dataset.collate_fn,
-        drop_last=(tag == 'train'), prefetch_factor=4
+        dataset, 
+        batch_size=spec['batch'], 
+        shuffle=shuffle, 
+        sampler=sampler,
+        num_workers=8, 
+        pin_memory=True, 
+        collate_fn=dataset.collate_fn,
+        drop_last=(tag == 'train'), 
+        prefetch_factor=2
     )
     return loader, sampler
 
