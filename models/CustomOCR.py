@@ -96,10 +96,12 @@ class ViT_CrossAttn_OCR(nn.Module):
         # Inside ViT_CrossAttn_OCR.__init__
         self.patch_embed = nn.Sequential(
             nn.Conv2d(in_channels, d_model // 2, kernel_size=3, stride=1, padding=1),
-            nn.GroupNorm(8, d_model // 2), nn.ReLU(True),
+            nn.GroupNorm(8, d_model // 2), 
+            FReLU(d_model // 2),
             
             nn.Conv2d(d_model // 2, d_model, kernel_size=3, stride=2, padding=1), 
-            nn.GroupNorm(8, d_model), nn.ReLU(True),
+            nn.GroupNorm(8, d_model), 
+            FReLU(d_model),
             
             nn.Conv2d(d_model, d_model, kernel_size=3, stride=2, padding=1)
         )
