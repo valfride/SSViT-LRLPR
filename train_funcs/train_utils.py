@@ -240,8 +240,8 @@ class HyperAttentionLoss(nn.Module):
         
         # THE FIX: Evaluate every character's Y-coordinate independently!
         cy_flat = cy.squeeze(-1) 
-        top_bound = F.relu(0.10 - cy_flat).mean()
-        bottom_bound = F.relu(cy_flat - 0.90).mean()
+        top_bound = F.relu(0.01 - cy_flat).mean()
+        bottom_bound = F.relu(cy_flat - 0.99).mean()
         
         boundary_loss = ((left_bound**2).mean() + (right_bound**2).mean() + top_bound**2 + bottom_bound**2) * torch.abs(self.boundary_scale)
 
