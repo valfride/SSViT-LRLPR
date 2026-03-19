@@ -5,7 +5,7 @@ Competition*/
 .vscode*/
 test/*
 *.txt
-!flattened_*.txt
+*flattened_*.txt
 tst/*
 
 # Checkpoints and Logs

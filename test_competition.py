@@ -8,9 +8,10 @@ import datasets
 import models
 import utils
 import os
+import re
+import pickle
 import numpy as np
-
-# Import the Viterbi Decoder from your training utilities!
+import torchvision.transforms.functional as TF
 from train_funcs.train_utils import viterbi_plate_decoder
 
 # ==============================================================================
@@ -23,16 +24,12 @@ class strLabelConverter(object):
         self.dict = {char: i for i, char in enumerate(self.alphabet)}
     
     def decode(self, t):
-        """
-        Decodes a batch of indices [B, 7] to strings.
-        """
         if t.dim() == 1: t = t.unsqueeze(0)
         texts = []
         for i in range(t.shape[0]):
             char_list = []
             for j in range(t.shape[1]):
                 idx = t[i, j].item()
-                # Skip blank/pad index 0, map rest
                 if 0 < idx < len(self.alphabet):
                     char_list.append(self.alphabet[idx])
             texts.append(''.join(char_list))
@@ -48,6 +45,7 @@ if __name__ == "__main__":
     parser.add_argument("--split", required=True)
     parser.add_argument("--mode", required=True, choices=['val', 'test'])
     parser.add_argument("--swa", action="store_true") 
+    parser.add_argument("--tta", action="store_true", help="Enable Test-Time Augmentation")
     parser.add_argument("--output", default="submission.txt")
     args = parser.parse_args()
 
@@ -72,19 +70,16 @@ if __name__ == "__main__":
         pth_files.sort(key=lambda x: float(x.stem.split('_')[2]) if '_' in x.stem else 0.0, reverse=True)
         
         valid_state_dicts = []
-        
-        # Load the first model to establish the "Gold Standard" for keys AND shapes
         first_checkpoint = torch.load(pth_files[0], map_location=device)['model_g_sd']
         ref_sd = {k.replace('module.', ''): v for k, v in first_checkpoint.items()}
         valid_state_dicts.append(ref_sd)
         print(f"  ✅ [REF]     {pth_files[0].name}")
 
-        for pth in pth_files[1:5]: # Top 5 max
+        for pth in pth_files[1:5]: 
             try:
                 raw_sd = torch.load(pth, map_location=device)['model_g_sd']
                 clean_sd = {k.replace('module.', ''): v for k, v in raw_sd.items()}
                 
-                # 🛑 SAFETY CHECK: Keys AND Shapes must match
                 is_compatible = True
                 if set(clean_sd.keys()) != set(ref_sd.keys()):
                     is_compatible = False
@@ -104,7 +99,6 @@ if __name__ == "__main__":
 
         if not valid_state_dicts: raise RuntimeError("No compatible checkpoints found!")
         
-        # Average weights
         swa_dict = {k: v.clone().float() for k, v in valid_state_dicts[0].items()}
         for i in range(1, len(valid_state_dicts)):
             for k, v in valid_state_dicts[i].items():
@@ -115,15 +109,12 @@ if __name__ == "__main__":
         print("✅ SWA Weights Loaded.")
 
     else:
-        # 1. Try to find the best accuracy model first
         pth_files = list(ckpt_dir.glob("model_acc_*.pth"))
         if pth_files:
-            # Sort by the accuracy float in the filename
             pth_files.sort(key=lambda x: float(x.stem.split('_')[2]), reverse=True)
             best_ckpt = pth_files[0]
             print(f"\nLoading Best Checkpoint: {best_ckpt}")
         else:
-            # 2. Fallback to last.pth if no best models are found
             best_ckpt = ckpt_dir / 'last.pth'
             
         print(f"\nLoading Single Checkpoint: {best_ckpt}")
@@ -152,74 +143,108 @@ if __name__ == "__main__":
 
     true_converter = strLabelConverter(config.get('alphabet', "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
     
+ # --- METADATA TRACK ALIGNMENT (The Fix) ---
+    track_names_ordered = []
+    pkl_path = Path(args.split) / "metadata.pkl"
+    if pkl_path.exists():
+        with open(pkl_path, 'rb') as f:
+            meta = pickle.load(f)
+        for item in meta:
+            match = re.search(r'(track_\d+)', str(item))
+            if match:
+                track_names_ordered.append(match.group(1))
+
+    # BULLETPROOF SQUEEZE: Compress 15,000 names down to exactly 3,000 unique tracks
+    track_names_ordered = list(dict.fromkeys(track_names_ordered))
+
     correct_plates = 0
     total_plates = 0
     failures = []
     submission_lines = []
 
-    # --- INFERENCE LOOP (ALIGNED WITH SROCR_VAL) ---
+    # --- INFERENCE LOOP ---
     with torch.no_grad():
         pbar = tqdm(val_loader, desc=f"Evaluating ({args.mode.upper()} Mode)")
         for batch in pbar:
-            # 1. Fetch the sequence tensor (NOT 'lr')
             lr_seqs = batch['lr_seq'].to(device)
-            
-            # Ground truth for val mode
             gt_text = batch['gt'][0] if 'gt' in batch and batch['gt'][0] else ""
             
-            # Safely extract track name 
-            # Sequence collate_fn usually returns a list of lists for names: [['track1_f1', 'track1_f2', ...]]
-            try:
-                raw_name = batch['names'][0][0] if 'names' in batch else batch['name'][0][0]
-            except:
-                # Fallback if structure is flat
-                raw_name = batch['names'][0] if 'names' in batch else batch['name'][0]
+            # --- BULLETPROOF TRACK NAME EXTRACTION ---
+            track_name = None
+            
+            # 1. Hunt safely in the batch metadata strings (ignores heavy tensors)
+            for k, v in batch.items():
+                if isinstance(v, (list, tuple, str)):
+                    match = re.search(r'(track_\d+)', str(v))
+                    if match:
+                        track_name = match.group(1)
+                        break
+            
+            # 2. If completely stripped by dataloader, pull from exact metadata.pkl order
+            if not track_name and track_names_ordered and total_plates < len(track_names_ordered):
+                track_name = track_names_ordered[total_plates]
                 
-            track_name = raw_name.rsplit('_f', 1)[0]
+            # 3. Ultimate Fallback
+            if not track_name:
+                track_name = f"track_{total_plates:05d}"
             
             B, Seq_Len, C, H, W = lr_seqs.shape
-            
-            # 2. Flatten for the model forward pass
             flat_imgs = lr_seqs.view(B * Seq_Len, C, H, W)
 
             with torch.amp.autocast('cuda', enabled=config.get('use_fp16', True)):
-                output = model(flat_imgs, temporal_pool=True) 
-                if isinstance(output, tuple): output = output[0]
-                logits = output['logits']
+                # ==========================================
+                # PASS 1: Base Resolution (0 degrees)
+                # ==========================================
+                output_base = model(flat_imgs, temporal_pool=True) 
+                if isinstance(output_base, tuple): output_base = output_base[0]
+                logits_base = output_base['logits'].view(B, Seq_Len, 7, 37).mean(dim=1)
+                
+                if args.tta:
+                    # PASS 2 & 3: Positive Sweep (+5, +10)
+                    flat_p5 = TF.rotate(flat_imgs, angle=5.0, interpolation=TF.InterpolationMode.BILINEAR)
+                    out_p5 = model(flat_p5, temporal_pool=True)
+                    if isinstance(out_p5, tuple): out_p5 = out_p5[0]
+                    logits_p5 = out_p5['logits'].view(B, Seq_Len, 7, 37).mean(dim=1)
 
-            # 3. Use the Viterbi Decoder (Enforcing Plate Rules)
-            all_decoded_preds, all_scores = viterbi_plate_decoder(logits, true_converter, return_scores=True)
+                    flat_p10 = TF.rotate(flat_imgs, angle=10.0, interpolation=TF.InterpolationMode.BILINEAR)
+                    out_p10 = model(flat_p10, temporal_pool=True)
+                    if isinstance(out_p10, tuple): out_p10 = out_p10[0]
+                    logits_p10 = out_p10['logits'].view(B, Seq_Len, 7, 37).mean(dim=1)
 
-            # 4. SMART MAJORITY VOTE LOGIC (Exactly like validation)
-            pred_tracker = {}
-            for pred_str, conf_score in zip(all_decoded_preds, all_scores):
-                if pred_str not in pred_tracker:
-                    pred_tracker[pred_str] = {'votes': 0, 'confidence': 0.0}
-                pred_tracker[pred_str]['votes'] += 1
-                pred_tracker[pred_str]['confidence'] += conf_score.item()
-            
-            sorted_preds = sorted(
-                pred_tracker.items(), 
-                key=lambda item: (item[1]['votes'], item[1]['confidence']), 
-                reverse=True
-            )
-            
-            # The winner!
-            final_pred_str = sorted_preds[0][0]
-            
-            # Approximate sequence confidence (average confidence of the winning votes)
-            avg_conf = sorted_preds[0][1]['confidence'] / sorted_preds[0][1]['votes'] 
+                    # PASS 4 & 5: Negative Sweep (-5, -10)
+                    flat_m5 = TF.rotate(flat_imgs, angle=-5.0, interpolation=TF.InterpolationMode.BILINEAR)
+                    out_m5 = model(flat_m5, temporal_pool=True)
+                    if isinstance(out_m5, tuple): out_m5 = out_m5[0]
+                    logits_m5 = out_m5['logits'].view(B, Seq_Len, 7, 37).mean(dim=1)
+
+                    flat_m10 = TF.rotate(flat_imgs, angle=-10.0, interpolation=TF.InterpolationMode.BILINEAR)
+                    out_m10 = model(flat_m10, temporal_pool=True)
+                    if isinstance(out_m10, tuple): out_m10 = out_m10[0]
+                    logits_m10 = out_m10['logits'].view(B, Seq_Len, 7, 37).mean(dim=1)
+                    
+                    # --- SOTA 5-WAY LOGIT ENSEMBLING ---
+                    final_logits = (logits_base + logits_p5 + logits_p10 + logits_m5 + logits_m10) / 5.0
+                else:
+                    final_logits = logits_base
+
+                # Decode the consensus logits
+                all_decoded_preds, all_scores = viterbi_plate_decoder(final_logits, true_converter, return_scores=True)
+                
+                final_pred_str = all_decoded_preds[0]
+                avg_conf = all_scores[0].item()
 
             # --- METRICS & LOGGING ---
-            total_plates += 1
             if args.mode == 'val':
                 if final_pred_str == gt_text:
                     correct_plates += 1
                 else:
                     failures.append(f"{track_name} | Pred: {final_pred_str} | GT: {gt_text}")
-                pbar.set_postfix({'SeqAcc': f"{correct_plates/total_plates:.1%}"})
+                pbar.set_postfix({'SeqAcc': f"{correct_plates/(total_plates+1):.1%}"})
             else:
+                # Direct write: The model has already averaged the 5 sequence frames internally!
                 submission_lines.append(f"{track_name},{final_pred_str};{avg_conf:.4f}")
+            
+            total_plates += 1
 
     # 5. FINAL RESULTS
     if args.mode == 'val':
@@ -233,6 +258,8 @@ if __name__ == "__main__":
             print(f"❌ Failures saved to {fail_path}")
             
     elif args.mode == 'test':
+        submission_lines.sort() # Ensure numerical track order
+        
         with open(args.output, 'w') as f: 
             f.write("\n".join(submission_lines))
-        print(f"\n✅ Submission generated: {args.output}")
+        print(f"\n✅ Submission generated: {args.output} (Total tracks: {len(submission_lines)})")

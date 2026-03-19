@@ -415,7 +415,7 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
     acc_seq_accum = []
     acc_char_accum = [] 
     current_epoch = kwargs.get('epoch', 0)
-    loss_fn_spatial = SmoothPoly1Loss(epsilon=3.0, smoothing=0.1).to(device)
+    loss_fn_spatial = SmoothPoly1Loss(epsilon=1.5, smoothing=0.1).to(device)
     epoch_tracker = ConfusionTracker()
 
     # --- NEW: Validation Iterator for Meta-Learning ---

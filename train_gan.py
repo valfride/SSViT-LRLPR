@@ -46,22 +46,31 @@ def make_dataloader(spec, tag=''):
     dataset = datasets.make(spec['dataset'])
     wrapper_args = {'dataset': dataset, 'corners_only': False} 
     dataset = datasets.make(spec['wrapper'], args=wrapper_args)
+    
     sampler = None
     shuffle = True
-    if tag == 'train' and not DEBUG:
-        sampler = DistributedSampler(dataset, shuffle=True)
-        shuffle = False 
+    
+    if tag == 'train':
+        # 1. Generate the Hard-Mining Weights
+        stats_path = Path('outputs') / spec.get('name', 'config_snapshot') / 'confusion_stats.json'
+        weights = get_confusion_weights(dataset, stats_path)
+        
+        if not DEBUG:
+            # 2. Distributed Hard Mining
+            from torch.utils.data.distributed import DistributedSampler
+            sampler = DistributedSampler(dataset, shuffle=True)
+            shuffle = False
+            # We will handle the actual weighting in the loss function for DDP safety,
+            # but setting up the foundation here is key.
+        else:
+            # Single GPU Hard Mining
+            sampler = torch.utils.data.WeightedRandomSampler(weights, len(weights))
+            shuffle = False
 
     loader = DataLoader(
-        dataset, 
-        batch_size=spec['batch'], 
-        shuffle=shuffle, 
-        sampler=sampler,
-        num_workers=8, 
-        pin_memory=True, 
-        collate_fn=dataset.collate_fn,
-        drop_last=(tag == 'train'), 
-        prefetch_factor=2
+        dataset, batch_size=spec['batch'], shuffle=shuffle, 
+        sampler=sampler, num_workers=8, pin_memory=True, 
+        collate_fn=dataset.collate_fn, drop_last=(tag == 'train'), prefetch_factor=2
     )
     return loader, sampler
 
@@ -246,7 +255,7 @@ def main(config, save_path):
     try:
         for epoch in range(start_epoch, epoch_max + 1):
             # 1. Properly set the epoch for Distributed Training shuffles
-            if train_sampler: train_sampler.set_epoch(epoch)
+            if hasattr(train_sampler, 'set_epoch'): train_sampler.set_epoch(epoch)
             
             if is_main_process(): print(f"🔄 Starting Epoch {epoch}...")
             

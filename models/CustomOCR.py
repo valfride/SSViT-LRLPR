@@ -65,7 +65,20 @@ class PositionalEncoding2D(nn.Module):
         pe[d_y::2, :, :] = torch.sin(pos_x * div_term_x).transpose(0, 1).unsqueeze(1).repeat(1, height, 1)
         pe[d_y+1::2, :, :] = torch.cos(pos_x * div_term_x).transpose(0, 1).unsqueeze(1).repeat(1, height, 1)
         self.register_buffer('pe', pe)
-    def forward(self, x): return self.dropout(x + self.pe)
+    def forward(self, x): 
+        # If the input shape matches the default 64x192 PE, do the standard addition
+        if x.size(2) == self.pe.size(1) and x.size(3) == self.pe.size(2):
+            return self.dropout(x + self.pe)
+        
+        # --- THE TTA FIX: Interpolate the PE grid to match the new upscale ---
+        pe_resized = F.interpolate(
+            self.pe.unsqueeze(0),         # Make it 4D for the interpolator: (1, C, H, W)
+            size=(x.size(2), x.size(3)),  # Stretch to the new TTA dimensions (e.g., 70x210)
+            mode='bilinear', 
+            align_corners=False
+        ).squeeze(0)                      # Back to 3D
+        
+        return self.dropout(x + pe_resized)
 
 class CosineClassifierHead(nn.Module):
     def __init__(self, in_features, num_classes):
@@ -282,7 +295,7 @@ class CustomOCR(nn.Module):
         feat = self.surgical_focus(feat)
         
         # SCHEDULED SAMPLING
-        forcing_prob = max(0.0, 0.5 - (epoch * 0.02)) if self.training else 0.0
+        forcing_prob = max(0.05, 0.5 - (epoch * 0.01)) if self.training else 0.0
         
         iters = 0
         
