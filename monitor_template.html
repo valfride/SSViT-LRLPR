@@ -15,7 +15,7 @@
         }
         
         header { display: flex; justify-content: space-between; align-items: center; height: 40px; flex-shrink: 0; padding: 0 10px; margin-bottom: 10px; }
-        .meta-info { display: flex; gap: 10px; align-items: center; } /* Reduced gap to fit badges nicely */
+        .meta-info { display: flex; gap: 10px; align-items: center; }
         .status-pill { display: flex; align-items: center; gap: 8px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
         .glow { width: 8px; height: 8px; border-radius: 50%; background: #444; }
         .glow.active { background: #2ecc71; box-shadow: 0 0 10px #2ecc71; }
@@ -26,11 +26,16 @@
         .card { background: var(--card); border-radius: 8px; border: 1px solid var(--border); overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
         .card-header { padding: 8px 15px; background: #202020; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
         
-        .card-body { flex-grow: 1; min-height: 0; display: flex; flex-direction: column; padding: 5px; }
-        .img-box { background: #000; border-radius: 4px; flex-grow: 1; display: flex; flex-direction: column; gap: 5px; min-height: 0; }
+        .card-body { flex-grow: 1; min-height: 0; display: flex; flex-direction: column; padding: 8px; }
+        .img-box { background: #000; border-radius: 4px; flex-grow: 1; display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto; }
         
-        img { flex: 1; width: 100%; min-height: 0; object-fit: contain; border: 1px solid #222; }
+        .label-mini { font-size: 9px; color: #666; margin-bottom: 2px; text-transform: uppercase; letter-spacing: 0.5px; }
+        img { width: 100%; border: 1px solid #222; background: #050505; }
         
+        /* Specific sizing for the hierarchy strip to prevent distortion */
+        #hierarchy { object-fit: fill; height: auto; min-height: 60px; }
+        #attn, #latent { object-fit: contain; flex-shrink: 0; }
+
         .table-container { flex-grow: 1; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #333 transparent; }
         table { width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
         th { text-align: left; background: #1a1a1a; padding: 8px 12px; color: #666; position: sticky; top: 0; z-index: 10; }
@@ -41,8 +46,6 @@
 
         .badge { background: var(--accent); color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; }
         .ok { color: #2ecc71; } .fail { color: #e74c3c; }
-        
-        /* New custom color for the hyper-weights badge */
         .badge-hyper { background: #8e44ad; } 
     </style>
 </head>
@@ -68,8 +71,20 @@
                 </div>
                 <div class="card-body">
                     <div class="img-box">
-                        <img id="attn" src="attn_ep.png">
-                        <img id="latent" src="latent_ep.png">
+                        <div>
+                            <div class="label-mini">Attention Target Lock (ViT)</div>
+                            <img id="attn" src="attn_ep.png">
+                        </div>
+                        
+                        <div>
+                            <div class="label-mini">INR Progression (Coarse ➔ Fine ➔ Refined)</div>
+                            <img id="hierarchy" src="latent_hierarchy.png">
+                        </div>
+
+                        <div>
+                            <div class="label-mini">Refined Latent Channels</div>
+                            <img id="latent" src="latent_ep.png">
+                        </div>
                     </div>
                 </div>
             </div>
@@ -114,7 +129,9 @@
 
         async function update() {
             const r = Math.random();
+            // Refreshing the three core visual buffers
             document.getElementById('attn').src = 'attn_ep.png?r=' + r;
+            document.getElementById('hierarchy').src = 'latent_hierarchy.png?r=' + r;
             document.getElementById('latent').src = 'latent_ep.png?r=' + r;
             
             fetch('../last.pth', { method: 'HEAD' }).then(res => {
@@ -156,7 +173,6 @@
                 accChart.update('none');
             }).catch(() => {});
 
-            // NEW: Fetch the hyper-weights text file
             fetch('hyper.txt?r=' + r).then(res => res.text()).then(text => {
                 if(text) document.getElementById('hyper-readout').innerText = text.trim();
             }).catch(() => {});

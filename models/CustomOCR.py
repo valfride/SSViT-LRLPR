@@ -36,20 +36,6 @@ class SurgicalFocusBlock(nn.Module):
         a_w = self.conv_w(x_w).sigmoid()
         return identity * a_w * a_h
 
-class LayoutScout(nn.Module):
-    def __init__(self, in_channels=128):
-        super().__init__()
-        self.pool = nn.AdaptiveAvgPool2d(1) 
-        self.head = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(in_channels, 64),
-            nn.ReLU(True),
-            nn.Dropout(0.2),
-            nn.Linear(64, 2) 
-        )
-    def forward(self, x):
-        return self.head(self.pool(x))
-
 class PositionalEncoding2D(nn.Module):
     def __init__(self, d_model, height, width, dropout=0.1):
         super().__init__()

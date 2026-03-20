@@ -17,7 +17,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 import shutil
 from train_funcs.train_utils import HyperAttentionLoss
-
+import gc
 DEBUG = os.getenv("DEBUG", "True").lower() == "true"
 if DEBUG:
     if "CUDA_VISIBLE_DEVICES" not in os.environ: os.environ["CUDA_VISIBLE_DEVICES"] = "0"
@@ -42,7 +42,7 @@ def log_to_csv(save_path, epoch, train_loss, val_loss, accuracy, lr):
         if not file_exists: writer.writerow(['Epoch', 'Train_Loss', 'Val_Loss', 'Accuracy', 'LR'])
         writer.writerow([epoch, train_loss, val_loss, accuracy, lr])
 
-def make_dataloader(spec, tag=''):
+def make_dataloader(spec, tag='', save_path=None):
     dataset = datasets.make(spec['dataset'])
     wrapper_args = {'dataset': dataset, 'corners_only': False} 
     dataset = datasets.make(spec['wrapper'], args=wrapper_args)
@@ -51,47 +51,62 @@ def make_dataloader(spec, tag=''):
     shuffle = True
     
     if tag == 'train':
-        # 1. Generate the Hard-Mining Weights
-        stats_path = Path('outputs') / spec.get('name', 'config_snapshot') / 'confusion_stats.json'
+        # 1. Generate the Hard-Mining Weights using the REAL path
+        stats_path = save_path / 'confusion_stats.json' if save_path else Path('outputs') / 'confusion_stats.json'
         weights = get_confusion_weights(dataset, stats_path)
         
         if not DEBUG:
-            # 2. Distributed Hard Mining
             from torch.utils.data.distributed import DistributedSampler
             sampler = DistributedSampler(dataset, shuffle=True)
             shuffle = False
-            # We will handle the actual weighting in the loss function for DDP safety,
-            # but setting up the foundation here is key.
         else:
-            # Single GPU Hard Mining
             sampler = torch.utils.data.WeightedRandomSampler(weights, len(weights))
             shuffle = False
 
     loader = DataLoader(
         dataset, batch_size=spec['batch'], shuffle=shuffle, 
-        sampler=sampler, num_workers=8, pin_memory=True, 
-        collate_fn=dataset.collate_fn, drop_last=(tag == 'train'), prefetch_factor=2
+        sampler=sampler, num_workers=16, pin_memory=True, 
+        collate_fn=dataset.collate_fn, drop_last=(tag == 'train'), prefetch_factor=4
     )
     return loader, sampler
 
-def get_confusion_weights(dataset, stats_path):
+def get_confusion_weights(dataset, stats_path, top_k=4):
     if os.path.exists(stats_path):
         try:
-            with open(stats_path, 'r') as f: confusions = json.load(f)
-            trouble_chars = set(confusions.keys())
-        except: trouble_chars = set()
-    else: trouble_chars = set()
+            with open(stats_path, 'r') as f: 
+                confusions = json.load(f)
+            # Python dictionaries preserve order. The JSON is already sorted!
+            worst_keys = list(confusions.keys())[:top_k]
+            trouble_chars = set(worst_keys)
+            
+            if is_main_process():
+                print(f"🔪 SURGICAL MINING: Filtering down to the Top {top_k} worst characters: {trouble_chars}")
+        except: 
+            trouble_chars = set()
+    else: 
+        trouble_chars = set()
 
     weights = []
     found_targets = 0
+    
+    # Fast iteration through the dataset
     for item in dataset.dataset:
         if any(char in trouble_chars for char in item['gt']):
-            weights.append(5.0); found_targets += 1
-        else: weights.append(1.0)
+            weights.append(5.0)
+            found_targets += 1
+        else: 
+            weights.append(1.0)
     
+    if is_main_process() and found_targets > 0:
+        print(f"🎯 HARD MINING ACTIVE: Boosted {found_targets} difficult plates out of {len(weights)}!")
+        
+    # Safety Valve: If even the top 4 characters still infect > 50% of the dataset,
+    # gently reduce the multiplier so the optimizer doesn't collapse.
     if len(weights) > 0 and (found_targets / len(weights)) > 0.5:
-        if is_main_process(): print(f"⚠️ High Error Density ({found_targets/len(weights):.1%}). Dilating sampler.")
+        if is_main_process(): 
+            print(f"⚠️ High Error Density ({found_targets/len(weights):.1%}). Dilating sampler down to 2.5x.")
         weights = [w * 0.5 if w > 1.0 else w for w in weights]
+
     return torch.DoubleTensor(weights)
 
 def create_scheduler(optimizer, epoch_max):
@@ -101,8 +116,8 @@ def main(config, save_path):
     local_rank = int(os.environ["LOCAL_RANK"])
     epoch_max = config['epoch_max']
     
-    train_loader, train_sampler = make_dataloader(config['train_dataset'], tag='train')
-    val_loader, _ = make_dataloader(config.get('val_dataset', config['train_dataset']), tag='val')
+    #  train_loader, train_sampler = make_dataloader(config['train_dataset'], tag='train', save_path=save_path)
+    val_loader, _ = make_dataloader(config.get('val_dataset', config['train_dataset']), tag='val', save_path=save_path)
 
     if is_main_process(): print("Creating Teacherless VSR Model...")
     model_g = models.make(config['model_g']).to(local_rank)
@@ -155,7 +170,7 @@ def main(config, save_path):
     resume_path = config.get('resume')
     if resume_path and os.path.isfile(resume_path):
         if is_main_process(): print(f"⚠️ Resuming from checkpoint: {resume_path}")
-        checkpoint = torch.load(resume_path, map_location=f'cuda:{local_rank}')
+        checkpoint = torch.load(resume_path, map_location=f'cuda:{local_rank}', weights_only=False)
         
         # Smart Filter for Teacherless transition
         state_dict = {k.replace('module.', ''): v for k, v in checkpoint['model_g_sd'].items()}
@@ -254,6 +269,10 @@ def main(config, save_path):
 
     try:
         for epoch in range(start_epoch, epoch_max + 1):
+            
+            # --- THE FIX: Rebuild the Dataloader to read the newest JSON! ---
+            train_loader, train_sampler = make_dataloader(config['train_dataset'], tag='train', save_path=save_path)
+            
             # 1. Properly set the epoch for Distributed Training shuffles
             if hasattr(train_sampler, 'set_epoch'): train_sampler.set_epoch(epoch)
             
@@ -276,8 +295,8 @@ def main(config, save_path):
                 save_path=save_path
             )
             
-            val_loss, accuracy, _ = val_step(val_loader, model_g, None, loss_fn, config)
-    
+            val_loss, accuracy, _ = val_step(val_loader, model_g, None, loss_fn, config, save_path=save_path)    
+
             if scheduler_g: 
                 if isinstance(scheduler_g, torch.optim.lr_scheduler.ReduceLROnPlateau): scheduler_g.step(accuracy)
                 else: scheduler_g.step()
@@ -308,6 +327,13 @@ def main(config, save_path):
                         to_remove = best_models.pop()
                         if os.path.exists(to_remove['path']): os.remove(to_remove['path'])
                 if accuracy > best_accuracy: best_accuracy = accuracy
+                
+            # --- NEW: EXPLICIT MEMORY CLEANUP ---
+            # Kill the 8 multiprocessing workers and free the shared RAM
+            del train_loader
+            del train_sampler
+            gc.collect()
+            torch.cuda.empty_cache() # Optional, but keeps VRAM perfectly fragmented
 
     except KeyboardInterrupt:
         if is_main_process():

@@ -43,10 +43,10 @@ class GPULanczosSimulator(nn.Module):
 
 # 2. Your new, safe pipeline
 gpu_degrader = K.AugmentationSequential(
-    K.RandomGaussianBlur(kernel_size=(7, 7), sigma=(0.1, 2.0), p=1.0),
-    GPULanczosSimulator(scale_min=0.16, scale_max=0.18), # Replaces the dangerous crop!
+    K.RandomGaussianBlur(kernel_size=(5, 5), sigma=(0.1, 2.0), p=1.0),
+    GPULanczosSimulator(scale_min=0.20, scale_max=0.30), # Replaces the dangerous crop!
     K.ColorJitter(brightness=0.1, contrast=0.1, p=0.6),
-    # K.RandomJPEG(jpeg_quality=(95, 100), p=0.8),
+    K.RandomJPEG(jpeg_quality=(95, 100), p=0.8),
     data_keys=["input"]
 )
 # ==============================================================================
@@ -282,8 +282,28 @@ def robust_unpack_loss(loss):
 # ==============================================================================
 # 2. VISUALIZATION MODULES
 # ==============================================================================
-def visualize_feature_maps(latent_tensor, original_images, batch_idx, epoch, save_dir='./train_features', num_channels=16):
+def visualize_feature_maps(latent_tensor, original_images, stages, batch_idx, epoch, save_dir='./train_features'):
     os.makedirs(save_dir, exist_ok=True)
+    
+    # 1. Process Stages (Coarse to Fine)
+    vis_strip = []
+    for s in stages:
+        # Take mean of channels and normalize to 0-1 for visualization
+        s_mean = s[0].mean(dim=0, keepdim=True).detach().cpu()
+        s_mean = (s_mean - s_mean.min()) / (s_mean.max() - s_mean.min() + 1e-6)
+        vis_strip.append(s_mean)
+        
+    # 2. Add the final refined latent map at the end
+    final_mean = latent_tensor[0].mean(dim=0, keepdim=True).detach().cpu()
+    final_mean = (final_mean - final_mean.min()) / (final_mean.max() - final_mean.min() + 1e-6)
+    vis_strip.append(final_mean)
+    
+    # 3. Concatenate horizontally (Dim 2 is Width)
+    hierarchy_strip = torch.cat(vis_strip, dim=2)
+    
+    # 4. Save the new hierarchy strip
+    vutils.save_image(hierarchy_strip, os.path.join(save_dir, 'latent_hierarchy.png'))
+
     if original_images.dim() == 5:
         center_frame_idx = original_images.shape[1] // 2
         orig_img = original_images[0, center_frame_idx].detach().cpu()
@@ -432,19 +452,6 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
         text_label = batch['gt'] 
         true_targets = true_converter.encode_list(text_label).to(device)
 
-        # ====================================================================
-        # THE KORNIA GPU DEGRADATION ENGINE
-        # ====================================================================
-        with torch.no_grad():
-            if is_hr_mask.any():
-                # 1. Un-normalize HR images from [-1, 1] -> [0, 1]
-                hr_subset = (lr_batch[is_hr_mask] * 0.5) + 0.5
-                
-                # 2. Strike them with the GPU Degrader (Natively 4D!)
-                degraded_subset = gpu_degrader(hr_subset)
-                
-                # 3. Re-normalize [0, 1] -> [-1, 1] and drop them back
-                lr_batch[is_hr_mask] = (degraded_subset - 0.5) / 0.5
         # ====================================================================
         # THE "TRUE" HYPERGRADIENT META-STEP (Every 10 Batches)
         # ====================================================================
@@ -609,8 +616,12 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
             if batch_idx % 10 == 0:
                 if 'latent_lr' in preds_lr:
                     visualize_feature_maps(
-                        latent_tensor=preds_lr['latent_lr'], original_images=lr_batch, 
-                        batch_idx=batch_idx, epoch=current_epoch, save_dir=save_root / 'train_features'
+                        latent_tensor=preds_lr['latent_lr'], 
+                        original_images=lr_batch, 
+                        stages=preds_lr.get('latent_stages'), # <--- PASS STAGES
+                        batch_idx=batch_idx, 
+                        epoch=current_epoch, 
+                        save_dir=save_root / 'train_features'
                     )
                 
                 if 'attn_maps' in preds_lr and preds_lr['attn_maps'] is not None:
@@ -632,14 +643,32 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
             epoch_tracker.update(decoded_s, text_label) 
 
             if batch_idx % 5 == 0:
+                # --- NEW: Safe extraction of the Grid Gain (Proof of Life) ---
+                try:
+                    # Safely bypass DDP wrapper if it exists
+                    base_model = model_g.module if hasattr(model_g, 'module') else model_g
+                    g_gain = base_model.cgnet.student_extractor.latent_sr.grid_gain.item()
+                except Exception:
+                    g_gain = 0.0
+                
                 pbar.set_postfix({
                     'Loss': f"{np.mean(loss_stats['total']):.4f}",
                     'Spd': f"{np.mean(loss_stats['spread']):.4f}",
                     'Cls': f"{np.mean(loss_stats['cls']):.4f}",
-                    'Seq%': f"{np.mean(acc_seq_accum):.1%}", # The weighted history
-                    'B_Seq': f"{acc_s:.1%}",                 # <--- NEW: Instant Batch Accuracy
+                    'Gain': f"{g_gain:.4f}",  # <--- YOUR PEACE OF MIND
+                    'B_Seq': f"{acc_s:.1%}",                 
                     'Chr%': f"{np.mean(acc_char_accum):.1%}",
                 })
+
+                # if batch_idx % 5 == 0:
+                # pbar.set_postfix({
+                #     'Loss': f"{np.mean(loss_stats['total']):.4f}",
+                #     'Spd': f"{np.mean(loss_stats['spread']):.4f}",
+                #     'Cls': f"{np.mean(loss_stats['cls']):.4f}",
+                #     'Seq%': f"{np.mean(acc_seq_accum):.1%}", # The weighted history
+                #     'B_Seq': f"{acc_s:.1%}",                 # <--- NEW: Instant Batch Accuracy
+                #     'Chr%': f"{np.mean(acc_char_accum):.1%}",
+                # })
             
             if batch_idx % 50 == 0:
                 sample_gt = text_label[0]
@@ -648,10 +677,7 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
 
             if batch_idx % 10 == 0:
                 write_live_monitor(save_root / 'live_monitor.txt', text_label, decoded_s, decoded_s, current_epoch, batch_idx)
-
-    total_failures = epoch_tracker.get_worst_pairs_dict(top_k=50) 
-    with open(save_root / 'confusion_stats.json', 'w') as f: json.dump(total_failures, f, indent=4)
-    
+            
     return np.mean(loss_stats['total']) if loss_stats['total'] else 0.0
 
 @register('SROCR_VAL')
@@ -659,6 +685,10 @@ def SROCR_VAL(val_loader, model_g, model_d, loss_fn, config, **kwargs):
     model_g.eval() 
     device = next(model_g.parameters()).device
     true_converter = strLabelConverter(config.get('alphabet', "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
+    
+    # --- NEW: Validation Error Tracker ---
+    val_tracker = ConfusionTracker()
+    save_root = kwargs.get('save_path', Path('.'))
     
     correct_sequences = 0
     total_sequences = 0
@@ -701,6 +731,9 @@ def SROCR_VAL(val_loader, model_g, model_d, loss_fn, config, **kwargs):
                 winning_prediction = sorted_preds[0][0]
                 gt = text_labels[b]
                 
+                # --- NEW: Track the post-ensembled errors! ---
+                val_tracker.update([winning_prediction], [gt])
+                
                 total_sequences += 1
                 if winning_prediction == gt: correct_sequences += 1
                 
@@ -715,5 +748,10 @@ def SROCR_VAL(val_loader, model_g, model_d, loss_fn, config, **kwargs):
     print(f"Sequence Accuracy:  {acc_seq:.2%}")
     print(f"Character Accuracy: {acc_char:.2%}")
     print(f"{'='*81}\n")
+    
+    # --- NEW: Save the true validation blind spots for the next epoch ---
+    total_failures = val_tracker.get_worst_pairs_dict(top_k=50) 
+    with open(save_root / 'confusion_stats.json', 'w') as f: 
+        json.dump(total_failures, f, indent=4)
     
     return 0.0, acc_seq, 0.0

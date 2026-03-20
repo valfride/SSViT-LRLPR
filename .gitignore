@@ -6,7 +6,10 @@ Competition*/
 test/*
 *.txt
 *flattened_*.txt
-tst/*
+tst/
+UFPR-ALPR-Dataset/
+datasets/synEngine/datasets/
+datasets/synEngine/test_synthetic_outputs/
 
 # Checkpoints and Logs
 *.pth

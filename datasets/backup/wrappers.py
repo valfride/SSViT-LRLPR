@@ -12,12 +12,14 @@ from torchvision.transforms import ToTensor, Normalize
 from albumentations.core.transforms_interface import ImageOnlyTransform
 
 import sys
+import random
 from pathlib import Path
 
 # --- NEW: Dynamically add synEngine to the Python Path ---
 CURRENT_DIR = Path(__file__).resolve().parent
 SYN_ENGINE_DIR = CURRENT_DIR / "synEngine"
 sys.path.append(str(SYN_ENGINE_DIR))
+
 try:
     from PhysicalPlateGenerator import PhysicalPlateGenerator
 except ImportError:
@@ -78,6 +80,10 @@ class Sequential_lr_sr(Dataset):
         
         assert self.dataset is not None, "Dataset is None"
 
+        # ====================================================================
+        # PIPELINE 1: SINGLE-IMAGE GEOMETRIC TWEAKS 
+        # ====================================================================
+        # Removed 'additional_targets' since we no longer track HR
         self.geo_aug = A.Compose([
             A.ShiftScaleRotate(
                 shift_limit=0.05, 
@@ -88,14 +94,17 @@ class Sequential_lr_sr(Dataset):
             ),
         ])
 
+        # ====================================================================
+        # PIPELINE 2: THE DEGRADATION ENGINE
+        # ====================================================================
         self.hr_to_lr_degrade = A.Compose([
             A.OneOf([
-                A.MotionBlur(blur_limit=5, p=1.0),
+                A.GaussianBlur(blur_limit=(7, 7), p=1.0),
             ], p=1.0), 
 
             A.Downscale(
-                scale_range=[0.3, 0.4],
-                interpolation_pair={"upscale": cv2.INTER_LANCZOS4, "downscale": cv2.INTER_LANCZOS4},
+                scale_range=[0.16, 0.18],
+                interpolation_pair={"upscale": cv2.INTER_LANCZOS4 ,"downscale": cv2.INTER_LANCZOS4 },
                 p=1.0
             ),
             
@@ -107,7 +116,7 @@ class Sequential_lr_sr(Dataset):
             
             A.ImageCompression(
                 compression_type="webp",
-                quality_range=[80, 90],
+                quality_range=[95, 100],
                 p=0.8
             ),
 
@@ -123,6 +132,58 @@ class Sequential_lr_sr(Dataset):
     def __len__(self):
         return len(self.dataset)
 
+    # def __getitem__(self, idx):
+    #     # 1. Fetch the decoded dictionary from the LMDBDataset
+    #     item = self.dataset[idx]
+        
+    #     # 2. Extract the pre-loaded data
+    #     img_raw = item['img_raw']      # ALREADY decoded and converted to RGB!
+    #     plate_gt = item['gt']          
+    #     filename = item['name']
+    #     image_path_str = item['img_path'] 
+        
+    #     is_hr_file = filename.startswith("hr-")
+
+    #     # ---> REMOVED: cv2.cvtColor(cv2.imread(image_path_str), cv2.COLOR_BGR2RGB) <---
+        
+    #     # 3. Generate the LR Image (The rest of your code remains exactly the same!)
+    #     if is_hr_file:
+    #         # If the dataset provides HR, we aggressively degrade it...
+    #         hr_img = cv2.resize(img_raw, (self.imgW, self.imgH), interpolation=cv2.INTER_CUBIC)
+            
+    #         if self.aug and not self.test:
+    #             lr_img = self.hr_to_lr_degrade(image=hr_img)['image']
+    #         else:
+    #             lr_img = hr_img
+    #     else:
+    #         # If the dataset is already LR, just resize it to the expected dimensions
+    #         lr_img = cv2.resize(img_raw, (self.imgW, self.imgH), interpolation=cv2.INTER_CUBIC)
+
+    #     # 4. Apply Single-Image Geometric Augmentations
+    #     if self.aug and not self.test:
+    #         # Applied directly to the base resolution, no double-resize!
+    #         augmented = self.geo_aug(image=lr_img)
+    #         lr_img = augmented['image']
+
+    #     # 5. Convert to Tensors 
+    #     t_lr = self.normalize(ToTensor()(lr_img.copy())).unsqueeze(0)
+        
+    #     # Removed HR tensor return entirely
+    #     return {
+    #         'lr': t_lr,       
+    #         'gt': plate_gt,
+    #         'name': filename,
+    #         'img_path': image_path_str
+    #     }
+
+    # def collate_fn(self, batch):
+    #     # Removed 'hr' from the stacked batch dictionary
+    #     return {
+    #         'lr': torch.stack([b['lr'] for b in batch]),
+    #         'gt': [b['gt'] for b in batch],
+    #         'name': [b['name'] for b in batch],
+    #         'img_path': [b['img_path'] for b in batch]
+    #     }
     def __getitem__(self, idx):
         item = self.dataset[idx]
         img_raw = item['img_raw']      
@@ -131,47 +192,34 @@ class Sequential_lr_sr(Dataset):
         
         # 1. Flag if this is an HR image
         is_hr_file = filename.startswith("hr-")
-
+        
+        # --- 🚀 NEW: SYNTHETIC INJECTION PIPELINE ---
         if getattr(self, 'syn_prob', 0.0) > 0 and random.random() < self.syn_prob:
             try:
+                # 1. Generate the pristine synthetic plate using the ground truth text!
+                img_bgr = self.syn_engine.generate(plate_gt)
+                
+                # if random.random() < 1.0: # ~1 in 500 chance to save
+                #     debug_path = Path("debug_syn")
+                #     debug_path.mkdir(exist_ok=True)
+                #     cv2.imwrite(str(debug_path / f"debug_{plate_gt}.jpg"), img_bgr)
 
-                # 1. Generate the pristine synthetic plate AND get the standardized label
-                
-                img_bgr, standard_label = self.syn_engine.generate(plate_gt)
-                # --- 🐞 DEBUG: SAVE SAMPLE PLATES ---
-                # Save ~2% of generated plates to visually verify the engine
-                #if random.random() < 1.0: 
-                #    print(f"💾 Saving synthetic plate for label '{standard_label}'")
-                #    debug_dir = Path("./debug_syn_plates")
-                #    debug_dir.mkdir(exist_ok=True)
-                #    # We append a random number to avoid overwriting identical labels in the same epoch
-                #    rand_id = random.randint(1000, 9999)
-                #    cv2.imwrite(str(debug_dir / f"syn_{standard_label}_{rand_id}.jpg"), img_bgr)
-                # ------------------------------------
-                
-                # 2. OVERWRITE GROUND TRUTH: Force the model to learn the standardized format
-                plate_gt = standard_label
-                
-                # 3. Overwrite the real image with the synthetic one (Convert BGR to RGB)
+                # 2. Overwrite the real image with the synthetic one (Convert BGR to RGB)
                 img_raw = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
                 
-                # 4. FORCE the HR flag to True! 
+                # 3. FORCE the HR flag to True! 
+                # This ensures your Kornia gpu_degrader will smash this pristine image during training.
                 is_hr_file = True 
                 filename = f"syn_hr_{plate_gt}.jpg" 
                 
             except Exception as e:
-                # 🛑 REMOVE 'pass' AND PRINT THE ERROR INSTEAD
-                print(f"❌ ENGINE CRASH on '{plate_gt}': {repr(e)}")
-                # pass
+                # FAILSAFE: If the engine is missing a specific letter asset (e.g., 'W'), 
+                # it safely aborts and just uses the real 'img_raw' from the dataset.
+                pass 
         # ---------------------------------------------
         
         # 2. Resize everything to base dimensions immediately (CPU is fast at this)
-        if is_hr_file and self.aug and not self.test:
-            degraded = self.hr_to_lr_degrade(image=img_raw)
-            img_resized = degraded['image']
-        else:
-            # If it's already an LR image or we are testing, just resize it normally
-            img_resized = cv2.resize(img_raw, (self.imgW, self.imgH), interpolation=cv2.INTER_CUBIC)
+        img_resized = cv2.resize(img_raw, (self.imgW, self.imgH), interpolation=cv2.INTER_CUBIC)
 
         # 3. Apply standard geometric shifts
         if self.aug and not self.test:
@@ -182,7 +230,7 @@ class Sequential_lr_sr(Dataset):
         t_lr = self.normalize(ToTensor()(img_resized.copy()))
         
         return {
-            'lr': t_lr,       
+            'lr': t_lr,       # Still called 'lr' in your dict, but holds the pristine HR if flagged!
             'gt': plate_gt,
             'name': filename,
             'is_hr': is_hr_file # <--- Pass the flag to the GPU!
@@ -195,7 +243,6 @@ class Sequential_lr_sr(Dataset):
             'name': [b['name'] for b in batch],
             'is_hr': torch.tensor([b['is_hr'] for b in batch], dtype=torch.bool) # <--- Stack the flags
         }
-
 @register('VSR_Sequence_collate_fn')
 class Sequential_Sequence_sr(Dataset):
     """
@@ -210,23 +257,29 @@ class Sequential_Sequence_sr(Dataset):
         self.imgH = imgH      
         self.test = test
         self.normalize = Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-        self.in_images = in_images 
+        self.in_images = in_images # Expected images per sequence
         
         assert dataset is not None, "Dataset is None"
 
+        # 1. Group the underlying dataset by track
         from collections import defaultdict
         self.sequences = defaultdict(list)
         
         for idx in range(len(dataset)):
             item = dataset[idx]
+            # Extract track ID from path (e.g., track_10019)
+            # You might need to adjust this parsing based on your exact file structure
             path_str = str(item['img_path'])
             try:
+                # Assuming structure like: .../track_12345/lr-001.jpg
                 track_id = path_str.split('track_')[1].split('/')[0] 
             except IndexError:
+                # Fallback if structure is different
                 track_id = Path(path_str).parent.name 
                 
             self.sequences[track_id].append(item)
             
+        # Convert dict to a list of sequences
         self.grouped_dataset = list(self.sequences.values())
 
     def __len__(self):
@@ -238,10 +291,14 @@ class Sequential_Sequence_sr(Dataset):
         # --- THE FIX: Filter out any HR images before processing the sequence ---
         sequence_items = [item for item in raw_sequence_items if not item['name'].startswith('hr-')]
         
+        # Safety check: if a track somehow ONLY had an HR image, prevent a crash
         if len(sequence_items) == 0:
             raise ValueError(f"Track index {idx} has no LR images! (Only found HR files or it was empty)")
         
+        # We need exactly self.in_images (e.g., 5). 
+        # Pad or truncate if necessary, though they should ideally be exactly 5.
         if len(sequence_items) < self.in_images:
+            # Pad by repeating the last image
             sequence_items.extend([sequence_items[-1]] * (self.in_images - len(sequence_items)))
         elif len(sequence_items) > self.in_images:
             sequence_items = sequence_items[:self.in_images]
@@ -252,6 +309,7 @@ class Sequential_Sequence_sr(Dataset):
         
         for item in sequence_items:
             img_raw = item['img_raw']
+            # Standard validation resize (no degradation)
             lr_img = cv2.resize(img_raw, (self.imgW, self.imgH), interpolation=cv2.INTER_CUBIC)
             t_lr = self.normalize(ToTensor()(lr_img.copy()))
             
@@ -259,16 +317,18 @@ class Sequential_Sequence_sr(Dataset):
             gts.append(item['gt'])
             names.append(item['name'])
 
+        # Stack the 5 images into shape: (5, 3, 32, 96)
         sequence_tensor = torch.stack(lr_tensors)
         
         return {
             'lr_seq': sequence_tensor,       
-            'gt': gts[0], 
+            'gt': gts[0], # The ground truth is the same for all images in the sequence
             'names': names
         }
 
     def collate_fn(self, batch):
         return {
+            # lr_seq shape: (Batch_Size, 5, 3, 32, 96)
             'lr_seq': torch.stack([b['lr_seq'] for b in batch]),
             'gt': [b['gt'] for b in batch],
             'names': [b['names'] for b in batch]

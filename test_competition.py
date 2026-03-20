@@ -201,23 +201,23 @@ if __name__ == "__main__":
                 
                 if args.tta:
                     # PASS 2 & 3: Positive Sweep (+5, +10)
-                    flat_p5 = TF.rotate(flat_imgs, angle=5.0, interpolation=TF.InterpolationMode.BILINEAR)
+                    flat_p5 = TF.rotate(flat_imgs, angle=2.5, interpolation=TF.InterpolationMode.BILINEAR)
                     out_p5 = model(flat_p5, temporal_pool=True)
                     if isinstance(out_p5, tuple): out_p5 = out_p5[0]
                     logits_p5 = out_p5['logits'].view(B, Seq_Len, 7, 37).mean(dim=1)
 
-                    flat_p10 = TF.rotate(flat_imgs, angle=10.0, interpolation=TF.InterpolationMode.BILINEAR)
+                    flat_p10 = TF.rotate(flat_imgs, angle=5.0, interpolation=TF.InterpolationMode.BILINEAR)
                     out_p10 = model(flat_p10, temporal_pool=True)
                     if isinstance(out_p10, tuple): out_p10 = out_p10[0]
                     logits_p10 = out_p10['logits'].view(B, Seq_Len, 7, 37).mean(dim=1)
 
                     # PASS 4 & 5: Negative Sweep (-5, -10)
-                    flat_m5 = TF.rotate(flat_imgs, angle=-5.0, interpolation=TF.InterpolationMode.BILINEAR)
+                    flat_m5 = TF.rotate(flat_imgs, angle=-2.5, interpolation=TF.InterpolationMode.BILINEAR)
                     out_m5 = model(flat_m5, temporal_pool=True)
                     if isinstance(out_m5, tuple): out_m5 = out_m5[0]
                     logits_m5 = out_m5['logits'].view(B, Seq_Len, 7, 37).mean(dim=1)
 
-                    flat_m10 = TF.rotate(flat_imgs, angle=-10.0, interpolation=TF.InterpolationMode.BILINEAR)
+                    flat_m10 = TF.rotate(flat_imgs, angle=-5.0, interpolation=TF.InterpolationMode.BILINEAR)
                     out_m10 = model(flat_m10, temporal_pool=True)
                     if isinstance(out_m10, tuple): out_m10 = out_m10[0]
                     logits_m10 = out_m10['logits'].view(B, Seq_Len, 7, 37).mean(dim=1)
