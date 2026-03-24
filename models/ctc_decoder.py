@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .svtrv2 import Block, ConvBNLayer
+from models.svtrv2.svtrv2 import Block, ConvBNLayer
 from torch.nn.init import kaiming_normal_, trunc_normal_, zeros_, ones_
 
 class Swish(nn.Module):

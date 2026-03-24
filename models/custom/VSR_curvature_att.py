@@ -50,9 +50,17 @@ class MDTA(nn.Module):
         return self.project_out(out)
 
 class GDFN(nn.Module):
-    def __init__(self, channels, expansion_factor=2.0):
+    def __init__(self, channels, expansion_factor=1.2):
         super(GDFN, self).__init__()
-        hidden_channels = int(channels * expansion_factor)
+        
+        # --- THE FIX: Ensure hidden_channels is divisible by 8 ---
+        # This rounds (channels * expansion) to the nearest multiple of 8
+        raw_hidden = channels * expansion_factor
+        hidden_channels = int(round(raw_hidden / 8) * 8)
+        
+        # Safety check: ensure it's at least 8
+        hidden_channels = max(8, hidden_channels)
+        
         self.project_in = nn.Conv2d(channels, hidden_channels * 2, kernel_size=1, bias=False)
         self.dwconv = nn.Conv2d(
             hidden_channels * 2, hidden_channels * 2, kernel_size=3, padding=1, 
@@ -73,7 +81,7 @@ class RestormerBlock(nn.Module):
         self.norm1 = nn.GroupNorm(8, channels) 
         self.attn = MDTA(channels, num_heads) 
         self.norm2 = nn.GroupNorm(8, channels)
-        self.ffn = GDFN(channels)
+        self.ffn = GDFN(channels, expansion_factor=1.2)
 
     def forward(self, x):
         x = x + self.attn(self.norm1(x))
@@ -141,10 +149,10 @@ class RestormerBlock(nn.Module):
 #                 sampled = F.grid_sample(batched_grid, rel_coords, mode='bilinear', align_corners=True)
 #                 # Apply the gain to ensure the signal reaches the MLP
 #                 sampled_features.append(sampled * self.grid_gain)
-            
+
 #             encoded_coords = torch.cat(sampled_features, dim=1)
 #             mlp_input = torch.cat([x_nearest, encoded_coords], dim=1)
-            
+
 #         mlp_input = mlp_input.to(x.dtype)
 #         hr_features = self.mlp(mlp_input)
 #         out = self.refine(hr_features)
@@ -191,7 +199,7 @@ class HighContrastGate(nn.Module):
         return x * gate
 
 class DeformableProj(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size=3, offset_groups=4):
+    def __init__(self, in_channels, out_channels, kernel_size=3, offset_groups=2):
         super().__init__()
         self.padding = kernel_size // 2
         
@@ -268,7 +276,7 @@ class SpatialFeatureExtractor(nn.Module):
 
         feat_sr = self.latent_sr(texture)
         return self.refine_conv(feat_sr)
-    
+        
 # ==============================================================================
 # 3. THE CGNET WRAPPER
 # ==============================================================================

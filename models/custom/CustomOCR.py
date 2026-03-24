@@ -4,8 +4,8 @@ import torch.nn.functional as F
 import math
 import numpy as np
 
-from models.VSR_curvature_att import FReLU
-from models.VSR_curvature_att import HighContrastGate, DeformableProj
+from models.custom.VSR_curvature_att import FReLU
+from models.custom.VSR_curvature_att import HighContrastGate, DeformableProj
 # ==============================================================================
 # 1. HELPER BLOCKS 
 # ==============================================================================
@@ -392,9 +392,9 @@ class CustomRoPELayer(nn.Module):
         self.norm2 = nn.LayerNorm(d_model)
         
         self.mlp = nn.Sequential(
-            nn.Linear(d_model, d_model * 4),
+            nn.Linear(d_model, d_model * 2),
             nn.GELU(),
-            nn.Linear(d_model * 4, d_model)
+            nn.Linear(d_model * 2, d_model)
         )
 
     def forward(self, query, key_value, freqs):
@@ -536,9 +536,11 @@ class CustomOCR(nn.Module):
         self.vit_expert = ViT_CrossAttn_OCR(
             in_channels=256, 
             d_model=d_model, 
-            num_chars=num_chars, 
+            num_chars=num_chars,
+            num_layers=1,
             num_classes=num_classes,
-            num_heads=num_heads  
+            num_heads=num_heads,
+            
         )
         
         self.projector = nn.Sequential(nn.Linear(d_model, 128), nn.Mish(), nn.Linear(128, 128))

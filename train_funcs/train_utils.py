@@ -81,6 +81,21 @@ class strLabelConverter(object):
             
         return torch.LongTensor(char_tgts), torch.LongTensor(node_tgts)
 
+    def encode_ote(self, text_list, max_len=7):
+        BOS = 37
+        EOS = 0
+        PAD = 38
+        result = []
+        for text in text_list:
+            seq = [BOS]
+            for char in text[:max_len]:
+                seq.append(self.dict.get(char, 0))
+            seq.append(EOS)
+            while len(seq) < max_len + 2:
+                seq.append(PAD)
+            result.append(seq)
+        return torch.LongTensor(result)
+
     def encode_list(self, text_list):
         all_result = []
         for text in text_list:
@@ -518,8 +533,12 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
     if cls_loss_type == 'CTC':
         loss_fn_spatial = SVTR_CTCLoss().to(device)
     elif cls_loss_type == 'CPPD':
-        from models.cppd_bridge import CPPDLossWrapper
+        from models.cppd.cppd_bridge import CPPDLossWrapper
         loss_fn_spatial = CPPDLossWrapper(max_len=7).to(device)
+    elif cls_loss_type == 'OTE':
+        # Instantiating the OTE Loss Wrapper
+        from models.ote.ote_bridge import OTELossWrapper
+        loss_fn_spatial = OTELossWrapper(ignore_index=38).to(device)
     else:
         loss_fn_spatial = SmoothPoly1Loss(epsilon=1.5, smoothing=0.1).to(device)
 
@@ -540,13 +559,15 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
         if cls_loss_type == 'CPPD':
             true_targets = true_converter.encode_cppd(text_label, max_len=7)
             true_targets = (true_targets[0].to(device), true_targets[1].to(device))
+        elif cls_loss_type == 'OTE':
+            true_targets = true_converter.encode_ote(text_label, max_len=7).to(device)
         else:
             true_targets = true_converter.encode_list(text_label).to(device)
 
         # ====================================================================
         # THE "TRUE" HYPERGRADIENT META-STEP (Every 10 Batches)
         # ====================================================================
-        if batch_idx % 10 == 0 and batch_idx > 0 and config.get('cls_loss', 'SmoothPoly1') not in ['CTC', 'CPPD']:
+        if batch_idx % 10 == 0 and batch_idx > 0 and config.get('cls_loss', 'SmoothPoly1') not in ['CTC', 'CPPD', 'LISTER_INTERNAL', 'OTE']:
             # 1. Grab a fresh validation batch
             try:
                 val_batch = next(val_iter)
@@ -676,12 +697,14 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
 
             if isinstance(preds_lr, (tuple, list)): preds_lr = preds_lr[0]
 
-            if cls_loss_type == 'CPPD':
+            # If the model provides its own internal loss (like LISTER)
+            if 'loss_internal' in preds_lr and preds_lr['loss_internal'] is not None:
+                loss_cls_lr = preds_lr['loss_internal']
+            elif cls_loss_type in ['CPPD', 'OTE']:
+                # Both CPPD and OTE wrappers expect the FULL dictionary to calculate loss!
                 loss_cls_lr = loss_fn_spatial(preds_lr, true_targets)
             else:
                 loss_cls_lr = loss_fn_spatial(preds_lr['logits'], true_targets)
-
-            if loss_cls_lr.dim() > 0: loss_cls_lr = loss_cls_lr.mean()
             
             loss_spread = 0.0
             if preds_lr['attn_maps'] is not None:

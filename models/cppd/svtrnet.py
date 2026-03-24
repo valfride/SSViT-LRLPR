@@ -3,7 +3,7 @@ import torch
 from torch import nn
 from torch.nn.init import kaiming_normal_, ones_, trunc_normal_, zeros_
 
-from .common import DropPath, Identity, Mlp
+from models.common import DropPath, Identity, Mlp
 
 class ConvBNLayer(nn.Module):
 
@@ -175,9 +175,9 @@ class Block(nn.Module):
             )
         elif mixer == 'Conv':
             self.mixer = ConvMixer(dim,
-                                   num_heads=num_heads,
-                                   HW=HW,
-                                   local_k=local_mixer)
+                                    num_heads=num_heads,
+                                    HW=HW,
+                                    local_k=local_mixer)
         else:
             raise TypeError('The mixer must be one of [Global, Local, Conv]')
 
@@ -220,7 +220,7 @@ class PatchEmbed(nn.Module):
     ):
         super().__init__()
         num_patches = (img_size[1] // (2**sub_num)) * (img_size[0] //
-                                                       (2**sub_num))
+                                                        (2**sub_num))
         self.img_size = img_size
         self.num_patches = num_patches
         self.embed_dim = embed_dim
@@ -279,9 +279,9 @@ class PatchEmbed(nn.Module):
                 )
         elif mode == 'linear':
             self.proj = nn.Conv2d(1,
-                                  embed_dim,
-                                  kernel_size=patch_size,
-                                  stride=patch_size)
+                                    embed_dim,
+                                    kernel_size=patch_size,
+                                    stride=patch_size)
             self.num_patches = img_size[0] // patch_size[0] * img_size[
                 1] // patch_size[1]
 
@@ -317,10 +317,10 @@ class SubSample(nn.Module):
             self.proj = nn.Linear(in_channels, out_channels)
         else:
             self.conv = nn.Conv2d(in_channels,
-                                  out_channels,
-                                  kernel_size=3,
-                                  stride=stride,
-                                  padding=1)
+                                out_channels,
+                                kernel_size=3,
+                                stride=stride,
+                                padding=1)
         self.norm = eval(sub_norm)(out_channels)
         if act is not None:
             self.act = act()
@@ -539,13 +539,13 @@ class SVTRNet(nn.Module):
         if self.patch_merging is not None:
             x = self.sub_sample1(
                 x.transpose(1, 2).reshape(-1, self.embed_dim[0], self.HW[0],
-                                          self.HW[1]))
+                                        self.HW[1]))
         for blk in self.blocks2:
             x = blk(x)
         if self.patch_merging is not None:
             x = self.sub_sample2(
                 x.transpose(1, 2).reshape(-1, self.embed_dim[1], self.hw[0][0],
-                                          self.hw[0][1]))
+                                        self.hw[0][1]))
         for blk in self.blocks3:
             x = blk(x)
         if not self.prenorm:
@@ -556,14 +556,14 @@ class SVTRNet(nn.Module):
         x = self.forward_features(x)
         if self.feature2d:
             x = x.transpose(1, 2).reshape(-1, self.embed_dim[2], self.hw[1][0],
-                                          self.hw[1][1])
+                                        self.hw[1][1])
         if self.use_lenhead:
             len_x = self.len_conv(x.mean(1))
             len_x = self.dropout_len(self.hardswish_len(len_x))
         if self.last_stage:
             x = self.avg_pool(
                 x.transpose(1, 2).reshape(-1, self.embed_dim[2], self.hw[1][0],
-                                          self.hw[1][1]))
+                                        self.hw[1][1]))
             x = self.last_conv(x)
             x = self.hardswish(x)
             x = self.dropout(x)

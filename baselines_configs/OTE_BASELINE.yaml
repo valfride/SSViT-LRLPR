@@ -1,62 +1,71 @@
+name: OTE_BASELINE_Curriculum
 alphabet: 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ
-cls_loss: CPPD
+cls_loss: OTE              
+
 epoch_max: 500
 force_lr: true
 func_train: SROCR_TRAIN
 func_val: SROCR_VAL
-loss:
-  args: {}
-  name: SROCR_loss
+use_fp16: true
+resume: null
+
 model_g:
+  name: OTE_BASELINE
   args:
     in_channels: 3
     max_len: 7
     num_classes: 37
-  name: CPPD_BASELINE
-name: CPPD_BASELINE_Curriculum
+
 optimizer_sr:
+  name: adamW
   args:
     lr: 1e-4
-  name: adamW
-resume: null
+
+loss:
+  name: SROCR_loss
+  args: {}
+
+# ==========================================================
+# DATALOADERS
+# ==========================================================
 train_dataset:
   batch: 64
   dataset:
+    name: lmdb_dataset
     args:
       in_memory: true
       path_split: ./CompetitionDataset_LMDB_plus
       phase: training
-    name: lmdb_dataset
   wrapper:
+    name: VSR_collate_fn
     args:
       anagram_prob: 0.0
       aug: true
       background: (127, 127, 127)
       fully_synthetic_prob: 0.0
       image_aspect_ratio: 3.0
-      imgH: 24
-      imgW: 72
+      imgH: 24  
+      imgW: 72  
       in_images: 1
       synthetic_prob: 0.0
-    name: VSR_collate_fn
-use_fp16: true
+
 val_dataset:
-  batch: 64
+  batch: 64 
   dataset:
+    name: lmdb_dataset
     args:
       in_memory: true
       path_split: ./CompetitionDataset_LMDB_plus
       phase: validation
-    name: lmdb_dataset
   wrapper:
+    name: VSR_Sequence_collate_fn
     args:
       aug: false
       background: (127, 127, 127)
       fully_synthetic_prob: 0.0
       image_aspect_ratio: 3.0
-      imgH: 24
-      imgW: 72
+      imgH: 24  
+      imgW: 72  
       in_images: 5
       synthetic_prob: 0.0
       test: true
-    name: VSR_Sequence_collate_fn

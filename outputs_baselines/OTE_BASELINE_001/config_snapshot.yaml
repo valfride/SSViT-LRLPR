@@ -1,5 +1,5 @@
 alphabet: 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ
-cls_loss: CPPD
+cls_loss: OTE
 epoch_max: 500
 force_lr: true
 func_train: SROCR_TRAIN
@@ -12,8 +12,8 @@ model_g:
     in_channels: 3
     max_len: 7
     num_classes: 37
-  name: CPPD_BASELINE
-name: CPPD_BASELINE_Curriculum
+  name: OTE_BASELINE
+name: OTE_BASELINE_Curriculum
 optimizer_sr:
   args:
     lr: 1e-4

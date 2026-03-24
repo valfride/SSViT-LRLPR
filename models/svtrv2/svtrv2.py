@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from torch.nn.init import kaiming_normal_, ones_, trunc_normal_, zeros_
 
-from .common import DropPath, Identity, Mlp
+from models.common import DropPath, Identity, Mlp
 
 
 class ConvBNLayer(nn.Module):
