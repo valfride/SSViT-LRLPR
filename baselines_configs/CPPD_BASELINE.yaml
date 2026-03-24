@@ -1,0 +1,80 @@
+name: CPPD_BASELINE_Curriculum
+alphabet: 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ
+
+# --- THE ROUTING FLAG ---
+# This tells train_utils.py to use encode_cppd() and CPPDLossWrapper
+cls_loss: CPPD              
+
+epoch_max: 500
+force_lr: true
+func_train: SROCR_TRAIN
+func_val: SROCR_VAL
+use_fp16: true
+resume: null
+
+# ==========================================================
+# MODEL ARCHITECTURE
+# ==========================================================
+model_g:
+  name: CPPD_BASELINE
+  args:
+    in_channels: 3
+    max_len: 7
+    num_classes: 37
+
+# ==========================================================
+# OPTIMIZERS & LOSS INSTANTIATION
+# ==========================================================
+optimizer_sr:
+  name: adamW
+  args:
+    lr: 1e-4
+
+loss:
+  name: SROCR_loss
+  args: {}
+
+# ==========================================================
+# DATALOADERS
+# ==========================================================
+train_dataset:
+  batch: 64
+  dataset:
+    name: lmdb_dataset
+    args:
+      in_memory: true
+      path_split: ./CompetitionDataset_LMDB_plus
+      phase: training
+  wrapper:
+    name: VSR_collate_fn
+    args:
+      anagram_prob: 0.0
+      aug: true
+      background: (127, 127, 127)
+      fully_synthetic_prob: 0.0
+      image_aspect_ratio: 3.0
+      imgH: 24  # Matched to cppd_bridge.py
+      imgW: 72  # Matched to cppd_bridge.py
+      in_images: 1
+      synthetic_prob: 0.0
+
+val_dataset:
+  batch: 64  # Kept lower (64) because in_images: 5 uses 5x the VRAM!
+  dataset:
+    name: lmdb_dataset
+    args:
+      in_memory: true
+      path_split: ./CompetitionDataset_LMDB_plus
+      phase: validation
+  wrapper:
+    name: VSR_Sequence_collate_fn
+    args:
+      aug: false
+      background: (127, 127, 127)
+      fully_synthetic_prob: 0.0
+      image_aspect_ratio: 3.0
+      imgH: 24  # Matched to cppd_bridge.py
+      imgW: 72  # Matched to cppd_bridge.py
+      in_images: 5
+      synthetic_prob: 0.0
+      test: true

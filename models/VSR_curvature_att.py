@@ -80,102 +80,102 @@ class RestormerBlock(nn.Module):
         x = x + self.ffn(self.norm2(x))
         return x
 
-import math
-
-class LatentUpsampler(nn.Module):
-    def __init__(self, dim, upscale_factor=2, num_levels=4, features_per_level=8):
-        super().__init__()
-        self.scale = upscale_factor
-        self.grid_levels = nn.ParameterList()
-        
-        # --- THE FIX: Starting at your requested 24x72 ---
-        base_res = 24  
-        max_res = 64   
-        growth_factor = math.exp((math.log(max_res) - math.log(base_res)) / (num_levels - 1))
-        
-        for i in range(num_levels):
-            res_h = int(base_res * (growth_factor ** i))
-            res_w = res_h * 3 
-            
-            # INITIALIZATION: Increased to 0.05 to give the MLP a stronger starting signal
-            grid = nn.Parameter(torch.randn(1, features_per_level, res_h, res_w) * 0.05)
-            self.grid_levels.append(grid)
-
-        # Learnable gain for the grids - starts at 0.1 so they aren't ignored
-        self.grid_gain = nn.Parameter(torch.tensor(0.1))
-
-        mlp_in_dim = dim + (num_levels * features_per_level)
-        self.mlp = nn.Sequential(
-            nn.Conv2d(mlp_in_dim, dim, kernel_size=1),
-            nn.GroupNorm(8, dim),
-            nn.GELU(),
-            nn.Conv2d(dim, dim, kernel_size=1)
-        )
-        
-        self.refine = nn.Sequential(
-            nn.Conv2d(dim, dim, kernel_size=3, padding=1),
-            nn.GroupNorm(8, dim),
-            FReLU(dim)
-        )
-
-    def forward(self, x, return_stages=True):
-        B, C, H, W = x.shape
-        target_H, target_W = H * self.scale, W * self.scale
-        
-        with torch.amp.autocast('cuda', enabled=False):
-            x_fp32 = x.float()
-            # FIX 1 (Already in your code): Explicit size alignment
-            x_nearest = F.interpolate(x_fp32, size=(target_H, target_W), mode='nearest')
-            
-            grid_y, grid_x = torch.meshgrid(
-                torch.linspace(-1, 1, target_H, device=x.device, dtype=torch.float32),
-                torch.linspace(-1, 1, target_W, device=x.device, dtype=torch.float32),
-                indexing='ij'
-            )
-            rel_coords = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0).expand(B, -1, -1, -1)
-            
-            sampled_features = []
-            for grid in self.grid_levels:
-                batched_grid = grid.expand(B, -1, -1, -1).float()
-                # FIX 2 (Already in your code): align_corners=True
-                sampled = F.grid_sample(batched_grid, rel_coords, mode='bilinear', align_corners=True)
-                # Apply the gain to ensure the signal reaches the MLP
-                sampled_features.append(sampled * self.grid_gain)
-            
-            encoded_coords = torch.cat(sampled_features, dim=1)
-            mlp_input = torch.cat([x_nearest, encoded_coords], dim=1)
-            
-        mlp_input = mlp_input.to(x.dtype)
-        hr_features = self.mlp(mlp_input)
-        out = self.refine(hr_features)
-
-        if return_stages:
-            return out, sampled_features
-        return out
+# import math
 
 # class LatentUpsampler(nn.Module):
-#     def __init__(self, dim, upscale_factor=2):
+#     def __init__(self, dim, upscale_factor=2, num_levels=4, features_per_level=8):
 #         super().__init__()
-#         # 1. Project to higher channel depth
-#         self.conv1 = nn.Conv2d(
-#             dim, dim * (upscale_factor ** 2), kernel_size=3, padding=1
-#         )
-#         # 2. Shuffle channels into spatial resolution
-#         self.upsample = nn.PixelShuffle(upscale_factor)
+#         self.scale = upscale_factor
+#         self.grid_levels = nn.ParameterList()
         
-#         # --- THE FIX: Smoothing Convolution ---
-#         # 3. Blend the shuffled pixels together to destroy the checkerboard artifact
-#         self.conv2 = nn.Conv2d(
-#             dim, dim, kernel_size=3, padding=1
-#         )
+#         # --- THE FIX: Starting at your requested 24x72 ---
+#         base_res = 24  
+#         max_res = 64   
+#         growth_factor = math.exp((math.log(max_res) - math.log(base_res)) / (num_levels - 1))
         
-#         self.norm = nn.GroupNorm(8, dim)
-#         self.act = nn.Mish()
+#         for i in range(num_levels):
+#             res_h = int(base_res * (growth_factor ** i))
+#             res_w = res_h * 3 
+            
+#             # INITIALIZATION: Increased to 0.05 to give the MLP a stronger starting signal
+#             grid = nn.Parameter(torch.randn(1, features_per_level, res_h, res_w) * 0.05)
+#             self.grid_levels.append(grid)
 
-#     def forward(self, x):
-#         x = self.upsample(self.conv1(x))
-#         x = self.conv2(x) # Apply smoothing
-#         return self.act(self.norm(x))
+#         # Learnable gain for the grids - starts at 0.1 so they aren't ignored
+#         self.grid_gain = nn.Parameter(torch.tensor(0.1))
+
+#         mlp_in_dim = dim + (num_levels * features_per_level)
+#         self.mlp = nn.Sequential(
+#             nn.Conv2d(mlp_in_dim, dim, kernel_size=1),
+#             nn.GroupNorm(8, dim),
+#             nn.GELU(),
+#             nn.Conv2d(dim, dim, kernel_size=1)
+#         )
+        
+#         self.refine = nn.Sequential(
+#             nn.Conv2d(dim, dim, kernel_size=3, padding=1),
+#             nn.GroupNorm(8, dim),
+#             FReLU(dim)
+#         )
+
+#     def forward(self, x, return_stages=True):
+#         B, C, H, W = x.shape
+#         target_H, target_W = H * self.scale, W * self.scale
+        
+#         with torch.amp.autocast('cuda', enabled=False):
+#             x_fp32 = x.float()
+#             # FIX 1 (Already in your code): Explicit size alignment
+#             x_nearest = F.interpolate(x_fp32, size=(target_H, target_W), mode='nearest')
+            
+#             grid_y, grid_x = torch.meshgrid(
+#                 torch.linspace(-1, 1, target_H, device=x.device, dtype=torch.float32),
+#                 torch.linspace(-1, 1, target_W, device=x.device, dtype=torch.float32),
+#                 indexing='ij'
+#             )
+#             rel_coords = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0).expand(B, -1, -1, -1)
+            
+#             sampled_features = []
+#             for grid in self.grid_levels:
+#                 batched_grid = grid.expand(B, -1, -1, -1).float()
+#                 # FIX 2 (Already in your code): align_corners=True
+#                 sampled = F.grid_sample(batched_grid, rel_coords, mode='bilinear', align_corners=True)
+#                 # Apply the gain to ensure the signal reaches the MLP
+#                 sampled_features.append(sampled * self.grid_gain)
+            
+#             encoded_coords = torch.cat(sampled_features, dim=1)
+#             mlp_input = torch.cat([x_nearest, encoded_coords], dim=1)
+            
+#         mlp_input = mlp_input.to(x.dtype)
+#         hr_features = self.mlp(mlp_input)
+#         out = self.refine(hr_features)
+
+#         if return_stages:
+#             return out, sampled_features
+#         return out
+
+class LatentUpsampler(nn.Module):
+    def __init__(self, dim, upscale_factor=2):
+        super().__init__()
+        # 1. Project to higher channel depth
+        self.conv1 = nn.Conv2d(
+            dim, dim * (upscale_factor ** 2), kernel_size=3, padding=1
+        )
+        # 2. Shuffle channels into spatial resolution
+        self.upsample = nn.PixelShuffle(upscale_factor)
+        
+        # --- THE FIX: Smoothing Convolution ---
+        # 3. Blend the shuffled pixels together to destroy the checkerboard artifact
+        self.conv2 = nn.Conv2d(
+            dim, dim, kernel_size=3, padding=1
+        )
+        
+        self.norm = nn.GroupNorm(8, dim)
+        self.act = nn.Mish()
+
+    def forward(self, x):
+        x = self.upsample(self.conv1(x))
+        x = self.conv2(x) # Apply smoothing
+        return self.act(self.norm(x))
 
 class HighContrastGate(nn.Module):
     def __init__(self, num_channels):
@@ -229,27 +229,25 @@ class FReLU(nn.Module):
 # 2. SINGLE-IMAGE SPATIAL FEATURE EXTRACTOR
 # ==============================================================================
 class SpatialFeatureExtractor(nn.Module):
-    def __init__(self, in_channels=3, feature_dim=128):
+    def __init__(self, in_channels=3, feature_dim=128, cnn_heads=4):
         super().__init__()
         
         # 1. STEM (3 channels -> feature_dim)
-        # Replaces the temporal fusion with a robust spatial stem
+        # Replaces the temporal fusion with a robust spatial stem. 
+        # We absorb the old coord_proj depth here to keep the parameter count stable.
         self.stem = nn.Sequential(
             nn.Conv2d(in_channels, feature_dim, 3, 1, 1),
             nn.GroupNorm(8, feature_dim),
-            HighContrastGate(feature_dim)
-        )
-        
-        # 2. COORDINATE INJECTION PROJECTION
-        # Expects feature_dim (from stem) + 2 (X, Y grids)
-        self.coord_proj = nn.Sequential(
-            nn.Conv2d(feature_dim + 2, feature_dim, 3, 1, 1),
+            HighContrastGate(feature_dim),
+            
+            # Additional semantic depth replacing the coordinate injection
+            nn.Conv2d(feature_dim, feature_dim, 3, 1, 1),
             nn.GroupNorm(8, feature_dim),
             FReLU(feature_dim)
         )
         
         # 3. DEEP RESTORATION (Optimized Restormer)
-        self.body = nn.Sequential(*[RestormerBlock(feature_dim, num_heads=8) for _ in range(2)])
+        self.body = nn.Sequential(*[RestormerBlock(feature_dim, num_heads=cnn_heads) for _ in range(2)])
         self.conv_after_body = nn.Conv2d(feature_dim, feature_dim, 3, 1, 1)
         
         # 4. Feature Hallucination Layer (Super-Resolution)
@@ -262,45 +260,35 @@ class SpatialFeatureExtractor(nn.Module):
             FReLU(feature_dim)
         )
 
-    def forward(self, x, x_grid, y_grid, return_stages=False): # Add return_stages flag
-        feat_stem = self.stem(x) 
-        
-        feat_with_coords = torch.cat([feat_stem, x_grid, y_grid], dim=1)
-        feat_shallow = self.coord_proj(feat_with_coords)
+    def forward(self, x): # --- THE FIX: Only accepts x, NO GRIDS ---
+        feat_shallow = self.stem(x) 
         
         feat_deep = self.body(feat_shallow)
         texture = self.conv_after_body(feat_deep) + feat_shallow 
 
-        # --- THE MODIFICATION ---
-        # Capture the tuple if return_stages is True
-        if return_stages:
-            feat_sr, stages = self.latent_sr(texture, return_stages=True)
-            out = self.refine_conv(feat_sr)
-            return out, stages # Return both
-        else:
-            feat_sr = self.latent_sr(texture, return_stages=False)
-            return self.refine_conv(feat_sr)
-
+        feat_sr = self.latent_sr(texture)
+        return self.refine_conv(feat_sr)
+    
 # ==============================================================================
 # 3. THE CGNET WRAPPER
 # ==============================================================================
 class Cgnet(nn.Module):
-    def __init__(self, in_channels=3, mode='hybrid', feature_dim=128): # Removed in_images
+    # Add the kwargs defaults here
+    def __init__(self, in_channels=3, mode='hybrid', feature_dim=128, cnn_heads=4, d_model=256, vit_heads=8, **kwargs): 
         super(Cgnet, self).__init__()
         self.mode = mode.lower()
         self.feature_dim = feature_dim
         
-        # Instantiating the new Single-Image Extractor
-        self.student_extractor = SpatialFeatureExtractor(in_channels, feature_dim)
+        # Pass the cnn_heads down to the extractor
+        self.student_extractor = SpatialFeatureExtractor(in_channels, feature_dim, cnn_heads=cnn_heads)
         
         if self.mode in ['ocr', 'hybrid']:
-            # CustomOCR remains the same, expecting (B, feature_dim, H, W)
             self.student_ocr = CustomOCR.CustomOCR(
                 input_shape=(feature_dim, 64, 192),
                 num_classes=37, 
                 num_chars=7, 
-                d_model=384,     
-                num_heads=16     
+                d_model=d_model,     # Now reads from YAML!
+                num_heads=vit_heads  # Now reads from YAML!
             )
 
     def forward(self, x, temporal_pool=False, return_latent=True, **kwargs): 
@@ -312,12 +300,8 @@ class Cgnet(nn.Module):
             
         b, c, h, w = x.shape 
 
-        # --- B. Grid Generation ---
-        y_grid = torch.linspace(-1, 1, h, device=x.device).view(1, 1, h, 1).expand(b, 1, h, w)
-        x_grid = torch.linspace(-1, 1, w, device=x.device).view(1, 1, 1, w).expand(b, 1, h, w)
-
-        # --- C. Feature Extraction ---
-        latent_lr, stages = self.student_extractor(x, x_grid, y_grid, return_stages=True)
+        # --- B. Feature Extraction (Purely Translation Invariant now) ---
+        latent_lr = self.student_extractor(x)
         # --- D. Cross-Attention OCR ---
         # Note: We pass epoch down if it is in kwargs to enable Scheduled Sampling
         epoch = kwargs.get('epoch', 0)
@@ -329,13 +313,13 @@ class Cgnet(nn.Module):
         if return_latent:
             preds_lr['latent_lr'] = latent_lr
             # Pack the stages into the dictionary for the dashboard
-            preds_lr['latent_stages'] = stages
+            # preds_lr['latent_stages'] = stages
         return preds_lr
 
 class SR_LPR_NET(nn.Module):
-    def __init__(self, mode='hybrid', feature_dim=128, **kwargs): 
+    def __init__(self, in_channels=3, mode='hybrid', feature_dim=128, **kwargs): 
         super().__init__()
-        self.cgnet = Cgnet(in_channels=3, mode=mode, feature_dim=feature_dim)
+        self.cgnet = Cgnet(in_channels=in_channels, mode=mode, feature_dim=feature_dim, **kwargs)
 
     def forward(self, x, **kwargs):
         return self.cgnet(x, **kwargs)

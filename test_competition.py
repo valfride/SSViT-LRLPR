@@ -143,7 +143,7 @@ if __name__ == "__main__":
 
     true_converter = strLabelConverter(config.get('alphabet', "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
     
- # --- METADATA TRACK ALIGNMENT (The Fix) ---
+    # --- METADATA TRACK ALIGNMENT (The Fix) ---
     track_names_ordered = []
     pkl_path = Path(args.split) / "metadata.pkl"
     if pkl_path.exists():
@@ -159,6 +159,11 @@ if __name__ == "__main__":
 
     correct_plates = 0
     total_plates = 0
+    
+    # --- NEW: Layout Specific Trackers ---
+    correct_mercosur, total_mercosur = 0, 0
+    correct_brazil, total_brazil = 0, 0
+    
     failures = []
     submission_lines = []
 
@@ -235,10 +240,22 @@ if __name__ == "__main__":
 
             # --- METRICS & LOGGING ---
             if args.mode == 'val':
-                if final_pred_str == gt_text:
+                is_correct = (final_pred_str == gt_text)
+                
+                if is_correct:
                     correct_plates += 1
                 else:
                     failures.append(f"{track_name} | Pred: {final_pred_str} | GT: {gt_text}")
+                
+                # --- NEW: Route by Layout type ---
+                if len(gt_text) >= 5:
+                    if gt_text[4].isalpha(): # Mercosur uses a letter at the 5th position
+                        total_mercosur += 1
+                        if is_correct: correct_mercosur += 1
+                    else: # Old Brazilian uses a number
+                        total_brazil += 1
+                        if is_correct: correct_brazil += 1
+                        
                 pbar.set_postfix({'SeqAcc': f"{correct_plates/(total_plates+1):.1%}"})
             else:
                 # Direct write: The model has already averaged the 5 sequence frames internally!
@@ -249,7 +266,12 @@ if __name__ == "__main__":
     # 5. FINAL RESULTS
     if args.mode == 'val':
         acc = (correct_plates / total_plates) * 100.0 if total_plates > 0 else 0
+        acc_merc = (correct_mercosur / total_mercosur) * 100.0 if total_mercosur > 0 else 0
+        acc_braz = (correct_brazil / total_brazil) * 100.0 if total_brazil > 0 else 0
+        
         print(f"\n🏆 FINAL SEQUENCE ACCURACY: {acc:.2f}% ({correct_plates}/{total_plates})")
+        print(f"   🇧🇷 Old Brazilian (LLL-NNNN): {acc_braz:.2f}% ({correct_brazil}/{total_brazil})")
+        print(f"   🌎 Mercosur Layout (LLL-NLNN): {acc_merc:.2f}% ({correct_mercosur}/{total_mercosur})")
         
         if failures:
             fail_path = "validation_failures_sequence.txt"

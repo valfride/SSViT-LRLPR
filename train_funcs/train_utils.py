@@ -63,6 +63,24 @@ class strLabelConverter(object):
         self.alphabet = ['-'] + list(alphabet) 
         self.dict = {char: i for i, char in enumerate(self.alphabet)}
     
+    def encode_cppd(self, text_list, max_len=7):
+        char_tgts, node_tgts = [], []
+        for text in text_list:
+            # 1. Standard Targets (with EOS and ignore_index padding)
+            chars = [self.dict.get(c, 0) for c in text[:max_len]]
+            chars.append(0) 
+            char_tgt = chars + [100] * (max_len + 1 - len(chars))
+            char_tgts.append(char_tgt)
+            
+            # 2. Node Graph (Character Counting + Position Mask)
+            text_char_node = [0] * len(self.alphabet)
+            text_char_node[0] = 1 
+            for c in chars[:-1]: text_char_node[c] += 1
+            text_pos_node = [1] * len(chars) + [0] * (max_len + 1 - len(chars))
+            node_tgts.append(text_char_node + text_pos_node)
+            
+        return torch.LongTensor(char_tgts), torch.LongTensor(node_tgts)
+
     def encode_list(self, text_list):
         all_result = []
         for text in text_list:
@@ -128,6 +146,66 @@ def decode_batch_logits(logits, converter):
             char = converter.alphabet[idx]
             if char != '-': chars.append(char)
         decoded_preds.append("".join(chars))
+    return decoded_preds
+
+class SVTR_CTCLoss(nn.Module):
+    def __init__(self, blank_idx=0):
+        super().__init__()
+        # zero_infinity=True prevents explosions on weird crops
+        self.ctc_loss = nn.CTCLoss(blank=blank_idx, zero_infinity=True)
+
+    def forward(self, logits, targets):
+        # logits: (B, T, C) -> permute to (T, B, C) for CTCLoss
+        logits_t = logits.permute(1, 0, 2)
+        log_probs = F.log_softmax(logits_t, dim=2)
+        
+        B, T, _ = logits.shape
+        
+        # Filter out the padding (0s) from the targets
+        valid_targets = []
+        target_lengths = []
+        for i in range(B):
+            valid = targets[i][targets[i] != 0]
+            valid_targets.append(valid)
+            target_lengths.append(len(valid))
+            
+        flat_targets = torch.cat(valid_targets) if valid_targets else torch.empty(0, dtype=torch.long, device=logits.device)
+        input_lengths = torch.full(size=(B,), fill_value=T, dtype=torch.long, device=logits.device)
+        target_lengths = torch.tensor(target_lengths, dtype=torch.long, device=logits.device)
+        
+        return self.ctc_loss(log_probs, flat_targets, input_lengths, target_lengths)
+
+def ctc_greedy_decoder(batch_logits, converter, return_scores=False):
+    """Decodes CTC sequence probabilities into text strings."""
+    probs = F.softmax(batch_logits, dim=-1)
+    scores_max, indices = probs.max(dim=-1)
+    
+    indices = indices.cpu().numpy()
+    scores_max = scores_max.cpu().numpy()
+    
+    decoded_preds = []
+    final_scores = []
+    
+    for b in range(len(indices)):
+        chars = []
+        conf_sum = 0.0
+        char_count = 0
+        prev_idx = -1
+        
+        for t in range(indices.shape[1]):
+            idx = indices[b, t]
+            # Standard CTC rule: ignore blanks (0) and consecutive duplicates
+            if idx != 0 and idx != prev_idx:
+                chars.append(converter.alphabet[idx])
+                conf_sum += scores_max[b, t]
+                char_count += 1
+            prev_idx = idx
+            
+        decoded_preds.append("".join(chars))
+        final_scores.append(conf_sum / max(char_count, 1))
+        
+    if return_scores:
+        return decoded_preds, torch.tensor(final_scores, device=batch_logits.device)
     return decoded_preds
 
 class SmoothPoly1Loss(nn.Module):
@@ -285,24 +363,24 @@ def robust_unpack_loss(loss):
 def visualize_feature_maps(latent_tensor, original_images, stages, batch_idx, epoch, save_dir='./train_features'):
     os.makedirs(save_dir, exist_ok=True)
     
-    # 1. Process Stages (Coarse to Fine)
-    vis_strip = []
-    for s in stages:
-        # Take mean of channels and normalize to 0-1 for visualization
-        s_mean = s[0].mean(dim=0, keepdim=True).detach().cpu()
-        s_mean = (s_mean - s_mean.min()) / (s_mean.max() - s_mean.min() + 1e-6)
-        vis_strip.append(s_mean)
+    # # 1. Process Stages (Coarse to Fine)
+    # vis_strip = []
+    # for s in stages:
+    #     # Take mean of channels and normalize to 0-1 for visualization
+    #     s_mean = s[0].mean(dim=0, keepdim=True).detach().cpu()
+    #     s_mean = (s_mean - s_mean.min()) / (s_mean.max() - s_mean.min() + 1e-6)
+    #     vis_strip.append(s_mean)
         
-    # 2. Add the final refined latent map at the end
-    final_mean = latent_tensor[0].mean(dim=0, keepdim=True).detach().cpu()
-    final_mean = (final_mean - final_mean.min()) / (final_mean.max() - final_mean.min() + 1e-6)
-    vis_strip.append(final_mean)
+    # # 2. Add the final refined latent map at the end
+    # final_mean = latent_tensor[0].mean(dim=0, keepdim=True).detach().cpu()
+    # final_mean = (final_mean - final_mean.min()) / (final_mean.max() - final_mean.min() + 1e-6)
+    # vis_strip.append(final_mean)
     
-    # 3. Concatenate horizontally (Dim 2 is Width)
-    hierarchy_strip = torch.cat(vis_strip, dim=2)
+    # # 3. Concatenate horizontally (Dim 2 is Width)
+    # hierarchy_strip = torch.cat(vis_strip, dim=2)
     
-    # 4. Save the new hierarchy strip
-    vutils.save_image(hierarchy_strip, os.path.join(save_dir, 'latent_hierarchy.png'))
+    # # 4. Save the new hierarchy strip
+    # vutils.save_image(hierarchy_strip, os.path.join(save_dir, 'latent_hierarchy.png'))
 
     if original_images.dim() == 5:
         center_frame_idx = original_images.shape[1] // 2
@@ -342,7 +420,7 @@ def visualize_vit_attention(image_tensor, latent_tensor, attn_weights, query_tex
         attn_weights = attn_weights.mean(dim=1)
     attn = attn_weights[0].detach().cpu() 
     num_queries = attn.shape[0] 
-    grid_h, grid_w = 16, 48
+    grid_h, grid_w = 12, 36
 
     if image_tensor.dim() == 5:
         img = image_tensor[0, image_tensor.shape[1] // 2].detach().cpu() 
@@ -435,7 +513,16 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
     acc_seq_accum = []
     acc_char_accum = [] 
     current_epoch = kwargs.get('epoch', 0)
-    loss_fn_spatial = SmoothPoly1Loss(epsilon=1.5, smoothing=0.1).to(device)
+    
+    cls_loss_type = config.get('cls_loss', 'SmoothPoly1')
+    if cls_loss_type == 'CTC':
+        loss_fn_spatial = SVTR_CTCLoss().to(device)
+    elif cls_loss_type == 'CPPD':
+        from models.cppd_bridge import CPPDLossWrapper
+        loss_fn_spatial = CPPDLossWrapper(max_len=7).to(device)
+    else:
+        loss_fn_spatial = SmoothPoly1Loss(epsilon=1.5, smoothing=0.1).to(device)
+
     epoch_tracker = ConfusionTracker()
 
     # --- NEW: Validation Iterator for Meta-Learning ---
@@ -450,12 +537,16 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
         
         is_hr_mask = batch['is_hr'].to(device, non_blocking=True)
         text_label = batch['gt'] 
-        true_targets = true_converter.encode_list(text_label).to(device)
+        if cls_loss_type == 'CPPD':
+            true_targets = true_converter.encode_cppd(text_label, max_len=7)
+            true_targets = (true_targets[0].to(device), true_targets[1].to(device))
+        else:
+            true_targets = true_converter.encode_list(text_label).to(device)
 
         # ====================================================================
         # THE "TRUE" HYPERGRADIENT META-STEP (Every 10 Batches)
         # ====================================================================
-        if batch_idx % 10 == 0 and batch_idx > 0:
+        if batch_idx % 10 == 0 and batch_idx > 0 and config.get('cls_loss', 'SmoothPoly1') not in ['CTC', 'CPPD']:
             # 1. Grab a fresh validation batch
             try:
                 val_batch = next(val_iter)
@@ -547,7 +638,7 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
 
             # 4. Update the Spatial Penalties
             scaler.unscale_(optimizer_hyper)
-            optimizer_hyper.step()
+            scaler.step(optimizer_hyper)
             scaler.update() 
             
             # --- THE RESTORE ---
@@ -585,7 +676,11 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
 
             if isinstance(preds_lr, (tuple, list)): preds_lr = preds_lr[0]
 
-            loss_cls_lr = loss_fn_spatial(preds_lr['logits'], true_targets)
+            if cls_loss_type == 'CPPD':
+                loss_cls_lr = loss_fn_spatial(preds_lr, true_targets)
+            else:
+                loss_cls_lr = loss_fn_spatial(preds_lr['logits'], true_targets)
+
             if loss_cls_lr.dim() > 0: loss_cls_lr = loss_cls_lr.mean()
             
             loss_spread = 0.0
@@ -611,10 +706,13 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
             loss_stats['cls'].append(loss_cls_lr.item()) 
             loss_stats['spread'].append(loss_spread.item() if isinstance(loss_spread, torch.Tensor) else loss_spread)
             
-            decoded_s = decode_batch_logits(preds_lr['logits'], true_converter)
+            if cls_loss_type == 'CTC':
+                decoded_s = ctc_greedy_decoder(preds_lr['logits'], true_converter)
+            else:
+                decoded_s = decode_batch_logits(preds_lr['logits'], true_converter)
             
             if batch_idx % 10 == 0:
-                if 'latent_lr' in preds_lr:
+                if 'latent_lr' in preds_lr and preds_lr['latent_lr'] is not None:
                     visualize_feature_maps(
                         latent_tensor=preds_lr['latent_lr'], 
                         original_images=lr_batch, 
@@ -656,6 +754,7 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
                     'Spd': f"{np.mean(loss_stats['spread']):.4f}",
                     'Cls': f"{np.mean(loss_stats['cls']):.4f}",
                     'Gain': f"{g_gain:.4f}",  # <--- YOUR PEACE OF MIND
+                    'Seq%': f"{np.mean(acc_seq_accum):.1%}", # The weighted history
                     'B_Seq': f"{acc_s:.1%}",                 
                     'Chr%': f"{np.mean(acc_char_accum):.1%}",
                 })
@@ -708,7 +807,11 @@ def SROCR_VAL(val_loader, model_g, model_d, loss_fn, config, **kwargs):
                 if isinstance(output, (tuple, list)): output = output[0]
                 logits = output['logits']
 
-            all_decoded_preds, all_scores = viterbi_plate_decoder(logits, true_converter, return_scores=True)
+            cls_loss_type = config.get('cls_loss', 'SmoothPoly1')
+            if cls_loss_type == 'CTC':
+                all_decoded_preds, all_scores = ctc_greedy_decoder(logits, true_converter, return_scores=True)
+            else:
+                all_decoded_preds, all_scores = viterbi_plate_decoder(logits, true_converter, return_scores=True)
 
             for b in range(B):
                 seq_preds = all_decoded_preds[b * Seq_Len : (b + 1) * Seq_Len]

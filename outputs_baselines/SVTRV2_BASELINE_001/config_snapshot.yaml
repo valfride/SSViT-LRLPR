@@ -1,0 +1,74 @@
+alphabet: 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ
+cls_loss: CTC
+distill_decay_epochs: 50
+epoch_max: 3000
+epoch_save: 50
+force_lr: true
+func_train: SROCR_TRAIN
+func_val: SROCR_VAL
+gpu_ids:
+- 0
+loss:
+  args:
+    ignore_index: -100
+    weights:
+      gan_weight: 0.0
+      ocr_weight: 1.0
+      pixel_weight: 0.0
+  name: SROCR_loss
+model_g:
+  args:
+    num_classes: 37
+  name: SVTRV2_BASELINE
+name: VSR_FeatureOCR_Curriculum
+optimizer_sr:
+  args:
+    betas:
+    - 0.9
+    - 0.999
+    lr: 1e-4
+    weight_decay: 0.0
+  name: adamW
+resume: null
+train_dataset:
+  batch: 256
+  dataset:
+    args:
+      in_memory: true
+      path_split: ./CompetitionDataset_LMDB_plus
+      phase: training
+    name: lmdb_dataset
+  wrapper:
+    args:
+      anagram_prob: 0.0
+      aug: true
+      background: (127, 127, 127)
+      fully_synthetic_prob: 0.0
+      image_aspect_ratio: 3.0
+      imgH: 32
+      imgW: 96
+      in_images: 1
+      synthetic_prob: 0.0
+    name: VSR_collate_fn
+use_fp16: true
+val_dataset:
+  batch: 256
+  dataset:
+    args:
+      in_memory: true
+      path_split: ./CompetitionDataset_LMDB_plus
+      phase: validation
+    name: lmdb_dataset
+  wrapper:
+    args:
+      aug: false
+      background: (127, 127, 127)
+      fully_synthetic_prob: 0.0
+      image_aspect_ratio: 3.0
+      imgH: 32
+      imgW: 96
+      in_images: 5
+      synthetic_prob: 0.0
+      test: true
+    name: VSR_Sequence_collate_fn
+warmup_epochs: 0

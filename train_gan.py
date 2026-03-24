@@ -110,7 +110,7 @@ def get_confusion_weights(dataset, stats_path, top_k=4):
     return torch.DoubleTensor(weights)
 
 def create_scheduler(optimizer, epoch_max):
-    return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5, min_lr=1e-6)
+    return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=10, min_lr=1e-6)
 
 def main(config, save_path):
     local_rank = int(os.environ["LOCAL_RANK"])
@@ -151,7 +151,7 @@ def main(config, save_path):
         print(f"Base LR: {base_lr} | Deform LR: {base_lr * 10.0} ")
 
     optimizer_g = torch.optim.Adam(optim_groups)
-    loss_fn_spread = HyperAttentionLoss(grid_h=16, grid_w=48).to(local_rank)
+    loss_fn_spread = HyperAttentionLoss(grid_h=12, grid_w=36).to(local_rank)
     hyper_groups = [
         # Added iris_scale here!
         {'params': [loss_fn_spread.v_stretch, loss_fn_spread.iris_scale], 'lr': 1e-2},
