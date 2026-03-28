@@ -124,7 +124,6 @@ class EdgeDecoderLayer(nn.Module):
 
 
 class DecoderLayer(nn.Module):
-
     def __init__(
         self,
         dim,
@@ -169,7 +168,6 @@ class DecoderLayer(nn.Module):
 
 
 class CPPDDecoder(nn.Module):
-
     def __init__(self,
                 in_channels,
                 out_channels,

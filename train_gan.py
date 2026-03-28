@@ -18,6 +18,7 @@ from torch.utils.data.distributed import DistributedSampler
 import shutil
 from train_funcs.train_utils import HyperAttentionLoss
 import gc
+
 DEBUG = os.getenv("DEBUG", "True").lower() == "true"
 if DEBUG:
     if "CUDA_VISIBLE_DEVICES" not in os.environ: os.environ["CUDA_VISIBLE_DEVICES"] = "0"
@@ -116,7 +117,6 @@ def main(config, save_path):
     local_rank = int(os.environ["LOCAL_RANK"])
     epoch_max = config['epoch_max']
     
-    #  train_loader, train_sampler = make_dataloader(config['train_dataset'], tag='train', save_path=save_path)
     val_loader, _ = make_dataloader(config.get('val_dataset', config['train_dataset']), tag='val', save_path=save_path)
 
     if is_main_process(): print("Creating Teacherless VSR Model...")
@@ -153,7 +153,6 @@ def main(config, save_path):
     optimizer_g = torch.optim.Adam(optim_groups)
     loss_fn_spread = HyperAttentionLoss(grid_h=12, grid_w=36).to(local_rank)
     hyper_groups = [
-        # Added iris_scale here!
         {'params': [loss_fn_spread.v_stretch, loss_fn_spread.iris_scale], 'lr': 1e-2},
         {'params': [loss_fn_spread.monotonic_scale, 
                     loss_fn_spread.boundary_scale, 
@@ -167,7 +166,14 @@ def main(config, save_path):
     
     # --- 4. Resume Logic ---
     start_epoch = 1; best_accuracy = 0.0
+    
+    # Initialize state variables here so they can be overwritten by the checkpoint
+    best_models = [] 
+    early_stop_patience = config.get('early_stop_patience', 50)
+    epochs_without_improvement = 0
+    
     resume_path = config.get('resume')
+    
     if resume_path and os.path.isfile(resume_path):
         if is_main_process(): print(f"⚠️ Resuming from checkpoint: {resume_path}")
         checkpoint = torch.load(resume_path, map_location=f'cuda:{local_rank}', weights_only=False)
@@ -186,41 +192,38 @@ def main(config, save_path):
             start_epoch = checkpoint.get('epoch', 0) + 1
             best_accuracy = checkpoint.get('best_acc', 0.0)
             
+            # --- NEW: Safely resume the tracker and patience ---
+            best_models = checkpoint.get('best_models', [])
+            epochs_without_improvement = checkpoint.get('epochs_without_improvement', 0)
+            
+            if is_main_process() and epochs_without_improvement > 0:
+                print(f"♻️ Resumed Early Stopping counter at {epochs_without_improvement}/{early_stop_patience} epochs.")
+            if is_main_process() and len(best_models) > 0:
+                print(f"♻️ Resumed Top-{len(best_models)} models tracker.")
+            
             if 'optimizer_hyper' in checkpoint and 'loss_hyper_sd' in checkpoint:
                 if is_main_process(): print("✅ Resuming Hyper-Weights.")
-                
-                # --- THE FIX 1: strict=False ---
-                # This allows new parameters (like iris_scale) to be ignored by the old checkpoint
-                # and initialize safely at their default values (0.5).
                 loss_fn_spread.load_state_dict(checkpoint['loss_hyper_sd'], strict=False)
                 
-                # --- THE FIX 2: Safe Optimizer Loading ---
                 try:
                     optimizer_hyper.load_state_dict(checkpoint['optimizer_hyper'])
                     if is_main_process(): print("✅ Resuming Hyper-Optimizer State.")
                 except ValueError:
-                    if is_main_process(): print("⚠️ Hyper-Optimizer state mismatch (new parameters added). Starting fresh optimizer for hyper-weights.")
+                    if is_main_process(): print("⚠️ Hyper-Optimizer state mismatch. Starting fresh optimizer for hyper-weights.")
             if 'optimizer_g' in checkpoint: 
                 try: 
                     optimizer_g.load_state_dict(checkpoint['optimizer_g'])
                     
-                    # NEW: Conditional LR and Scheduler Force
                     if config.get('force_lr', False):
                         if is_main_process(): 
                             print(f"🔥 FORCE_LR is True: Overriding loaded LR to {base_lr} and resetting Scheduler.")
                         
-                        # Group 0: Base Params
                         optimizer_g.param_groups[0]['lr'] = base_lr          
-                        
-                        # Group 1: Deform Offset Params
                         if len(optimizer_g.param_groups) > 1:
                             optimizer_g.param_groups[1]['lr'] = base_lr * 10.0
                             
-                        # Re-create scheduler to wipe its patience/history
                         scheduler_g = create_scheduler(optimizer_g, epoch_max)
-                        
                     else:
-                        # If NOT forcing LR, load the old scheduler state to continue smoothly
                         if 'scheduler_g' in checkpoint:
                             if is_main_process(): print("✅ Loading previous Scheduler state.")
                             scheduler_g.load_state_dict(checkpoint['scheduler_g'])
@@ -235,7 +238,6 @@ def main(config, save_path):
     val_step = train_funcs.make(config['func_val'])
 
     stats_path = save_path / 'confusion_stats.json'
-    best_models = [] 
 
     # --- DASHBOARD & LOG INITIALIZATION ---
     if is_main_process():
@@ -266,7 +268,6 @@ def main(config, save_path):
         with open(hyper_path, 'w') as f:
             f.write("V: 1.20 | M: 15.0 | B: 20.0 | O: 5.0")
         
-
     try:
         for epoch in range(start_epoch, epoch_max + 1):
             
@@ -280,17 +281,16 @@ def main(config, save_path):
             
             model_g.train()
             
-            # --- THE FIX: Perfectly aligned arguments (8 total + kwargs) ---
             train_loss = train_step(
                 train_loader,
-                val_loader,      # <--- YOU MUST ADD THIS LINE HERE
+                val_loader,
                 model_g, 
-                None,            # model_d
+                None,            
                 optimizer_g, 
-                None,            # optimizer_d (Fixed the missing argument)
-                optimizer_hyper, # optimizer_hyper
-                loss_fn_spread,  # loss_fn_spread
-                config,          # config
+                None,            
+                optimizer_hyper, 
+                loss_fn_spread,  
+                config,          
                 epoch=epoch, 
                 save_path=save_path
             )
@@ -313,7 +313,10 @@ def main(config, save_path):
                     'optimizer_hyper': optimizer_hyper.state_dict(), 
                     'loss_hyper_sd': loss_fn_spread.state_dict(),    
                     'scheduler_g': scheduler_g.state_dict(),
-                    'best_acc': best_accuracy 
+                    'best_acc': best_accuracy,
+                    # --- NEW: Serializing the state for safe black-out recovery ---
+                    'best_models': best_models,
+                    'epochs_without_improvement': epochs_without_improvement
                 }
                 torch.save(checkpoint, save_path / 'last.pth')
                 
@@ -326,7 +329,17 @@ def main(config, save_path):
                     if len(best_models) > 5:
                         to_remove = best_models.pop()
                         if os.path.exists(to_remove['path']): os.remove(to_remove['path'])
-                if accuracy > best_accuracy: best_accuracy = accuracy
+                
+                # --- NEW: Early Stopping Check ---
+                if accuracy > best_accuracy: 
+                    best_accuracy = accuracy
+                    epochs_without_improvement = 0  # Reset the counter
+                else:
+                    epochs_without_improvement += 1
+                    
+                if epochs_without_improvement >= early_stop_patience:
+                    print(f"🛑 Early stopping triggered! No improvement for {early_stop_patience} epochs.")
+                    break # Kills the epoch loop
                 
             # --- NEW: EXPLICIT MEMORY CLEANUP ---
             # Kill the 8 multiprocessing workers and free the shared RAM

@@ -59,8 +59,9 @@ def is_main_process():
     return torch.distributed.get_rank() == 0
 
 class strLabelConverter(object):
-    def __init__(self, alphabet="0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"):
-        self.alphabet = ['-'] + list(alphabet) 
+    def __init__(self, alphabet="0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-"):
+        # Index 0 is EOS ($). Index 38 is now PAD (#).
+        self.alphabet = ['$'] + list(alphabet) + ['#'] 
         self.dict = {char: i for i, char in enumerate(self.alphabet)}
     
     def encode_cppd(self, text_list, max_len=7):
@@ -81,6 +82,21 @@ class strLabelConverter(object):
             
         return torch.LongTensor(char_tgts), torch.LongTensor(node_tgts)
 
+    def encode_poly(self, text_list, max_len=7):
+        """Creates exactly 7 targets for the Polygonal Spotter (No EOS token)"""
+        all_result = []
+        for text in text_list:
+            # Get up to 7 characters
+            result = [self.dict.get(char, 0) for char in text[:max_len]]
+            # Pad with 0s if shorter than 7
+            while len(result) < max_len: 
+                result.append(0)
+            
+            # -> REMOVED THE 8th TOKEN APPEND HERE <-
+            
+            all_result.append(result)
+        return torch.LongTensor(all_result)
+
     def encode_ote(self, text_list, max_len=7):
         BOS = 37
         EOS = 0
@@ -100,7 +116,7 @@ class strLabelConverter(object):
         all_result = []
         for text in text_list:
             result = [self.dict.get(char, 0) for char in text[:7]]
-            while len(result) < 7: result.append(0)
+            # while len(result) < 7: result.append(0)
             all_result.append(result)
         return torch.LongTensor(all_result)
 
@@ -110,10 +126,117 @@ class strLabelConverter(object):
             char_list = [self.alphabet[idx] for idx in t[i] if idx > 0]
             texts.append(''.join(char_list))
         return texts
+    
+    def encode_variable(self, text_list, max_len=12):
+        # FIX: Use 0 ('-') as EOS so it doesn't overwrite the letter 'Z'!
+        EOS_INDEX = 0   
+        PAD_INDEX = 38  # The index PyTorch will ignore
+        
+        all_targets = []
+        for text in text_list:
+            # 1. The String
+            target = [self.dict.get(char, 0) for char in text[:max_len]]
+            
+            # 2. The End (EOS)
+            if len(target) < max_len:
+                target.append(EOS_INDEX)
+                
+            # 3. The Padding (PAD)
+            while len(target) < max_len:
+                target.append(PAD_INDEX)
+                
+            all_targets.append(target)
+            
+        return torch.LongTensor(all_targets)
+
+def decode_batch_logits(logits, converter):
+    indices = logits.argmax(dim=-1).cpu().numpy() 
+    
+    decoded_preds = []
+    for b in range(len(indices)):
+        chars = []
+        for t in range(indices.shape[1]):
+            idx = indices[b, t] 
+            
+            if idx >= len(converter.alphabet):
+                continue
+                
+            char = converter.alphabet[idx]
+            
+            # --- THE FIX: Ignore Padding, Break on EOS ---
+            if char == '#': 
+                continue
+            if char == '$': 
+                break 
+                
+            chars.append(char)
+        decoded_preds.append("".join(chars))
+    return decoded_preds
+
+def differentiable_iou_repulsion(corners, margin=0.10):
+    """
+    corners: The output from your Spotter, shape (B, 7, 4, 2) 
+            where 7 is the number of lassos, 4 is the corners, 2 is (X,Y)
+    margin: The maximum allowed IoU overlap (e.g., 0.10 means 10% overlap is tolerated)
+    """
+    B, L, _, _ = corners.shape
+    
+    # 1. Convert the 4-point polygons into strict Bounding Boxes (xmin, ymin, xmax, ymax)
+    # This operation is fully differentiable!
+    x_coords = corners[..., 0] # (B, 7, 4)
+    y_coords = corners[..., 1] # (B, 7, 4)
+    
+    xmin = x_coords.min(dim=-1)[0] # (B, 7)
+    xmax = x_coords.max(dim=-1)[0] # (B, 7)
+    ymin = y_coords.min(dim=-1)[0] # (B, 7)
+    ymax = y_coords.max(dim=-1)[0] # (B, 7)
+    
+    # Calculate the area of each box
+    areas = (xmax - xmin) * (ymax - ymin) # (B, 7)
+    
+    # 2. Prepare for Pairwise Comparison (Every box vs Every box)
+    # Add dimensions to broadcast: (B, 7, 1) and (B, 1, 7)
+    xmin1, xmin2 = xmin.unsqueeze(2), xmin.unsqueeze(1)
+    xmax1, xmax2 = xmax.unsqueeze(2), xmax.unsqueeze(1)
+    ymin1, ymin2 = ymin.unsqueeze(2), ymin.unsqueeze(1)
+    ymax1, ymax2 = ymax.unsqueeze(2), ymax.unsqueeze(1)
+    areas1, areas2 = areas.unsqueeze(2), areas.unsqueeze(1)
+    
+    # 3. Calculate the Intersection Box
+    inter_xmin = torch.max(xmin1, xmin2)
+    inter_xmax = torch.min(xmax1, xmax2)
+    inter_ymin = torch.max(ymin1, ymin2)
+    inter_ymax = torch.min(ymax1, ymax2)
+    
+    # Width and Height of intersection (must be >= 0)
+    inter_w = torch.clamp(inter_xmax - inter_xmin, min=0)
+    inter_h = torch.clamp(inter_ymax - inter_ymin, min=0)
+    inter_area = inter_w * inter_h
+    
+    # 4. Calculate IoU
+    union_area = areas1 + areas2 - inter_area
+    # Add epsilon to prevent division by zero
+    iou = inter_area / (union_area + 1e-6) 
+    
+    # 5. Apply the Margin and Mask
+    # We only penalize if IoU is GREATER than the margin
+    penalty = F.relu(iou - margin)
+    
+    # We must ignore self-comparisons (Lasso 1 vs Lasso 1 will always have IoU = 1.0!)
+    identity_mask = torch.eye(L, device=corners.device).unsqueeze(0).bool()
+    penalty = penalty.masked_fill(identity_mask, 0.0)
+    
+    # Average the penalty across the batch
+    return penalty.mean()
+
 
 def viterbi_plate_decoder(batch_logits, converter, return_scores=False):
     B, T, C = batch_logits.shape
-    if T != 7: 
+    
+    # 1. Slice out the 8th EOS node for CPPD so Viterbi can cleanly align the 7 characters
+    plate_logits = batch_logits[:, :7, :] if T >= 7 else batch_logits
+    
+    if plate_logits.shape[1] != 7: 
         if return_scores:
             scores = F.log_softmax(batch_logits, dim=-1).max(dim=-1)[0].sum(dim=1)
             return decode_batch_logits(batch_logits, converter), scores
@@ -128,19 +251,29 @@ def viterbi_plate_decoder(batch_logits, converter, return_scores=False):
     path_old = torch.stack([L_mask, L_mask, L_mask, N_mask, N_mask, N_mask, N_mask])
     path_mercosur = torch.stack([L_mask, L_mask, L_mask, N_mask, L_mask, N_mask, N_mask])
 
-    logits_old = batch_logits + path_old.unsqueeze(0)
-    logits_mercosur = batch_logits + path_mercosur.unsqueeze(0)
+    logits_old = plate_logits + path_old.unsqueeze(0)
+    logits_mercosur = plate_logits + path_mercosur.unsqueeze(0)
 
     score_old = F.log_softmax(logits_old, dim=-1).max(dim=-1)[0].sum(dim=1)
     score_mercosur = F.log_softmax(logits_mercosur, dim=-1).max(dim=-1)[0].sum(dim=1)
 
     is_mercosur = (score_mercosur > score_old).unsqueeze(1).unsqueeze(2)
-    final_logits = torch.where(is_mercosur, logits_mercosur, logits_old)
+    final_plate_logits = torch.where(is_mercosur, logits_mercosur, logits_old)
+    
+    # 2. Stitch the EOS node back on so decode_batch_logits can stop gracefully
+    if T > 7:
+        final_logits = torch.cat([final_plate_logits, batch_logits[:, 7:, :]], dim=1)
+    else:
+        final_logits = final_plate_logits
     
     decoded_preds = decode_batch_logits(final_logits, converter)
     
     if return_scores:
-        final_scores = torch.where(is_mercosur.squeeze(-1).squeeze(-1), score_mercosur, score_old)
+        eos_score = 0.0
+        # Give CPPD credit for predicting the EOS token
+        if T > 7:
+            eos_score = F.log_softmax(batch_logits[:, 7:, :], dim=-1).max(dim=-1)[0].sum(dim=1)
+        final_scores = torch.where(is_mercosur.squeeze(-1).squeeze(-1), score_mercosur, score_old) + eos_score
         return decoded_preds, final_scores
         
     return decoded_preds
@@ -148,20 +281,6 @@ def viterbi_plate_decoder(batch_logits, converter, return_scores=False):
 def get_layout_label(text):
     if len(text) < 5: return 0
     return 1 if text[4].isalpha() else 0
-
-def decode_batch_logits(logits, converter):
-    # THE FIX: Move the entire tensor to the CPU memory once!
-    indices = logits.argmax(dim=-1).cpu().numpy() 
-    
-    decoded_preds = []
-    for b in range(len(indices)):
-        chars = []
-        for t in range(7):
-            idx = indices[b, t] # Already on CPU, no sync delay!
-            char = converter.alphabet[idx]
-            if char != '-': chars.append(char)
-        decoded_preds.append("".join(chars))
-    return decoded_preds
 
 class SVTR_CTCLoss(nn.Module):
     def __init__(self, blank_idx=0):
@@ -224,36 +343,35 @@ def ctc_greedy_decoder(batch_logits, converter, return_scores=False):
     return decoded_preds
 
 class SmoothPoly1Loss(nn.Module):
-    def __init__(self, epsilon=2.0, smoothing=0.1):
+    def __init__(self, epsilon=2.0, smoothing=0.1, ignore_index=38):
         super().__init__()
-        # epsilon is the polynomial coefficient (usually 2.0 is optimal)
         self.epsilon = epsilon
         self.smoothing = smoothing
+        self.ignore_index = ignore_index # ADD THIS
 
     def forward(self, logits, targets):
-        # logits: (B, 7, 37) | targets: (B, 7)
         logits_flat = logits.view(-1, logits.size(-1))
         targets_flat = targets.view(-1)
 
-        # 1. Base Cross Entropy with Smoothing (The Shock Absorber)
+        # ADD ignore_index here!
         ce_loss = F.cross_entropy(
-            logits_flat, 
-            targets_flat, 
-            label_smoothing=self.smoothing, 
-            reduction='none'
+            logits_flat, targets_flat, 
+            label_smoothing=self.smoothing, reduction='none', ignore_index=self.ignore_index
         )
 
-        # 2. Extract the actual prediction probability (pt)
         with torch.no_grad():
-            clean_ce = F.cross_entropy(logits_flat, targets_flat, reduction='none')
+            # AND ADD ignore_index here!
+            clean_ce = F.cross_entropy(
+                logits_flat, targets_flat, 
+                reduction='none', ignore_index=self.ignore_index
+            )
             pt = torch.exp(-clean_ce)
 
-        # 3. Apply the Poly-1 Expansion
-        # Instead of multiplying (like Focal Loss), PolyLoss ADDS the polynomial term.
-        # This preserves the healthy gradients for normal images while boosting the hard ones.
         poly1_loss = ce_loss + self.epsilon * (1.0 - pt)
-
-        return poly1_loss.mean()
+        
+        # Mask out the padding tokens before taking the mean!
+        valid_mask = (targets_flat != self.ignore_index).float()
+        return (poly1_loss * valid_mask).sum() / valid_mask.sum()
 
 class HyperAttentionLoss(nn.Module):
     def __init__(self, grid_h=16, grid_w=48):
@@ -429,91 +547,153 @@ def visualize_feature_maps(latent_tensor, original_images, stages, batch_idx, ep
 
 def visualize_vit_attention(image_tensor, latent_tensor, attn_weights, query_texts, epoch, batch_idx, save_dir="attn_maps"):
     import cv2
+    import numpy as np
     os.makedirs(save_dir, exist_ok=True)
 
-    if attn_weights.dim() == 4:
-        attn_weights = attn_weights.mean(dim=1)
-    attn = attn_weights[0].detach().cpu() 
-    num_queries = attn.shape[0] 
-    grid_h, grid_w = 12, 36
-
     if image_tensor.dim() == 5:
-        img = image_tensor[0, image_tensor.shape[1] // 2].detach().cpu() 
+        img = image_tensor[0, image_tensor.shape[1] // 2].detach().cpu()
     else:
         img = image_tensor[0].detach().cpu()
 
-    if img.min() < 0: 
-        img = (img * 0.5) + 0.5 
-    img_lr_tensor = torch.clamp(img, 0, 1) 
-    
+    if img.min() < 0:
+        img = (img * 0.5) + 0.5
+    img_lr_tensor = torch.clamp(img, 0, 1)
     img_lr_np = (img_lr_tensor.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
-    lr_h, lr_w = img_lr_np.shape[:2] 
+    lr_h, lr_w = img_lr_np.shape[:2]
 
-    max_decay_epoch = 50
-    if epoch < max_decay_epoch:
-        progress = epoch / max_decay_epoch
-        decay_multiplier = 0.5 * (1.0 + math.cos(math.pi * progress))
-    else:
-        decay_multiplier = 0.0
-
-    target_focal_offset = 0.15
-    target_major_axis_length = 0.50 
-    expansion_factor = 0.2 
+    # --- NEW: Unpack the Heatmap Tuple ---
+    # sample_locs: (B, 7, 9, 2)
+    # weights: (B, 7, Heads, 9)
+    sample_locs, weights = attn_weights 
     
-    current_focal_offset = target_focal_offset + (target_focal_offset * expansion_factor * decay_multiplier)
-    current_major_axis_length = target_major_axis_length + (target_major_axis_length * expansion_factor * decay_multiplier)
+    # Take Batch 0
+    locs_b0 = sample_locs[0].detach().cpu().numpy() # (7, 9, 2)
+    
+    # Average the heat across all Attention Heads
+    weights_b0 = weights[0].mean(dim=1).detach().cpu().numpy() # (7, 9)
 
-    a = current_major_axis_length / 2.0
-    c = current_focal_offset
-    b_sq = max(0, a**2 - c**2)
-    minor_axis_length = math.sqrt(b_sq) * 2.0
-
-    aspect_ratio = grid_w / grid_h  
-    logical_height = current_major_axis_length
-    logical_width = minor_axis_length / aspect_ratio 
-
-    major_px_y = int((logical_height / 2.0) * lr_h)
-    minor_px_x = int((logical_width / 2.0) * lr_w)
-    axes_length = (minor_px_x, major_px_y)
-
-    x_coords = np.linspace(0, 1, grid_w)
-    y_coords = np.linspace(0, 1, grid_h)
-    x_grid, y_grid = np.meshgrid(x_coords, y_coords)
-
+    num_queries = locs_b0.shape[0]
     grid_items = [img_lr_tensor]
 
+    colors = [
+        (255, 50, 50),   (50, 255, 50),   (50, 50, 255),   (255, 255, 50),  
+        (255, 50, 255),  (50, 255, 255),  (255, 128, 0),   (128, 128, 128) 
+    ]
+
     for i in range(num_queries):
-        attn_map = attn[i].view(grid_h, grid_w).numpy()
-        a_norm = attn_map / (attn_map.sum() + 1e-6)
-        cx = np.sum(a_norm * x_grid)
-        cy = np.sum(a_norm * y_grid)
-        center_px = (int(cx * lr_w), int(cy * lr_h))
+        vis_img = img_lr_np.copy()
+        color = colors[i % len(colors)]
         
-        attn_map_resized = cv2.resize(attn_map, (lr_w, lr_h), interpolation=cv2.INTER_NEAREST)
-        attn_map_norm = (attn_map_resized - attn_map_resized.min()) / (attn_map_resized.max() - attn_map_resized.min() + 1e-6)
-        attn_heatmap = (attn_map_norm * 255).astype(np.uint8)
-        attn_color = cv2.applyColorMap(attn_heatmap, cv2.COLORMAP_HOT)
-        attn_color = cv2.cvtColor(attn_color, cv2.COLOR_BGR2RGB)
+        # Get the 9 points and 9 weights for this specific character
+        char_pts = locs_b0[i] # (9, 2)
+        char_weights = weights_b0[i] # (9,)
         
-        blended = cv2.addWeighted(img_lr_np, 0.4, attn_color, 0.6, 0)
-        cv2.ellipse(blended, center_px, axes_length, 0, 0, 360, (255, 0, 0), 1)
-        
-        blended_tensor = torch.from_numpy(blended).permute(2, 0, 1).float() / 255.0
+        # Normalize weights so the hottest point is 1.0
+        if char_weights.max() > 0:
+            char_weights = char_weights / char_weights.max()
+
+        for pt_idx in range(len(char_pts)):
+            x = int(char_pts[pt_idx, 0] * lr_w)
+            y = int(char_pts[pt_idx, 1] * lr_h)
+            heat = char_weights[pt_idx]
+            
+            # The radius and brightness scale with the "heat"
+            radius = max(1, int(4 * heat))
+            pt_color = (
+                int(color[0] * heat),
+                int(color[1] * heat),
+                int(color[2] * heat)
+            )
+            cv2.circle(vis_img, (x, y), radius=radius, color=pt_color, thickness=-1)
+
+        if i < len(query_texts):
+            char = query_texts[i]
+            # Put text near the very first sampled point (usually the center)
+            base_x = int(char_pts[0, 0] * lr_w)
+            base_y = int(char_pts[0, 1] * lr_h)
+            cv2.putText(vis_img, char, (base_x, base_y - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, cv2.LINE_AA)
+
+        blended_tensor = torch.from_numpy(vis_img).permute(2, 0, 1).float() / 255.0
         grid_items.append(blended_tensor)
 
-    grid_tensor = torch.stack(grid_items) 
+    grid_tensor = torch.stack(grid_items)
     vutils.save_image(
-        grid_tensor, 
-        os.path.join(save_dir, f'attn_ep.png'), 
-        nrow=4, 
-        padding=1, 
-        normalize=False
+        grid_tensor, os.path.join(save_dir, f'attn_ep.png'),
+        nrow=4, padding=1, normalize=False
     )
 
+def point_spread_loss(heatmap_data, max_variance=0.01):
+    """
+    Penalizes the 9 free-floating points if they scatter too far from their center.
+    """
+    sample_locs, _ = heatmap_data # sample_locs is (B, 7, 9, 2)
+    
+    # 1. Find the center of mass for each character's 9 points
+    centers = sample_locs.mean(dim=2, keepdim=True) 
+    
+    # 2. Calculate how far the points are straying from their center (Variance)
+    variance = torch.mean((sample_locs - centers) ** 2, dim=-1) # (B, 7, 9)
+    spread = variance.mean(dim=-1) # Average spread per character: (B, 7)
+    
+    # 3. Penalize only if they blast wider than the allowed variance
+    violation = F.relu(spread - max_variance)
+    return (violation ** 2).mean()
 # ==============================================================================
 # 3. TRAINING LOOP
 # ==============================================================================
 import higher  # MUST BE AT THE TOP OF train_utils.py
+
+def box_size_penalties(corners, max_area=0.20, std_tolerance=2.0):
+    """
+    1. Flexible Consensus: Allows boxes to vary within X standard deviations of the mean.
+    2. Hard Cap: No box can exceed max_area of the total image.
+    corners: (B, 7, 4, 2)
+    """
+    # 1. Get X and Y coordinates: (B, 7, 4)
+    x_coords = corners[..., 0]
+    y_coords = corners[..., 1]
+    
+    # 2. Find the bounding box limits
+    xmin = x_coords.min(dim=-1)[0]
+    xmax = x_coords.max(dim=-1)[0]
+    ymin = y_coords.min(dim=-1)[0]
+    ymax = y_coords.max(dim=-1)[0]
+    
+    # 3. Calculate actual Widths, Heights, and Areas: (B, 7)
+    widths = torch.clamp(xmax - xmin, min=0)
+    heights = torch.clamp(ymax - ymin, min=0)
+    areas = widths * heights
+    
+    # ==========================================
+    # PENALTY A: The Flexible Consensus (Std Dev)
+    # ==========================================
+    # Calculate Mean and Standard Deviation (detached so they act as fixed targets)
+    mean_w = widths.mean(dim=-1, keepdim=True).detach()
+    std_w = widths.std(dim=-1, keepdim=True).detach() + 1e-4  # Add epsilon to prevent 0 std
+    
+    mean_h = heights.mean(dim=-1, keepdim=True).detach()
+    std_h = heights.std(dim=-1, keepdim=True).detach() + 1e-4
+    
+    # Calculate absolute deviation from the mean
+    dev_w = torch.abs(widths - mean_w)
+    dev_h = torch.abs(heights - mean_h)
+    
+    # The ReLU creates the "Safe Zone". 
+    # If deviation is LESS than (std * tolerance), it becomes 0 (no penalty).
+    # If deviation is GREATER, only the excess is penalized.
+    penalty_w = F.relu(dev_w - (std_tolerance * std_w))
+    penalty_h = F.relu(dev_h - (std_tolerance * std_h))
+    
+    consensus_loss = (penalty_w ** 2).mean() + (penalty_h ** 2).mean()
+    
+    # ==========================================
+    # PENALTY B: The 20% Hard Cap
+    # ==========================================
+    area_violation = F.relu(areas - max_area)
+    cap_penalty = (area_violation ** 2).mean()
+    
+    return consensus_loss + cap_penalty
 
 @register('SROCR_TRAIN')
 def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimizer_d, optimizer_hyper, loss_fn_spread, config, **kwargs):
@@ -524,7 +704,7 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
     pbar = tqdm(train_loader, leave=False)
     
     save_root = kwargs.get('save_path', Path('.'))
-    loss_stats = {'total': [], 'cls': [], 'spread': []}
+    loss_stats = {'total': [], 'cls': [], 'spread': [], 'loss_size': []}
     acc_seq_accum = []
     acc_char_accum = [] 
     current_epoch = kwargs.get('epoch', 0)
@@ -536,9 +716,11 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
         from models.cppd.cppd_bridge import CPPDLossWrapper
         loss_fn_spatial = CPPDLossWrapper(max_len=7).to(device)
     elif cls_loss_type == 'OTE':
-        # Instantiating the OTE Loss Wrapper
         from models.ote.ote_bridge import OTELossWrapper
         loss_fn_spatial = OTELossWrapper(ignore_index=38).to(device)
+    # --- NEW: Route POLY to the standard Smooth Poly 1 Loss ---
+    elif cls_loss_type == 'POLY':
+        loss_fn_spatial = SmoothPoly1Loss(epsilon=1.5, smoothing=0.1).to(device)
     else:
         loss_fn_spatial = SmoothPoly1Loss(epsilon=1.5, smoothing=0.1).to(device)
 
@@ -561,13 +743,16 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
             true_targets = (true_targets[0].to(device), true_targets[1].to(device))
         elif cls_loss_type == 'OTE':
             true_targets = true_converter.encode_ote(text_label, max_len=7).to(device)
+        elif cls_loss_type == 'POLY': 
+            # Use the variable encoder for 12 slots!
+            true_targets = true_converter.encode_variable(text_label, max_len=12).to(device)
         else:
             true_targets = true_converter.encode_list(text_label).to(device)
 
         # ====================================================================
         # THE "TRUE" HYPERGRADIENT META-STEP (Every 10 Batches)
         # ====================================================================
-        if batch_idx % 10 == 0 and batch_idx > 0 and config.get('cls_loss', 'SmoothPoly1') not in ['CTC', 'CPPD', 'LISTER_INTERNAL', 'OTE']:
+        if batch_idx % 10 == 0 and batch_idx > 0 and config.get('cls_loss', 'SmoothPoly1') not in ['CTC', 'CPPD', 'LISTER_INTERNAL', 'OTE', 'POLY']:
             # 1. Grab a fresh validation batch
             try:
                 val_batch = next(val_iter)
@@ -687,7 +872,6 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
         # STANDARD TRAINING STEP (Using the real model)
         # ====================================================================
         optimizer_g.zero_grad()
-        # ... (Rest of the standard forward pass continues below)
             
         with torch.amp.autocast('cuda', enabled=use_fp16):
             preds_lr = model_g(
@@ -705,10 +889,13 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
                 loss_cls_lr = loss_fn_spatial(preds_lr, true_targets)
             else:
                 loss_cls_lr = loss_fn_spatial(preds_lr['logits'], true_targets)
-            
+                    
             loss_spread = 0.0
-            if preds_lr['attn_maps'] is not None:
-                loss_spread = loss_fn_spread(preds_lr['attn_maps'], current_epoch=current_epoch)
+            
+            # preds_lr['attn_maps'] now contains the tuple (locations, weights)
+            if preds_lr['attn_maps'] is not None and cls_loss_type == 'POLY':
+                # Apply our new minimalist point spread penalty!
+                loss_spread = point_spread_loss(preds_lr['attn_maps'], max_variance=0.01) * 2.0
 
             total_loss = loss_cls_lr + loss_spread
 
@@ -727,7 +914,7 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
         with torch.no_grad():
             loss_stats['total'].append(total_loss.item())
             loss_stats['cls'].append(loss_cls_lr.item()) 
-            loss_stats['spread'].append(loss_spread.item() if isinstance(loss_spread, torch.Tensor) else loss_spread)
+            # loss_stats['loss_size'].append(loss_size.item() if isinstance(loss_size, torch.Tensor) else loss_size)
             
             if cls_loss_type == 'CTC':
                 decoded_s = ctc_greedy_decoder(preds_lr['logits'], true_converter)
@@ -774,9 +961,9 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
                 
                 pbar.set_postfix({
                     'Loss': f"{np.mean(loss_stats['total']):.4f}",
-                    'Spd': f"{np.mean(loss_stats['spread']):.4f}",
+                    # 'Olp': f"{np.mean(loss_stats['loss_size']):.4f}",
                     'Cls': f"{np.mean(loss_stats['cls']):.4f}",
-                    'Gain': f"{g_gain:.4f}",  # <--- YOUR PEACE OF MIND
+                    # 'Gain': f"{g_gain:.4f}",  # <--- YOUR PEACE OF MIND
                     'Seq%': f"{np.mean(acc_seq_accum):.1%}", # The weighted history
                     'B_Seq': f"{acc_s:.1%}",                 
                     'Chr%': f"{np.mean(acc_char_accum):.1%}",
@@ -831,10 +1018,14 @@ def SROCR_VAL(val_loader, model_g, model_d, loss_fn, config, **kwargs):
                 logits = output['logits']
 
             cls_loss_type = config.get('cls_loss', 'SmoothPoly1')
+            # --- THE NEW FIX: Trust the Transformer ---
             if cls_loss_type == 'CTC':
                 all_decoded_preds, all_scores = ctc_greedy_decoder(logits, true_converter, return_scores=True)
             else:
-                all_decoded_preds, all_scores = viterbi_plate_decoder(logits, true_converter, return_scores=True)
+                # 1. Decode the raw strings without rigid layout masks
+                all_decoded_preds = decode_batch_logits(logits, true_converter)
+                # 2. Calculate the raw confidence score for the ensembling logic
+                all_scores = F.log_softmax(logits, dim=-1).max(dim=-1)[0].sum(dim=1)
 
             for b in range(B):
                 seq_preds = all_decoded_preds[b * Seq_Len : (b + 1) * Seq_Len]

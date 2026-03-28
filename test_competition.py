@@ -12,29 +12,11 @@ import re
 import pickle
 import numpy as np
 import torchvision.transforms.functional as TF
-from train_funcs.train_utils import viterbi_plate_decoder
 
 # ==============================================================================
-# 1. CONVERTERS (Standardized)
+# 1. THE IMPORT FIX (Single Source of Truth)
 # ==============================================================================
-class strLabelConverter(object):
-    """Decodes Logits to Strings"""
-    def __init__(self, alphabet="0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"):
-        self.alphabet = ['-'] + list(alphabet) # 0 is blank/pad
-        self.dict = {char: i for i, char in enumerate(self.alphabet)}
-    
-    def decode(self, t):
-        if t.dim() == 1: t = t.unsqueeze(0)
-        texts = []
-        for i in range(t.shape[0]):
-            char_list = []
-            for j in range(t.shape[1]):
-                idx = t[i, j].item()
-                if 0 < idx < len(self.alphabet):
-                    char_list.append(self.alphabet[idx])
-            texts.append(''.join(char_list))
-        return texts
-
+from train_funcs.train_utils import decode_batch_logits, strLabelConverter
 # ==============================================================================
 # MAIN EXECUTION
 # ==============================================================================
@@ -70,14 +52,14 @@ if __name__ == "__main__":
         pth_files.sort(key=lambda x: float(x.stem.split('_')[2]) if '_' in x.stem else 0.0, reverse=True)
         
         valid_state_dicts = []
-        first_checkpoint = torch.load(pth_files[0], map_location=device)['model_g_sd']
+        first_checkpoint = torch.load(pth_files[0], map_location=device, weights_only=False)['model_g_sd']
         ref_sd = {k.replace('module.', ''): v for k, v in first_checkpoint.items()}
         valid_state_dicts.append(ref_sd)
         print(f"  ✅ [REF]     {pth_files[0].name}")
 
         for pth in pth_files[1:5]: 
             try:
-                raw_sd = torch.load(pth, map_location=device)['model_g_sd']
+                raw_sd = torch.load(pth, map_location=device, weights_only=False)['model_g_sd']
                 clean_sd = {k.replace('module.', ''): v for k, v in raw_sd.items()}
                 
                 is_compatible = True
@@ -120,7 +102,7 @@ if __name__ == "__main__":
         print(f"\nLoading Single Checkpoint: {best_ckpt}")
         if not best_ckpt.exists(): raise FileNotFoundError(f"Checkpoint not found: {best_ckpt}")
         
-        raw_sd = torch.load(best_ckpt, map_location=device)['model_g_sd']
+        raw_sd = torch.load(best_ckpt, map_location=device, weights_only=False)['model_g_sd']
         state_dict = {k.replace('module.', ''): v for k, v in raw_sd.items()}
         model.load_state_dict(state_dict, strict=False)
 
@@ -141,9 +123,11 @@ if __name__ == "__main__":
         num_workers=4, pin_memory=True, collate_fn=val_dataset.collate_fn
     )
 
-    true_converter = strLabelConverter(config.get('alphabet', "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
+    # --- ALPHABET SYNC ---
+    # Passing the exact 37-character string so the train_utils converter aligns properly
+    true_converter = strLabelConverter(config.get('alphabet', "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-"))
     
-    # --- METADATA TRACK ALIGNMENT (The Fix) ---
+    # --- METADATA TRACK ALIGNMENT ---
     track_names_ordered = []
     pkl_path = Path(args.split) / "metadata.pkl"
     if pkl_path.exists():
@@ -160,7 +144,7 @@ if __name__ == "__main__":
     correct_plates = 0
     total_plates = 0
     
-    # --- NEW: Layout Specific Trackers ---
+    # Layout Specific Trackers
     correct_mercosur, total_mercosur = 0, 0
     correct_brazil, total_brazil = 0, 0
     
@@ -177,7 +161,7 @@ if __name__ == "__main__":
             # --- BULLETPROOF TRACK NAME EXTRACTION ---
             track_name = None
             
-            # 1. Hunt safely in the batch metadata strings (ignores heavy tensors)
+            # 1. Hunt safely in the batch metadata strings
             for k, v in batch.items():
                 if isinstance(v, (list, tuple, str)):
                     match = re.search(r'(track_\d+)', str(v))
@@ -202,41 +186,50 @@ if __name__ == "__main__":
                 # ==========================================
                 output_base = model(flat_imgs, temporal_pool=True) 
                 if isinstance(output_base, tuple): output_base = output_base[0]
-                logits_base = output_base['logits'].view(B, Seq_Len, 7, 37).mean(dim=1)
+                
+                # UPDATED SHAPE: 12 Queries, 39 Classes
+                logits_base = output_base['logits'].view(B, Seq_Len, 12, 39).mean(dim=1)
                 
                 if args.tta:
                     # PASS 2 & 3: Positive Sweep (+5, +10)
                     flat_p5 = TF.rotate(flat_imgs, angle=2.5, interpolation=TF.InterpolationMode.BILINEAR)
                     out_p5 = model(flat_p5, temporal_pool=True)
                     if isinstance(out_p5, tuple): out_p5 = out_p5[0]
-                    logits_p5 = out_p5['logits'].view(B, Seq_Len, 7, 37).mean(dim=1)
+                    logits_p5 = out_p5['logits'].view(B, Seq_Len, 12, 39).mean(dim=1)
 
                     flat_p10 = TF.rotate(flat_imgs, angle=5.0, interpolation=TF.InterpolationMode.BILINEAR)
                     out_p10 = model(flat_p10, temporal_pool=True)
                     if isinstance(out_p10, tuple): out_p10 = out_p10[0]
-                    logits_p10 = out_p10['logits'].view(B, Seq_Len, 7, 37).mean(dim=1)
+                    logits_p10 = out_p10['logits'].view(B, Seq_Len, 12, 39).mean(dim=1)
 
                     # PASS 4 & 5: Negative Sweep (-5, -10)
                     flat_m5 = TF.rotate(flat_imgs, angle=-2.5, interpolation=TF.InterpolationMode.BILINEAR)
                     out_m5 = model(flat_m5, temporal_pool=True)
                     if isinstance(out_m5, tuple): out_m5 = out_m5[0]
-                    logits_m5 = out_m5['logits'].view(B, Seq_Len, 7, 37).mean(dim=1)
+                    logits_m5 = out_m5['logits'].view(B, Seq_Len, 12, 39).mean(dim=1)
 
                     flat_m10 = TF.rotate(flat_imgs, angle=-5.0, interpolation=TF.InterpolationMode.BILINEAR)
                     out_m10 = model(flat_m10, temporal_pool=True)
                     if isinstance(out_m10, tuple): out_m10 = out_m10[0]
-                    logits_m10 = out_m10['logits'].view(B, Seq_Len, 7, 37).mean(dim=1)
+                    logits_m10 = out_m10['logits'].view(B, Seq_Len, 12, 39).mean(dim=1)
                     
+                    # --- SOTA 5-WAY LOGIT ENSEMBLING ---
                     # --- SOTA 5-WAY LOGIT ENSEMBLING ---
                     final_logits = (logits_base + logits_p5 + logits_p10 + logits_m5 + logits_m10) / 5.0
                 else:
                     final_logits = logits_base
 
-                # Decode the consensus logits
-                all_decoded_preds, all_scores = viterbi_plate_decoder(final_logits, true_converter, return_scores=True)
-                
+                # ==========================================================
+                # THE FIX: Native Decoding (No more Viterbi Masks!)
+                # ==========================================================
+                all_decoded_preds = decode_batch_logits(final_logits, true_converter)
                 final_pred_str = all_decoded_preds[0]
-                avg_conf = all_scores[0].item()
+                
+                # Dynamically average the confidence scores based on string length
+                probs = F.softmax(final_logits, dim=-1)
+                max_probs, _ = probs.max(dim=-1) # (1, 12)
+                pred_len = len(final_pred_str)
+                avg_conf = max_probs[0, :pred_len].mean().item() if pred_len > 0 else 0.0
 
             # --- METRICS & LOGGING ---
             if args.mode == 'val':
@@ -247,7 +240,7 @@ if __name__ == "__main__":
                 else:
                     failures.append(f"{track_name} | Pred: {final_pred_str} | GT: {gt_text}")
                 
-                # --- NEW: Route by Layout type ---
+                # --- Layout Specific Tracking ---
                 if len(gt_text) >= 5:
                     if gt_text[4].isalpha(): # Mercosur uses a letter at the 5th position
                         total_mercosur += 1
@@ -258,7 +251,6 @@ if __name__ == "__main__":
                         
                 pbar.set_postfix({'SeqAcc': f"{correct_plates/(total_plates+1):.1%}"})
             else:
-                # Direct write: The model has already averaged the 5 sequence frames internally!
                 submission_lines.append(f"{track_name},{final_pred_str};{avg_conf:.4f}")
             
             total_plates += 1

@@ -16,7 +16,7 @@ import torchvision.transforms as T
 from PIL import Image
 from albumentations.core.transforms_interface import ImageOnlyTransform
 import sys
-
+import re
 # --- NEW: Dynamically add synEngine to the Python Path ---
 CURRENT_DIR = Path(__file__).resolve().parent
 SYN_ENGINE_DIR = CURRENT_DIR / "synEngine"
@@ -25,6 +25,18 @@ try:
     from PhysicalPlateGenerator import PhysicalPlateGenerator
 except ImportError:
     print("⚠️ Warning: PhysicalPlateGenerator not found. Synthetic generation disabled.")
+# --- NEW: Layout Formatter ---
+def format_brazilian_plate(plate_str):
+    """
+    Dynamically injects a hyphen into old Brazilian plates (LLLNNNN -> LLL-NNNN).
+    Safely ignores Mercosur plates (LLLNLNN) or already formatted plates.
+    """
+    plate_str = str(plate_str).upper().strip()
+    # Check if it is EXACTLY 3 letters followed by 4 numbers
+    if re.fullmatch(r'[A-Z]{3}[0-9]{4}', plate_str):
+        return f"{plate_str[:3]}-{plate_str[3:]}"
+    return plate_str
+
 
 class AdvancedPhysicsMotionBlur(ImageOnlyTransform):
     """Simulates physically accurate vehicle motion blur."""
@@ -282,7 +294,7 @@ class Sequential_lr_sr(Dataset):
     def __getitem__(self, idx):
         item = self.dataset[idx]
         img_raw = item['img_raw'].copy()   
-        plate_gt = item['gt']          
+        plate_gt = format_brazilian_plate(item['gt'])           
         filename = item['name']
         
         is_hr_file = filename.startswith("hr-")
@@ -421,7 +433,7 @@ class Sequential_Sequence_sr(Dataset):
             t_lr = self.normalize(ToTensor()(lr_img.copy()))
             
             lr_tensors.append(t_lr)
-            gts.append(item['gt'])
+            gts.append(format_brazilian_plate(item['gt']))
             names.append(item['name'])
 
         sequence_tensor = torch.stack(lr_tensors)

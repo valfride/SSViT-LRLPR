@@ -1,13 +1,218 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
 import numpy as np
+from torch.nn.init import ones_, trunc_normal_, zeros_
 
-from models.custom.VSR_curvature_att import FReLU
-from models.custom.VSR_curvature_att import HighContrastGate, DeformableProj
+# 1. Import your Custom Backbone Components
+from models.custom.VSR_curvature_att import FReLU, HighContrastGate, DeformableProj
+
+# 2. Import common Transformer helpers from the OpenOCR codebase
+from models.common import DropPath, Identity, Mlp, Embeddings
+
 # ==============================================================================
-# 1. HELPER BLOCKS 
+# 1. TRUE DEFORMABLE ATTENTION (No K projection, No Dot Product)
+# ==============================================================================
+class PureDeformableAttention(nn.Module):
+    def __init__(self, dim, num_heads=8, num_points=4): # Standard DETR uses 4 points per head
+        super().__init__()
+        self.dim = dim
+        self.num_heads = num_heads
+        self.num_points = num_points
+        self.head_dim = dim // num_heads
+
+        # 1. Predicts the Center Reference Point (cx, cy)
+        self.ref_predictor = nn.Linear(dim, 2)
+
+        # 2. Predicts Offsets: (Heads * Points * 2) 
+        # Every head gets to look at its own unique set of points!
+        self.offset_predictor = nn.Linear(dim, num_heads * num_points * 2)
+
+        # 3. Predicts Attention Weights directly from Q (Heads * Points)
+        self.weight_predictor = nn.Linear(dim, num_heads * num_points)
+
+        # 4. Only Value Projection (No Q or K projection needed for attention matching!)
+        self.v_proj = nn.Conv2d(dim, dim, kernel_size=1) 
+        self.out_proj = nn.Linear(dim, dim)
+
+    def forward(self, query, feature_map):
+        B, L, C = query.shape
+        _, _, H, W = feature_map.shape
+
+        # 1. Reference Points [0, 1]
+        ref_points = torch.sigmoid(self.ref_predictor(query)) # (B, L, 2)
+        ref_points = ref_points.unsqueeze(2).unsqueeze(2)     # (B, L, 1, 1, 2) for broadcasting
+
+        # 2. Predict Offsets & Weights strictly from the Query
+        offsets = self.offset_predictor(query).reshape(B, L, self.num_heads, self.num_points, 2)
+        
+        # Predict weights and normalize across the K sampled points
+        weights = self.weight_predictor(query).reshape(B, L, self.num_heads, self.num_points)
+        weights = F.softmax(weights, dim=-1) # (B, L, Heads, Points)
+
+        # 3. Calculate Sampling Locations
+        sample_locs = ref_points + offsets # (B, L, Heads, Points, 2)
+        sample_locs = torch.clamp(sample_locs, 0.0, 1.0)
+        
+        # Convert [0, 1] to [-1, 1] for grid_sample
+        sample_grids = sample_locs * 2.0 - 1.0 
+        
+        # --- THE SHAPE FIX STARTS HERE ---
+        # Route each Head to its specific 32-channel slice by folding Batch and Heads!
+        sample_grids = sample_grids.transpose(1, 2) # (B, Heads, L, Points, 2)
+        sample_grids = sample_grids.reshape(B * self.num_heads, L * self.num_points, 1, 2)
+
+        # 4. Value Projection
+        v_map = self.v_proj(feature_map) # (B, C, H, W)
+        
+        # Reshape the feature map to match the folded batch
+        v_map = v_map.reshape(B * self.num_heads, self.head_dim, H, W)
+
+        # 5. Sample the Values (Now each head ONLY extracts its own 32 channels!)
+        sampled_v = F.grid_sample(
+            v_map, sample_grids, mode='bilinear', padding_mode='zeros', align_corners=False
+        ) # Output: (B * Heads, Head_Dim, L * Points, 1)
+
+        # 6. Unpack the shapes back to normal
+        sampled_v = sampled_v.reshape(B, self.num_heads, self.head_dim, L, self.num_points)
+        
+        # Rearrange to: (B, L, Heads, Points, Head_Dim)
+        sampled_v = sampled_v.permute(0, 3, 1, 4, 2)
+
+        # 7. Apply Predicted Attention Weights
+        # Multiply the sampled values directly by the query's predicted weights and sum them up
+        out = torch.einsum('blhk,blhkd->blhd', weights, sampled_v)
+        
+        # 8. Final Projection
+        out = out.reshape(B, L, C)
+        return self.out_proj(out)
+
+# ==============================================================================
+# 2. THE TRANSFORMER LAYERS
+# ==============================================================================
+class PureDeformableLayer(nn.Module):
+    def __init__(self, dim, num_heads=8, num_points=4, mlp_ratio=4.0):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(dim)
+        
+        # Retained the Neighbor Linker because sequence ordering is still critical for OCR
+        self.neighbor_linker = nn.Sequential(
+            nn.Conv1d(dim, dim, kernel_size=3, padding=1, groups=dim),
+            nn.GELU(),
+            nn.GroupNorm(1, dim)
+        )
+        
+        self.self_attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
+        self.norm2 = nn.LayerNorm(dim)
+        
+        self.cross_attn = PureDeformableAttention(dim, num_heads, num_points)
+        
+        self.norm3 = nn.LayerNorm(dim)
+        mlp_hidden_dim = int(dim * mlp_ratio)
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, mlp_hidden_dim), 
+            nn.GELU(), 
+            # Added Dropout to fight the overfitting you saw!
+            nn.Dropout(0.1), 
+            nn.Linear(mlp_hidden_dim, dim),
+            nn.Dropout(0.1)
+        )
+
+    def forward(self, query, feature_map):
+        q1 = self.norm1(query)
+        
+        q_linked = self.neighbor_linker(q1.transpose(1, 2)).transpose(1, 2)
+        q1 = q1 + q_linked 
+        
+        q_self, _ = self.self_attn(q1, q1, q1)
+        query = query + q_self
+        
+        q2 = self.norm2(query)
+        # No more tuple unpacking. Pure Deformable Attention just returns the tensor.
+        q_cross = self.cross_attn(q2, feature_map)
+        query = query + q_cross
+        
+        q3 = self.norm3(query)
+        q_mlp = self.mlp(q3)
+        return query + q_mlp
+
+class HeavyQueryGenerator(nn.Module):
+    def __init__(self, in_channels, dim=256, num_chars=12):
+        super().__init__()
+        self.num_chars = num_chars
+        
+        # This is your "Localization Engine"
+        self.stem = nn.Sequential(
+            nn.Conv2d(in_channels, 64, kernel_size=3, stride=2, padding=1),
+            nn.GroupNorm(8, 64),
+            FReLU(64), 
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+            nn.GroupNorm(8, 128),
+            HighContrastGate(128), 
+            DeformableProj(128, 256, kernel_size=3, stride=2, offset_groups=4),
+            nn.GroupNorm(8, 256),
+            FReLU(256), 
+            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1), 
+            nn.GroupNorm(8, 256),
+            FReLU(256)
+        )
+        
+        self.surgical_focus = SurgicalFocusBlock(in_channels=256, reduction=8)
+
+        # The MLP that turns visual context into 12 unique character queries
+        self.net = nn.Sequential(
+            nn.Linear(256, dim),
+            nn.LayerNorm(dim),
+            nn.GELU(),
+            nn.Linear(dim, num_chars * dim)
+        )
+
+    def forward(self, x):
+        # 1. Deep Feature Extraction for localization
+        feat = self.stem(x) 
+        feat = self.surgical_focus(feat) 
+        
+        # 2. Global "Glance" at the image
+        context = feat.mean(dim=(2, 3)) 
+        
+        # 3. Generate the 12 Character Queries
+        queries = self.net(context).view(-1, self.num_chars, 256)
+        return queries
+
+class PureDeformableSpotter(nn.Module):
+    def __init__(self, in_channels, dim=256, num_classes=39, num_chars=12, num_layers=4):
+        super().__init__()
+        self.query_generator = HeavyQueryGenerator(in_channels, dim, num_chars)
+        
+        # ---------------------------------------------------------
+        # ---> 1. ADD IT HERE: The Structural DNA (Identity) <---
+        # ---------------------------------------------------------
+        self.slot_embed = nn.Parameter(torch.randn(1, num_chars, dim))
+        
+        # Project raw input features to Transformer dim (256) for the "Memory" path
+        self.memory_proj = nn.Conv2d(in_channels, dim, kernel_size=1)
+        
+        self.layers = nn.ModuleList([PureDeformableLayer(dim=dim) for _ in range(num_layers)])
+        self.norm = nn.LayerNorm(dim)
+        self.classifier = nn.Linear(dim, num_classes)
+
+    def forward(self, x):
+        # ---------------------------------------------------------
+        # ---> 2. ADD IT HERE: Generator Output + Static Identity <---
+        # ---------------------------------------------------------
+        query = self.query_generator(x) + self.slot_embed
+        
+        # Path B: Project the memory features the transformer will attend to
+        feature_map = self.memory_proj(x)
+        
+        for layer in self.layers:
+            query = layer(query, feature_map)
+            
+        query = self.norm(query)
+        return self.classifier(query)
+
+# ==============================================================================
+# 3. SURGEON HELPER BLOCKS & CUSTOM OCR
 # ==============================================================================
 class SurgicalFocusBlock(nn.Module):
     def __init__(self, in_channels, reduction=32):
@@ -36,537 +241,49 @@ class SurgicalFocusBlock(nn.Module):
         a_w = self.conv_w(x_w).sigmoid()
         return identity * a_w * a_h
 
-class RotaryEmbedding2D(nn.Module):
-    def __init__(self, dim, max_h=32, max_w=96): # Plentiful headroom
-        super().__init__()
-        # 1. We allocate exactly half the dimension space to Y, and half to X
-        half_dim = dim // 2
-        
-        # 2. Step by 2 (because each frequency covers a sin/cos pair)
-        inv_freq = 1.0 / (10000 ** (torch.arange(0, half_dim, 2).float() / half_dim))
-        self.register_buffer("inv_freq", inv_freq)
-        
-        # 3. Pre-calculate the absolute maximum grids
-        seq_y = torch.arange(max_h).float()
-        seq_x = torch.arange(max_w).float()
-        
-        freqs_y = torch.einsum("i,j->ij", seq_y, self.inv_freq)
-        freqs_x = torch.einsum("i,j->ij", seq_x, self.inv_freq)
-        
-        # 4. Repeat for sin/cos 
-        freqs_y = torch.cat((freqs_y, freqs_y), dim=-1)
-        freqs_x = torch.cat((freqs_x, freqs_x), dim=-1)
-        
-        # 5. Expand to 2D matrices
-        freqs_y = freqs_y.unsqueeze(1).expand(-1, max_w, -1) # (max_h, max_w, half_dim)
-        freqs_x = freqs_x.unsqueeze(0).expand(max_h, -1, -1) # (max_h, max_w, half_dim)
-        
-        self.register_buffer("freqs_y", freqs_y)
-        self.register_buffer("freqs_x", freqs_x)
-
-    def forward(self, h, w):
-        # Dynamically slice the grid to match the exact patch dimensions.
-        # This prevents X and Y coordinates from corrupting if the aspect ratio changes!
-        fy = self.freqs_y[:h, :w, :]
-        fx = self.freqs_x[:h, :w, :]
-        
-        # Combine X and Y, then safely flatten
-        freqs = torch.cat((fy, fx), dim=-1) # (h, w, dim)
-        return freqs.reshape(h * w, -1)     # (h*w, dim)
-
-def apply_rotary_emb(x, freqs):
-    # x: (Batch, Heads, SeqLen, HeadDim)
-    # freqs: (SeqLen, HeadDim)
-    
-    # Split the last dimension into pairs to apply the rotation matrix
-    x1, x2 = x[..., ::2], x[..., 1::2]
-    x_rotated = torch.stack([-x2, x1], dim=-1).flatten(-2)
-    
-    # Apply standard trigonometric rotation
-    return (x * freqs.cos()) + (x_rotated * freqs.sin())
-
-class PositionalEncoding2D(nn.Module):
-    def __init__(self, d_model, height, width, dropout=0.1):
-        super().__init__()
-        self.dropout = nn.Dropout(p=dropout)
-        pe = torch.zeros(d_model, height, width)
-        d_y = d_model // 2; d_x = d_model - d_y
-        div_term_y = torch.exp(torch.arange(0, d_y, 2).float() * (-math.log(10000.0) / d_y))
-        div_term_x = torch.exp(torch.arange(0, d_x, 2).float() * (-math.log(10000.0) / d_x))
-        pos_y = torch.arange(0, height).unsqueeze(1)
-        pe[0:d_y:2, :, :] = torch.sin(pos_y * div_term_y).transpose(0, 1).unsqueeze(-1).repeat(1, 1, width)
-        pe[1:d_y:2, :, :] = torch.cos(pos_y * div_term_y).transpose(0, 1).unsqueeze(-1).repeat(1, 1, width)
-        pos_x = torch.arange(0, width).unsqueeze(1)
-        pe[d_y::2, :, :] = torch.sin(pos_x * div_term_x).transpose(0, 1).unsqueeze(1).repeat(1, height, 1)
-        pe[d_y+1::2, :, :] = torch.cos(pos_x * div_term_x).transpose(0, 1).unsqueeze(1).repeat(1, height, 1)
-        self.register_buffer('pe', pe)
-    def forward(self, x): 
-        # If the input shape matches the default 64x192 PE, do the standard addition
-        if x.size(2) == self.pe.size(1) and x.size(3) == self.pe.size(2):
-            return self.dropout(x + self.pe)
-        
-        # --- THE TTA FIX: Interpolate the PE grid to match the new upscale ---
-        pe_resized = F.interpolate(
-            self.pe.unsqueeze(0),         # Make it 4D for the interpolator: (1, C, H, W)
-            size=(x.size(2), x.size(3)),  # Stretch to the new TTA dimensions (e.g., 70x210)
-            mode='bilinear', 
-            align_corners=False
-        ).squeeze(0)                      # Back to 3D
-        
-        return self.dropout(x + pe_resized)
-
-class CosineClassifierHead(nn.Module):
-    def __init__(self, in_features, num_classes):
-        super().__init__()
-        self.weight = nn.Parameter(torch.Tensor(num_classes, in_features))
-        nn.init.xavier_uniform_(self.weight)
-        # Learnable temperature scalar, initialized to 20.0 (common for cosine margins)
-        self.tau = nn.Parameter(torch.tensor(20.0))
-
-    def forward(self, x):
-        # Normalize features (X) and weights (W) to magnitude of 1
-        x_norm = F.normalize(x, p=2, dim=-1, eps=1e-6)
-        w_norm = F.normalize(self.weight, p=2, dim=-1, eps=1e-6)
-        
-        # Calculate cosine similarity and scale by temperature
-        # x_norm: (B, 7, 384) | w_norm: (37, 384) -> logits: (B, 7, 37)
-        logits = F.linear(x_norm, w_norm) * self.tau
-        return logits
-
-# ==============================================================================
-# 2. ViT EXPERT (With Teacher Forcing)
-# ==============================================================================
-class ViT_CrossAttn_OCR1(nn.Module):
-    def __init__(self, in_channels=256, d_model=256, num_chars=8, num_classes=37, num_layers=4, num_heads=16):
-        super().__init__()
-        self.d_model = d_model
-        
-        # Inside ViT_CrossAttn_OCR.__init__
-        self.patch_embed = nn.Sequential(
-            nn.Conv2d(in_channels, d_model // 2, kernel_size=3, stride=1, padding=1),
-            nn.GroupNorm(8, d_model // 2), 
-            FReLU(d_model // 2),
-            
-            nn.Conv2d(d_model // 2, d_model, kernel_size=3, stride=2, padding=1), 
-            nn.GroupNorm(8, d_model), 
-            FReLU(d_model),
-            
-            nn.Conv2d(d_model, d_model, kernel_size=3, stride=2, padding=1)
-        )
-        self.input_norm = nn.LayerNorm(d_model)
-
-        # Inside ViT_CrossAttn_OCR.__init__
-        self.num_patches = (64 // 4) * (192 // 4) # Now 768 tokens
-        self.pos_embed = nn.Parameter(torch.randn(1, self.num_patches, d_model) * 0.02)
-        self.mask_token = nn.Parameter(torch.zeros(1, 1, d_model))
-        nn.init.normal_(self.mask_token, std=1.0)
-
-        # Base Queries (Initialized with 1D Positional Awareness)
-        self.char_queries = nn.Parameter(torch.zeros(1, num_chars, d_model))
-        position = torch.arange(0, num_chars, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-        pe = torch.zeros(1, num_chars, d_model)
-        pe[0, :, 0::2] = torch.sin(position * div_term)
-        pe[0, :, 1::2] = torch.cos(position * div_term)
-        # Seed the parameters with the spatial math, but leave them learnable
-        self.char_queries.data.copy_(pe)
-        
-        # ðTEACHER FORCING: Embedding to convert GT class to d_model vector
-        self.char_embed = nn.Embedding(num_classes, d_model)
-        
-        decoder_layer = nn.TransformerDecoderLayer(
-            d_model=d_model, nhead=num_heads, dim_feedforward=1024,
-            activation='gelu', dropout=0.1, batch_first=True, norm_first=True
-        )
-        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
-
-        self.head = CosineClassifierHead(d_model, num_classes)
-
-    def random_masking(self, x, mask_ratio):
-        B, L, D = x.shape
-        len_keep = int(L * (1 - mask_ratio))
-        
-        noise = torch.rand(B, L, device=x.device)
-        ids_shuffle = torch.argsort(noise, dim=1)
-        ids_restore = torch.argsort(ids_shuffle, dim=1)
-
-        mask = torch.ones([B, L], device=x.device)
-        mask[:, :len_keep] = 0
-        mask = torch.gather(mask, dim=1, index=ids_restore)
-        mask = mask.unsqueeze(-1)
-        
-        x_masked = x * (1 - mask) 
-        mask_token_expanded = self.mask_token.expand(B, L, D)
-        x_masked = x_masked + (mask_token_expanded * mask)
-        
-        return x_masked
-
-    def generate_par_mask(self, batch_size, device):
-        # --- FIX 1: Change back to 7x7 mask (No longer 8x8) ---
-        mask = torch.zeros((batch_size, 7, 7), device=device)
-        probs = torch.rand(batch_size, device=device)
-        neg_inf = -10000.0 
-        
-        ltr_indices = (probs < 0.33)
-        if ltr_indices.any():
-            char_mask = torch.triu(torch.ones(7, 7, device=device), diagonal=1) * neg_inf
-            # --- FIX 2: Apply to the whole mask, no longer skipping index 0 ---
-            mask[ltr_indices, :, :] = char_mask 
-
-        rtl_indices = (probs >= 0.33) & (probs < 0.66)
-        if rtl_indices.any():
-            char_mask = torch.tril(torch.ones(7, 7, device=device), diagonal=-1) * neg_inf
-            # --- FIX 3: Apply to the whole mask ---
-            mask[rtl_indices, :, :] = char_mask 
-            
-        nhead = self.decoder.layers[0].self_attn.num_heads
-        return mask.repeat_interleave(nhead, dim=0)
-
-    def forward(self, x, refine_iters=1, tgt=None, forcing_prob=0.0, return_attn=False):
-        B = x.size(0)
-
-        # 1. Visual Tokens
-        features = self.patch_embed(x)
-        vis_tokens = features.flatten(2).transpose(1, 2)
-        vis_tokens = self.input_norm(vis_tokens) 
-
-        # 2. Positional Encoding (Fixing the hardcoded 8, 24)
-        if vis_tokens.shape[1] != self.pos_embed.shape[1]:
-            # The learned pos_embed was initialized for 64x192 (16x48 patches)
-            pos_embed = F.interpolate(
-                self.pos_embed.transpose(1, 2).reshape(1, self.d_model, 16, 48), # <--- FIXED
-                size=(features.shape[2], features.shape[3]), mode='bilinear'
-            ).flatten(2).transpose(1, 2)
-            vis_tokens = vis_tokens + pos_embed
-        else:
-            vis_tokens = vis_tokens + self.pos_embed
-
-        # 3. Apply Masking AFTER Positional Encoding
-        if self.training:
-            vis_tokens = self.random_masking(vis_tokens, mask_ratio=0.1)
-
-        # 4. Queries & Teacher Forcing
-        current_queries = self.char_queries.expand(B, -1, -1)
-        
-        # --- 4. APPLY TEACHER FORCING ONLY TO CHARACTERS (Indices 1-7) ---
-        # --- FIX 4: Apply Teacher Forcing to ALL queries ---
-        if self.training and tgt is not None and forcing_prob > 0.0:
-            tgt_emb = self.char_embed(tgt) 
-            mask = (torch.rand(B, 7, 1, device=x.device) < forcing_prob).float()
-            
-            # No longer skipping index 0
-            current_queries = (current_queries * (1.0 - mask)) + (tgt_emb * mask)
-
-        tgt_mask = None
-        
-        final_tokens = None
-        loops = refine_iters + 1
-        attention_maps = None 
-        
-        # 5. Native Decoder Loop
-        for i in range(loops):
-            out_tokens = self.decoder(tgt=current_queries, memory=vis_tokens, tgt_mask=tgt_mask)
-            final_tokens = out_tokens
-
-        attention_maps = None
-        # Extract maps if explicitly requested (regardless of training mode)
-        if return_attn:
-            _, attention_maps = self.decoder.layers[-1].multihead_attn(
-                query=final_tokens, 
-                key=vis_tokens, 
-                value=vis_tokens, 
-                need_weights=True, 
-                average_attn_weights=False
-            )
-
-        logits = self.head(final_tokens)
-        return logits, final_tokens, attention_maps
-
-class ViT_CrossAttn_OCR(nn.Module):
-    def __init__(self, in_channels=256, d_model=256, num_chars=7, num_classes=37, num_layers=4, num_heads=16):
-        super().__init__()
-        self.d_model = d_model
-        self.num_heads = num_heads
-        
-        # The Patch Embedder (Unchanged)
-        self.patch_embed = nn.Sequential(
-            nn.Conv2d(in_channels, d_model // 2, kernel_size=3, stride=1, padding=1),
-            nn.GroupNorm(8, d_model // 2), FReLU(d_model // 2),
-            nn.Conv2d(d_model // 2, d_model, kernel_size=3, stride=2, padding=1), 
-            nn.GroupNorm(8, d_model), FReLU(d_model),
-            nn.Conv2d(d_model, d_model, kernel_size=3, stride=2, padding=1)
-        )
-        self.input_norm = nn.LayerNorm(d_model)
-
-        # 1. NEW: The 2D RoPE Generator
-        # d_model // num_heads gives us the dimension per head (e.g., 256 / 16 = 16)
-        self.rope = RotaryEmbedding2D(dim=d_model // num_heads, max_h=16, max_w=48)
-
-        # The Masking Token (Unchanged)
-        self.mask_token = nn.Parameter(torch.zeros(1, 1, d_model))
-        nn.init.normal_(self.mask_token, std=1.0)
-
-        # 2. UPDATED: Purely Learned Character Queries (No rigid 1D Positional injection)
-        self.char_queries = nn.Parameter(torch.randn(1, num_chars, d_model) * 0.02)
-        
-        # Teacher Forcing Embedding (Unchanged)
-        self.char_embed = nn.Embedding(num_classes, d_model)
-        
-        # 3. NEW: Manual Cross-Attention Layers to support RoPE
-        self.layers = nn.ModuleList([
-            CustomRoPELayer(d_model, num_heads) for _ in range(num_layers)
-        ])
-
-        self.head = CosineClassifierHead(d_model, num_classes)
-
-    def random_masking(self, x, mask_ratio):
-        # (Unchanged from your current code)
-        B, L, D = x.shape
-        len_keep = int(L * (1 - mask_ratio))
-        noise = torch.rand(B, L, device=x.device)
-        ids_shuffle = torch.argsort(noise, dim=1)
-        ids_restore = torch.argsort(ids_shuffle, dim=1)
-        mask = torch.ones([B, L], device=x.device)
-        mask[:, :len_keep] = 0
-        mask = torch.gather(mask, dim=1, index=ids_restore).unsqueeze(-1)
-        x_masked = x * (1 - mask) 
-        mask_token_expanded = self.mask_token.expand(B, L, D)
-        return x_masked + (mask_token_expanded * mask)
-
-    def forward(self, x, refine_iters=1, tgt=None, forcing_prob=0.0, return_attn=False):
-        B = x.size(0)
-
-        # 1. Visual Tokens
-        features = self.patch_embed(x)
-        vis_tokens = features.flatten(2).transpose(1, 2) # (B, 768, d_model)
-        vis_tokens = self.input_norm(vis_tokens) 
-
-        # 2. NO POSITIONAL ENCODING HERE! 
-        # Apply Masking directly
-        if self.training:
-            vis_tokens = self.random_masking(vis_tokens, mask_ratio=0.1)
-
-        # 3. Queries & Teacher Forcing (Unchanged)
-        current_queries = self.char_queries.expand(B, -1, -1)
-        if self.training and tgt is not None and forcing_prob > 0.0:
-            tgt_emb = self.char_embed(tgt) 
-            mask = (torch.rand(B, 7, 1, device=x.device) < forcing_prob).float()
-            current_queries = (current_queries * (1.0 - mask)) + (tgt_emb * mask)
-        
-        # 4. Generate the RoPE Frequencies for the image tokens
-        H_patches, W_patches = features.shape[2], features.shape[3]
-        freqs = self.rope(H_patches, W_patches) # (H*W, head_dim)
-
-        final_tokens = current_queries
-        attention_maps = None 
-        loops = refine_iters + 1
-        
-        # 5. Decoder Loop with RoPE
-        for layer in self.layers:
-            # We pass the image tokens (vis_tokens) as the Keys/Values, and the queries as Queries
-            final_tokens, attn = layer(query=final_tokens, key_value=vis_tokens, freqs=freqs)
-            attention_maps = attn # Store the last layer's attention for your HyperLoss!
-
-        logits = self.head(final_tokens)
-        
-        if not return_attn: attention_maps = None
-        return logits, final_tokens, attention_maps
-
-# ==============================================================================
-# 4. THE CUSTOM RoPE ATTENTION LAYER
-# ==============================================================================
-class CustomRoPELayer(nn.Module):
-    """A minimal Transformer Decoder layer that applies RoPE to the Keys."""
-    def __init__(self, d_model, num_heads):
-        super().__init__()
-        self.num_heads = num_heads
-        self.head_dim = d_model // num_heads
-        self.scale = self.head_dim ** -0.5
-        
-        self.q_proj = nn.Linear(d_model, d_model)
-        self.k_proj = nn.Linear(d_model, d_model)
-        self.v_proj = nn.Linear(d_model, d_model)
-        self.out_proj = nn.Linear(d_model, d_model)
-        
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
-        
-        self.mlp = nn.Sequential(
-            nn.Linear(d_model, d_model * 2),
-            nn.GELU(),
-            nn.Linear(d_model * 2, d_model)
-        )
-
-    def forward(self, query, key_value, freqs):
-        B, Q_len, _ = query.shape
-        B, KV_len, _ = key_value.shape
-        
-        # 1. Pre-norm
-        q = self.norm1(query)
-        kv = key_value # Image tokens are already normed in the main body
-        
-        # 2. Linear Projections
-        q = self.q_proj(q).view(B, Q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        k = self.k_proj(kv).view(B, KV_len, self.num_heads, self.head_dim).transpose(1, 2)
-        v = self.v_proj(kv).view(B, KV_len, self.num_heads, self.head_dim).transpose(1, 2)
-        
-        # 3. APPLY RoPE ONLY TO THE KEYS!
-        # This gives the image tokens relative spatial awareness without forcing absolute coordinates
-        k = apply_rotary_emb(k, freqs)
-        
-        # 4. Dot-Product Attention
-        attn = (q @ k.transpose(-2, -1)) * self.scale
-        attn = attn.softmax(dim=-1) # (B, Heads, Q_len, KV_len) -> Perfect for HyperLoss!
-        
-        out = (attn @ v).transpose(1, 2).reshape(B, Q_len, -1)
-        out = self.out_proj(out)
-        
-        # 5. Residual + FFN
-        query = query + out
-        query = query + self.mlp(self.norm2(query))
-        
-        return query, attn
-
-# ==============================================================================
-# 3. WRAPPER CLASS
-# ==============================================================================
-
-# class CustomOCR(nn.Module):
-#     def __init__(self, input_shape=(128, 64, 192), num_classes=37, num_chars=7, d_model=384, num_heads=16):
-#         super().__init__()
-#         in_channels = input_shape[0]
-        
-#         # --- NEW: ADVANCED SEMANTIC STEM ---
-#         self.stem = nn.Sequential(
-#             # 1. Initial Projection & Noise Cleanup 
-#             nn.Conv2d(in_channels, 128, 3, 1, 1),
-#             nn.GroupNorm(8, 128),
-#             HighContrastGate(128), 
-            
-#             # 2. Deformable Structural Alignment 
-#             DeformableProj(128, 256, kernel_size=3, offset_groups=4),
-#             nn.GroupNorm(8, 256),
-#             FReLU(256), 
-            
-#             # 3. Final Semantic Refinement 
-#             nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1), 
-#             nn.GroupNorm(8, 256),
-#             FReLU(256)
-#         )
-        
-#         # Update Positional Encoding for the 64x192 resolution
-#         self.pos_encoder = PositionalEncoding2D(256, 64, 192)
-#         self.surgical_focus = SurgicalFocusBlock(in_channels=256, reduction=8)
-        
-#         # ViT Expert must now handle 768 tokens (16x48 grid)
-#         self.vit_expert = ViT_CrossAttn_OCR(
-#             in_channels=256, 
-#             d_model=d_model, 
-#             num_chars=num_chars, # EXACTLY 7 QUERIES
-#             num_classes=num_classes,
-#             num_heads=num_heads  
-#         )
-#         self.projector = nn.Sequential(nn.Linear(d_model, 128), nn.Mish(), nn.Linear(128, 128))
-
-#         # REMOVED: self.layout_head
-
-#     def forward(self, x, tgt=None, epoch=0, **kwargs):
-#         feat = self.stem(x) 
-#         feat = self.pos_encoder(feat)
-#         feat = self.surgical_focus(feat)
-        
-#         # SCHEDULED SAMPLING
-#         forcing_prob = max(0.05, 0.5 - (epoch * 0.01)) if self.training else 0.0
-        
-#         iters = 0
-        
-#         # logits: (B, 7, 37) | all_tokens: (B, 7, 384) | attn_maps: (B, H, 7, 768)
-#         logits, all_tokens, attn_maps = self.vit_expert(feat, refine_iters=iters, tgt=tgt, forcing_prob=forcing_prob, return_attn=True)
-        
-#         # All tokens belong to characters!
-#         char_tokens = all_tokens  # (B, 7, 384)
-#         char_logits = logits      # (B, 7, 37)
-        
-#         # REMOVED: global_token and layout_logits calculation
-        
-#         z_vector = F.normalize(self.projector(char_tokens), p=2, dim=-1, eps=1e-6)
-        
-#         # --- RETURN THE CLEANED DICTIONARY ---
-#         return {
-#             'logits': char_logits,            # (B, 7, 37) - Ready for FocalLoss
-#             'features': char_tokens,          # (B, 7, 384)
-#             'z_vector': z_vector,             # (B, 7, 128)
-#             'attn_maps': attn_maps,           # (B, H, 7, 768) - Sent to AdvancedAttentionLoss!
-#             'theta': None,
-#             'crops': None 
-#         }
-
-# ==============================================================================
-# 3. WRAPPER CLASS (Slimmed & Optimized)
-# ==============================================================================
 class CustomOCR(nn.Module):
-    # Reduced input_shape to 128, d_model to 256, and num_heads to 8
-    def __init__(self, input_shape=(128, 64, 192), num_classes=37, num_chars=7, d_model=64, num_heads=8):
+    def __init__(self, input_shape=(128, 48, 144), num_classes=37, num_chars=7, **kwargs):
         super().__init__()
-        in_channels = input_shape[0] # Now 128
+        in_channels = input_shape[0] 
         
-        # --- SLIMMED SEMANTIC STEM ---
-        self.stem = nn.Sequential(
-            # 1. Initial Projection & Noise Cleanup (128 -> 128)
-            nn.Conv2d(in_channels, 128, 3, 1, 1),
-            nn.GroupNorm(8, 128),
-            HighContrastGate(128), 
-            
-            # 2. Deformable Structural Alignment (128 -> 128)
-            DeformableProj(128, 128, kernel_size=3, offset_groups=4),
-            nn.GroupNorm(8, 128),
-            FReLU(128), 
-            
-            # 3. Final Semantic Refinement (Expands to 256 right before the ViT)
-            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1), 
-            nn.GroupNorm(8, 256),
-            FReLU(256)
+        # self.stem = nn.Sequential(
+        #     nn.Conv2d(in_channels, 64, kernel_size=3, stride=2, padding=1),
+        #     nn.GroupNorm(8, 64),
+        #     FReLU(64), 
+        #     nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+        #     nn.GroupNorm(8, 128),
+        #     HighContrastGate(128), 
+        #     DeformableProj(128, 256, kernel_size=3, stride=2, offset_groups=4),
+        #     nn.GroupNorm(8, 256),
+        #     FReLU(256), 
+        #     nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1), 
+        #     nn.GroupNorm(8, 256),
+        #     FReLU(256)
+        # )
+        
+        
+        
+        # The new Pure Deformable Spotter
+        self.spotter = PureDeformableSpotter(
+            in_channels=in_channels,
+            dim=256, 
+            num_classes=num_classes, 
+            num_chars=num_chars, 
+            num_layers=4
         )
-        
-        # REMOVED: self.pos_encoder (Absolute PE is dead, long live RoPE!)
-        
-        self.surgical_focus = SurgicalFocusBlock(in_channels=256, reduction=8)
-        
-        # ViT Expert (Now strictly 256 dims and 8 heads)
-        self.vit_expert = ViT_CrossAttn_OCR(
-            in_channels=256, 
-            d_model=d_model, 
-            num_chars=num_chars,
-            num_layers=1,
-            num_classes=num_classes,
-            num_heads=num_heads,
-            
-        )
-        
-        self.projector = nn.Sequential(nn.Linear(d_model, 128), nn.Mish(), nn.Linear(128, 128))
 
     def forward(self, x, tgt=None, epoch=0, **kwargs):
-        feat = self.stem(x) 
-        # REMOVED: feat = self.pos_encoder(feat)
-        feat = self.surgical_focus(feat)
+        # feat = self.stem(x) 
+        # feat = self.surgical_focus(feat) 
         
-        forcing_prob = max(0.05, 0.5 - (epoch * 0.01)) if self.training else 0.0
-        iters = 0
+        logits = self.spotter(x)
         
-        # logits: (B, 7, 37) | all_tokens: (B, 7, 256) | attn_maps: (B, 8, 7, 768)
-        logits, all_tokens, attn_maps = self.vit_expert(feat, refine_iters=iters, tgt=tgt, forcing_prob=forcing_prob, return_attn=True)
-        
-        char_tokens = all_tokens  
-        char_logits = logits      
-        
-        z_vector = F.normalize(self.projector(char_tokens), p=2, dim=-1, eps=1e-6)
-        
-        return {
-            'logits': char_logits,            
-            'features': char_tokens,          
-            'z_vector': z_vector,             
-            'attn_maps': attn_maps,           
-            'theta': None,
-            'crops': None 
+        preds = {
+            'logits': logits,        
+            'node_feats': None,      
+            'edge_feats': logits,    
+            # We no longer care about visualization, so return None
+            'attn_maps': None           
         }
-
+        
+        return preds
