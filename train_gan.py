@@ -51,7 +51,8 @@ def make_dataloader(spec, tag='', save_path=None):
     sampler = None
     shuffle = True
     
-    if tag == 'train':
+    # if tag == 'train':
+    if False:
         # 1. Generate the Hard-Mining Weights using the REAL path
         stats_path = save_path / 'confusion_stats.json' if save_path else Path('outputs') / 'confusion_stats.json'
         weights = get_confusion_weights(dataset, stats_path)
@@ -65,8 +66,8 @@ def make_dataloader(spec, tag='', save_path=None):
             shuffle = False
 
     loader = DataLoader(
-        dataset, batch_size=spec['batch'], shuffle=shuffle, 
-        sampler=sampler, num_workers=16, pin_memory=True, 
+        dataset, batch_size=spec['batch'], shuffle=(tag == 'train'), 
+        num_workers=16, pin_memory=True, 
         collate_fn=dataset.collate_fn, drop_last=(tag == 'train'), prefetch_factor=4
     )
     return loader, sampler
@@ -111,7 +112,11 @@ def get_confusion_weights(dataset, stats_path, top_k=4):
     return torch.DoubleTensor(weights)
 
 def create_scheduler(optimizer, epoch_max):
-    return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=10, min_lr=1e-6)
+    return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=20, min_lr=1e-6)
+
+def create_teacher_scheduler(optimizer):
+    # Patience is only 2! It will quickly drop the LR when the Teacher hits 99%
+    return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=2, min_lr=1e-6)
 
 def main(config, save_path):
     local_rank = int(os.environ["LOCAL_RANK"])
@@ -119,7 +124,7 @@ def main(config, save_path):
     
     val_loader, _ = make_dataloader(config.get('val_dataset', config['train_dataset']), tag='val', save_path=save_path)
 
-    if is_main_process(): print("Creating Teacherless VSR Model...")
+    if is_main_process(): print("Creating Student VSR Model...")
     model_g = models.make(config['model_g']).to(local_rank)
     model_g = model_g.to(memory_format=torch.channels_last)
     
@@ -143,12 +148,12 @@ def main(config, save_path):
     # Create the parameter groups
     optim_groups = [
         {'params': base_params, 'lr': base_lr},
-        {'params': deform_offset_params, 'lr': base_lr * 10.0},
+        {'params': deform_offset_params, 'lr': base_lr},
     ]
     
     if is_main_process(): 
         print(f"Base params: {len(base_params)} | Deform: {len(deform_offset_params)}")
-        print(f"Base LR: {base_lr} | Deform LR: {base_lr * 10.0} ")
+        print(f"Base LR: {base_lr} | Deform LR: {base_lr} ")
 
     optimizer_g = torch.optim.Adam(optim_groups)
     loss_fn_spread = HyperAttentionLoss(grid_h=12, grid_w=36).to(local_rank)
@@ -161,9 +166,31 @@ def main(config, save_path):
     optimizer_hyper = torch.optim.Adam(hyper_groups)
     # -----------------------------------------------------------
     
-    # --- 3. Initialize Scheduler BEFORE Resume ---
+    # ==========================================
+    # NEW: CONDITIONAL TEACHER SETUP
+    # ==========================================
+    use_distillation = config.get('use_distillation', False)
+    model_t, optimizer_t, scheduler_t = None, None, None
+
+    if use_distillation:
+        if is_main_process(): print("🎓 Distillation Mode ON: Creating Teacher VSR Model...")
+        model_t = models.make(config['model_g']).to(local_rank)
+        model_t = model_t.to(memory_format=torch.channels_last)
+
+        teacher_lr = base_lr * config.get('teacher_lr_multiplier', 2.0)
+        
+        # Reuse your group splitting logic here
+        optimizer_t = torch.optim.Adam([
+            {'params': [p for n, p in model_t.named_parameters() if 'offset_conv' not in n and p.requires_grad], 'lr': teacher_lr},
+            {'params': [p for n, p in model_t.named_parameters() if 'offset_conv' in n and p.requires_grad], 'lr': teacher_lr * 10.0}
+        ])
+        scheduler_t = create_teacher_scheduler(optimizer_t)
+        
+        if is_main_process(): print(f"Teacher Base LR: {teacher_lr:.2e}")
+    # ==========================================
+
+    # --- 3. Initialize Student Scheduler ---
     scheduler_g = create_scheduler(optimizer_g, epoch_max)
-    
     # --- 4. Resume Logic ---
     start_epoch = 1; best_accuracy = 0.0
     
@@ -173,9 +200,7 @@ def main(config, save_path):
     epochs_without_improvement = 0
     
     resume_path = config.get('resume')
-    
     if resume_path and os.path.isfile(resume_path):
-        if is_main_process(): print(f"⚠️ Resuming from checkpoint: {resume_path}")
         checkpoint = torch.load(resume_path, map_location=f'cuda:{local_rank}', weights_only=False)
         
         # Smart Filter for Teacherless transition
@@ -231,7 +256,41 @@ def main(config, save_path):
                 except Exception as e:
                     if is_main_process(): print(f"⚠️ Optimizer/Scheduler resume failed: {e}")
 
-    if not DEBUG: model_g = DDP(model_g, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False)
+            # Safely resume Teacher if distillation is active
+            if use_distillation:
+                if 'model_t_sd' in checkpoint:
+                    model_t.load_state_dict({k.replace('module.', ''): v for k, v in checkpoint['model_t_sd'].items()}, strict=False)
+                
+                if 'optimizer_t' in checkpoint: 
+                    optimizer_t.load_state_dict(checkpoint['optimizer_t'])
+                    
+                    # ---> THE FIX: Force LR for the Teacher too!
+                    if config.get('force_lr', False):
+                        teacher_lr = base_lr * config.get('teacher_lr_multiplier', 2.0)
+                        if is_main_process(): 
+                            print(f"🔥 FORCE_LR is True: Overriding Teacher LR to {teacher_lr:.2e}")
+                        
+                        optimizer_t.param_groups[0]['lr'] = teacher_lr
+                        if len(optimizer_t.param_groups) > 1:
+                            optimizer_t.param_groups[1]['lr'] = teacher_lr * 10.0
+                            
+                        scheduler_t = create_teacher_scheduler(optimizer_t)
+                    else:
+                        if 'scheduler_t' in checkpoint: 
+                            scheduler_t.load_state_dict(checkpoint['scheduler_t'])
+                    
+                # ---> NEW: Restore the freeze state!
+                teacher_frozen = checkpoint.get('teacher_frozen', False)
+                teacher_best_acc = checkpoint.get('teacher_best_acc', 0.0)
+                teacher_patience_counter = checkpoint.get('teacher_patience_counter', 0)
+                
+                if is_main_process() and teacher_frozen:
+                    print("🧊 Resumed with a FROZEN Teacher Oracle.")
+
+    if not DEBUG: 
+        model_g = DDP(model_g, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False)
+        if use_distillation:
+            model_t = DDP(model_t, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False)
         
     loss_fn = losses.make(config['loss']).to(local_rank)
     train_step = train_funcs.make(config['func_train']) 
@@ -267,39 +326,79 @@ def main(config, save_path):
         hyper_path = viz_dir / 'hyper.txt'
         with open(hyper_path, 'w') as f:
             f.write("V: 1.20 | M: 15.0 | B: 20.0 | O: 5.0")
-        
+
+    teacher_frozen = False 
+    teacher_best_acc = 0.0           # <--- NEW
+    teacher_patience_counter = 0     # <--- NEW
+    
+    checkpoint = {}
     try:
         for epoch in range(start_epoch, epoch_max + 1):
             
-            # --- THE FIX: Rebuild the Dataloader to read the newest JSON! ---
             train_loader, train_sampler = make_dataloader(config['train_dataset'], tag='train', save_path=save_path)
-            
-            # 1. Properly set the epoch for Distributed Training shuffles
             if hasattr(train_sampler, 'set_epoch'): train_sampler.set_epoch(epoch)
-            
             if is_main_process(): print(f"🔄 Starting Epoch {epoch}...")
             
             model_g.train()
+            active_optimizer_t = optimizer_t 
             
-            train_loss = train_step(
-                train_loader,
-                val_loader,
-                model_g, 
-                None,            
-                optimizer_g, 
-                None,            
-                optimizer_hyper, 
-                loss_fn_spread,  
-                config,          
-                epoch=epoch, 
-                save_path=save_path
+            # APPLY ORACLE FREEZE (If triggered)
+            if use_distillation:
+                if teacher_frozen:
+                    # ---> THE FIX: Keep it in train()!
+                    # This prevents the KL Divergence from exploding by maintaining 
+                    # the exact same dropout distribution the student is used to.
+                    model_t.train() 
+                    for param in model_t.parameters():
+                        param.requires_grad = False 
+                    active_optimizer_t = None 
+                else:
+                    model_t.train()
+            
+            train_out = train_step(
+                train_loader, val_loader,
+                model_g, model_t,         
+                optimizer_g, active_optimizer_t, # <--- Pass the dynamic optimizer
+                optimizer_hyper, None, config,          
+                epoch=epoch, save_path=save_path
             )
-            
-            val_loss, accuracy, _ = val_step(val_loader, model_g, None, loss_fn, config, save_path=save_path)    
+            teacher_train_acc = 0.0
+            if isinstance(train_out, tuple):
+                train_loss, teacher_train_acc = train_out
+            else:
+                train_loss = train_out
+            val_loss, accuracy, teacher_val_acc = val_step(val_loader, model_g, model_t, loss_fn, config, save_path=save_path)
+
+            # ==========================================
+            # THE FIX: TRACK PATIENCE USING HR VAL ACCURACY
+            # ==========================================
+            if use_distillation:
+                if not teacher_frozen:
+                    if teacher_val_acc > teacher_best_acc:
+                        teacher_best_acc = teacher_val_acc
+                        teacher_patience_counter = 0
+                    else:
+                        teacher_patience_counter += 1
+                        
+                    freeze_patience = config.get('teacher_freeze_patience', 20)
+                    
+                    if teacher_patience_counter > freeze_patience:
+                        if is_main_process():
+                            print(f"🥶 TEACHER FREEZE TRIGGERED: {freeze_patience} VAL epochs without improvement (Peaked at {teacher_best_acc:.4f}).")
+                        teacher_frozen = True
 
             if scheduler_g: 
-                if isinstance(scheduler_g, torch.optim.lr_scheduler.ReduceLROnPlateau): scheduler_g.step(accuracy)
-                else: scheduler_g.step()
+                if isinstance(scheduler_g, torch.optim.lr_scheduler.ReduceLROnPlateau): 
+                    # Student uses Student Validation Accuracy
+                    scheduler_g.step(accuracy)
+                    
+                    # Teacher uses Teacher Training Accuracy
+                    if use_distillation and scheduler_t is not None: 
+                        scheduler_t.step(teacher_train_acc)
+                else: 
+                    scheduler_g.step()
+                    if use_distillation and scheduler_t is not None: 
+                        scheduler_t.step()
     
             if is_main_process():
                 current_lr = optimizer_g.param_groups[0]['lr']
@@ -314,10 +413,21 @@ def main(config, save_path):
                     'loss_hyper_sd': loss_fn_spread.state_dict(),    
                     'scheduler_g': scheduler_g.state_dict(),
                     'best_acc': best_accuracy,
-                    # --- NEW: Serializing the state for safe black-out recovery ---
                     'best_models': best_models,
                     'epochs_without_improvement': epochs_without_improvement
                 }
+                
+                # Safely inject Teacher states into the dict
+                if use_distillation:
+                    checkpoint['model_t_sd'] = model_t.module.state_dict() if hasattr(model_t, 'module') else model_t.state_dict()
+                    checkpoint['optimizer_t'] = optimizer_t.state_dict()
+                    checkpoint['scheduler_t'] = scheduler_t.state_dict()
+                    
+                    # ---> NEW: Save the freeze state!
+                    checkpoint['teacher_frozen'] = teacher_frozen
+                    checkpoint['teacher_best_acc'] = teacher_best_acc
+                    checkpoint['teacher_patience_counter'] = teacher_patience_counter
+
                 torch.save(checkpoint, save_path / 'last.pth')
                 
                 if len(best_models) < 5 or accuracy > best_models[-1]['acc']:

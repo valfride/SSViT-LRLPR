@@ -13,10 +13,12 @@ import pickle
 import numpy as np
 import torchvision.transforms.functional as TF
 
+
+
 # ==============================================================================
 # 1. THE IMPORT FIX (Single Source of Truth)
 # ==============================================================================
-from train_funcs.train_utils import decode_batch_logits, strLabelConverter
+from train_funcs.train_utils import ctc_greedy_decoder, decode_batch_logits, strLabelConverter
 # ==============================================================================
 # MAIN EXECUTION
 # ==============================================================================
@@ -26,22 +28,40 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoints", required=True)
     parser.add_argument("--split", required=True)
     parser.add_argument("--mode", required=True, choices=['val', 'test'])
-    parser.add_argument("--swa", action="store_true") 
+    parser.add_argument("--swa", action="store_true", help="Enable Stochastic Weight Averaging") 
     parser.add_argument("--tta", action="store_true", help="Enable Test-Time Augmentation")
+    parser.add_argument("--ensemble", action="store_true", help="Enable Dual-Model Teacher/Student Ensemble")
     parser.add_argument("--output", default="submission.txt")
     args = parser.parse_args()
+
+
 
     utils.setup_seed(42)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     with open(args.config, "r") as f: config = yaml.load(f, Loader=yaml.FullLoader)
     
+    cls_loss_type = config.get('cls_loss', 'SmoothPoly1') # <--- ADD THIS LINE
+    
     print("Building Architecture...")
+    # ---> STUDENT MODEL
     model = models.make(config['model_g']).to(device)
     model.eval()
 
+    # ---> TEACHER MODEL (Oracle - Only built if requested!)
+    teacher_loaded = False
+    if args.ensemble:
+        model_t = models.make(config['model_g']).to(device)
+        model_t.eval()
+
     # --- SWA / CHECKPOINT LOADING ---
     ckpt_dir = Path(args.checkpoints)
+    
+    # Helper to safely extract accuracy from filenames like 'model_acc_0.95.pth'
+    def extract_acc(path):
+        match = re.search(r'([\d\.]+)', path.stem)
+        return float(match.group(1)) if match else 0.0
+
     if args.swa:
         print("\n⚖️   SWA ENABLED: Averaging Top Models...")
         pth_files = list(ckpt_dir.glob("model_acc_*.pth"))
@@ -49,51 +69,76 @@ if __name__ == "__main__":
             print("⚠️  No top models found for SWA. Falling back to last.pth")
             pth_files = [ckpt_dir / 'last.pth']
         
-        pth_files.sort(key=lambda x: float(x.stem.split('_')[2]) if '_' in x.stem else 0.0, reverse=True)
+        pth_files.sort(key=extract_acc, reverse=True)
         
-        valid_state_dicts = []
-        first_checkpoint = torch.load(pth_files[0], map_location=device, weights_only=False)['model_g_sd']
-        ref_sd = {k.replace('module.', ''): v for k, v in first_checkpoint.items()}
-        valid_state_dicts.append(ref_sd)
+        valid_state_dicts_g = []
+        valid_state_dicts_t = []
+        
+        first_checkpoint = torch.load(pth_files[0], map_location=device, weights_only=False)
+        ref_sd_g = {k.replace('module.', ''): v for k, v in first_checkpoint['model_g_sd'].items()}
+        valid_state_dicts_g.append(ref_sd_g)
+        
+        if args.ensemble and 'model_t_sd' in first_checkpoint:
+            ref_sd_t = {k.replace('module.', ''): v for k, v in first_checkpoint['model_t_sd'].items()}
+            valid_state_dicts_t.append(ref_sd_t)
+            
         print(f"  ✅ [REF]     {pth_files[0].name}")
 
         for pth in pth_files[1:5]: 
             try:
-                raw_sd = torch.load(pth, map_location=device, weights_only=False)['model_g_sd']
-                clean_sd = {k.replace('module.', ''): v for k, v in raw_sd.items()}
+                full_ckpt = torch.load(pth, map_location=device, weights_only=False)
+                clean_sd_g = {k.replace('module.', ''): v for k, v in full_ckpt['model_g_sd'].items()}
                 
                 is_compatible = True
-                if set(clean_sd.keys()) != set(ref_sd.keys()):
+                if set(clean_sd_g.keys()) != set(ref_sd_g.keys()):
                     is_compatible = False
                 else:
-                    for k in ref_sd.keys():
-                        if clean_sd[k].shape != ref_sd[k].shape:
+                    for k in ref_sd_g.keys():
+                        if clean_sd_g[k].shape != ref_sd_g[k].shape:
                             is_compatible = False
                             break
                 
                 if is_compatible:
                     print(f"  ✅ [INCLUDE] {pth.name}")
-                    valid_state_dicts.append(clean_sd)
+                    valid_state_dicts_g.append(clean_sd_g)
+                    
+                    # Only collect Teacher if SWA AND Ensemble are active
+                    if args.ensemble and 'model_t_sd' in full_ckpt:
+                        clean_sd_t = {k.replace('module.', ''): v for k, v in full_ckpt['model_t_sd'].items()}
+                        valid_state_dicts_t.append(clean_sd_t)
                 else:
                     print(f"  ⚠️ [SKIP]    {pth.name} (Shape/Arch Mismatch)")
             except Exception as e:
                 print(f"  ❌ [ERROR]   {pth.name}: {e}")
 
-        if not valid_state_dicts: raise RuntimeError("No compatible checkpoints found!")
+        if not valid_state_dicts_g: raise RuntimeError("No compatible checkpoints found!")
         
-        swa_dict = {k: v.clone().float() for k, v in valid_state_dicts[0].items()}
-        for i in range(1, len(valid_state_dicts)):
-            for k, v in valid_state_dicts[i].items():
-                swa_dict[k] += v.float()
-        for k in swa_dict.keys(): swa_dict[k] /= len(valid_state_dicts)
+        # Average Student
+        swa_dict_g = {k: v.clone().float() for k, v in valid_state_dicts_g[0].items()}
+        for i in range(1, len(valid_state_dicts_g)):
+            for k, v in valid_state_dicts_g[i].items():
+                swa_dict_g[k] += v.float()
+        for k in swa_dict_g.keys(): swa_dict_g[k] /= len(valid_state_dicts_g)
+        model.load_state_dict(swa_dict_g, strict=False)
+        print("✅ SWA Student Weights Loaded.")
         
-        model.load_state_dict(swa_dict, strict=False)
-        print("✅ SWA Weights Loaded.")
+        # Average Teacher (If available across the sweep)
+        if args.ensemble and len(valid_state_dicts_t) == len(valid_state_dicts_g):
+            swa_dict_t = {k: v.clone().float() for k, v in valid_state_dicts_t[0].items()}
+            for i in range(1, len(valid_state_dicts_t)):
+                for k, v in valid_state_dicts_t[i].items():
+                    swa_dict_t[k] += v.float()
+            for k in swa_dict_t.keys(): swa_dict_t[k] /= len(valid_state_dicts_t)
+            model_t.load_state_dict(swa_dict_t, strict=False)
+            teacher_loaded = True
+            print("✅ SWA Teacher Weights Loaded for Ensembling!")
+        elif args.ensemble:
+            print("⚠️ --ensemble requested, but Teacher SWA failed (not all checkpoints had Teacher weights).")
 
     else:
         pth_files = list(ckpt_dir.glob("model_acc_*.pth"))
         if pth_files:
-            pth_files.sort(key=lambda x: float(x.stem.split('_')[2]), reverse=True)
+            pth_files.sort(key=extract_acc, reverse=True)
             best_ckpt = pth_files[0]
             print(f"\nLoading Best Checkpoint: {best_ckpt}")
         else:
@@ -102,9 +147,23 @@ if __name__ == "__main__":
         print(f"\nLoading Single Checkpoint: {best_ckpt}")
         if not best_ckpt.exists(): raise FileNotFoundError(f"Checkpoint not found: {best_ckpt}")
         
-        raw_sd = torch.load(best_ckpt, map_location=device, weights_only=False)['model_g_sd']
+        full_ckpt = torch.load(best_ckpt, map_location=device, weights_only=False)
+        
+        # Load Student
+        raw_sd = full_ckpt['model_g_sd']
         state_dict = {k.replace('module.', ''): v for k, v in raw_sd.items()}
         model.load_state_dict(state_dict, strict=False)
+
+        # ---> Load Teacher (Only if requested)
+        if args.ensemble:
+            if 'model_t_sd' in full_ckpt:
+                raw_sd_t = full_ckpt['model_t_sd']
+                state_dict_t = {k.replace('module.', ''): v for k, v in raw_sd_t.items()}
+                model_t.load_state_dict(state_dict_t, strict=False)
+                teacher_loaded = True
+                print("✅ Teacher Oracle Loaded for Ensembling!")
+            else:
+                print("⚠️ --ensemble requested, but no Teacher found in checkpoint. Running Student only.")
 
     # --- DATASET ---
     print(f"\nPreparing Data from {args.split}...")
@@ -124,7 +183,6 @@ if __name__ == "__main__":
     )
 
     # --- ALPHABET SYNC ---
-    # Passing the exact 37-character string so the train_utils converter aligns properly
     true_converter = strLabelConverter(config.get('alphabet', "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-"))
     
     # --- METADATA TRACK ALIGNMENT ---
@@ -160,8 +218,6 @@ if __name__ == "__main__":
             
             # --- BULLETPROOF TRACK NAME EXTRACTION ---
             track_name = None
-            
-            # 1. Hunt safely in the batch metadata strings
             for k, v in batch.items():
                 if isinstance(v, (list, tuple, str)):
                     match = re.search(r'(track_\d+)', str(v))
@@ -169,67 +225,112 @@ if __name__ == "__main__":
                         track_name = match.group(1)
                         break
             
-            # 2. If completely stripped by dataloader, pull from exact metadata.pkl order
             if not track_name and track_names_ordered and total_plates < len(track_names_ordered):
                 track_name = track_names_ordered[total_plates]
-                
-            # 3. Ultimate Fallback
             if not track_name:
                 track_name = f"track_{total_plates:05d}"
             
             B, Seq_Len, C, H, W = lr_seqs.shape
             flat_imgs = lr_seqs.view(B * Seq_Len, C, H, W)
+            
+            # Match the training script's memory format for exact reproducibility
+            flat_imgs = flat_imgs.contiguous().to(memory_format=torch.channels_last)
+
+            pred_tracker = {}
+
+            # Helper function to decode and accumulate votes
+            # Helper function to decode and accumulate votes
+            def accumulate_votes(logits_tensor):
+                # ---> THE FIX: Branch the decoding logic!
+                if cls_loss_type == 'CTC':
+                    preds, scores = ctc_greedy_decoder(logits_tensor, true_converter, return_scores=True)
+                else:
+                    # Standard Cross-Entropy Decoding (for FL, CPPD, OTE)
+                    preds = decode_batch_logits(logits_tensor, true_converter)
+                    scores = F.log_softmax(logits_tensor, dim=-1).max(dim=-1)[0].sum(dim=1)
+                    
+                for pred_str, conf_score in zip(preds, scores):
+                    if pred_str not in pred_tracker:
+                        pred_tracker[pred_str] = {'votes': 0, 'confidence': 0.0}
+                    pred_tracker[pred_str]['votes'] += 1
+                    pred_tracker[pred_str]['confidence'] += conf_score.item()
 
             with torch.amp.autocast('cuda', enabled=config.get('use_fp16', True)):
                 # ==========================================
-                # PASS 1: Base Resolution (0 degrees)
+                # PASS 1: Base Resolution (STUDENT)
                 # ==========================================
                 output_base = model(flat_imgs, temporal_pool=True) 
                 if isinstance(output_base, tuple): output_base = output_base[0]
+                accumulate_votes(output_base['logits'])
                 
-                # UPDATED SHAPE: 12 Queries, 39 Classes
-                logits_base = output_base['logits'].view(B, Seq_Len, 12, 39).mean(dim=1)
+                # ---> THE CASCADE UPGRADE: The Teacher reads the Student's drawing!
+                if teacher_loaded and 'sr_image' in output_base:
+                    # Detach the SR image so gradients don't leak, and pass the full HR tensor!
+                    generated_hr = output_base['sr_image'].detach()
+                    
+                    # The Teacher reads the hallucinated HR image
+                    out_base_t = model_t(generated_hr, temporal_pool=True)
+                    if isinstance(out_base_t, tuple): out_base_t = out_base_t[0]
+                    
+                    accumulate_votes(out_base_t['logits'])
                 
                 if args.tta:
-                    # PASS 2 & 3: Positive Sweep (+5, +10)
-                    flat_p5 = TF.rotate(flat_imgs, angle=2.5, interpolation=TF.InterpolationMode.BILINEAR)
-                    out_p5 = model(flat_p5, temporal_pool=True)
-                    if isinstance(out_p5, tuple): out_p5 = out_p5[0]
-                    logits_p5 = out_p5['logits'].view(B, Seq_Len, 12, 39).mean(dim=1)
-
-                    flat_p10 = TF.rotate(flat_imgs, angle=5.0, interpolation=TF.InterpolationMode.BILINEAR)
-                    out_p10 = model(flat_p10, temporal_pool=True)
-                    if isinstance(out_p10, tuple): out_p10 = out_p10[0]
-                    logits_p10 = out_p10['logits'].view(B, Seq_Len, 12, 39).mean(dim=1)
-
-                    # PASS 4 & 5: Negative Sweep (-5, -10)
-                    flat_m5 = TF.rotate(flat_imgs, angle=-2.5, interpolation=TF.InterpolationMode.BILINEAR)
-                    out_m5 = model(flat_m5, temporal_pool=True)
-                    if isinstance(out_m5, tuple): out_m5 = out_m5[0]
-                    logits_m5 = out_m5['logits'].view(B, Seq_Len, 12, 39).mean(dim=1)
-
-                    flat_m10 = TF.rotate(flat_imgs, angle=-5.0, interpolation=TF.InterpolationMode.BILINEAR)
-                    out_m10 = model(flat_m10, temporal_pool=True)
-                    if isinstance(out_m10, tuple): out_m10 = out_m10[0]
-                    logits_m10 = out_m10['logits'].view(B, Seq_Len, 12, 39).mean(dim=1)
+                    # PASS 2: Positive Sweep (+2.5)
+                    flat_p2_5 = TF.rotate(flat_imgs, angle=2.5, interpolation=TF.InterpolationMode.BILINEAR)
+                    out_p2_5 = model(flat_p2_5, temporal_pool=True)
+                    if isinstance(out_p2_5, tuple): out_p2_5 = out_p2_5[0]
+                    accumulate_votes(out_p2_5['logits'])
                     
-                    # --- SOTA 5-WAY LOGIT ENSEMBLING ---
-                    # --- SOTA 5-WAY LOGIT ENSEMBLING ---
-                    final_logits = (logits_base + logits_p5 + logits_p10 + logits_m5 + logits_m10) / 5.0
-                else:
-                    final_logits = logits_base
+                    if teacher_loaded:
+                        out_t_p2_5 = model_t(flat_p2_5, temporal_pool=True)
+                        if isinstance(out_t_p2_5, tuple): out_t_p2_5 = out_t_p2_5[0]
+                        accumulate_votes(out_t_p2_5['logits'])
 
-                # ==========================================================
-                # THE FIX: Native Decoding (No more Viterbi Masks!)
-                # ==========================================================
-                all_decoded_preds = decode_batch_logits(final_logits, true_converter)
-                final_pred_str = all_decoded_preds[0]
-                
-                # Dynamically average the confidence scores based on string length
-                probs = F.softmax(final_logits, dim=-1)
-                max_probs, _ = probs.max(dim=-1) # (1, 12)
-                pred_len = len(final_pred_str)
-                avg_conf = max_probs[0, :pred_len].mean().item() if pred_len > 0 else 0.0
+                    # PASS 3: Positive Sweep (+5.0)
+                    flat_p5_0 = TF.rotate(flat_imgs, angle=5.0, interpolation=TF.InterpolationMode.BILINEAR)
+                    out_p5_0 = model(flat_p5_0, temporal_pool=True)
+                    if isinstance(out_p5_0, tuple): out_p5_0 = out_p5_0[0]
+                    accumulate_votes(out_p5_0['logits'])
+                    
+                    if teacher_loaded:
+                        out_t_p5_0 = model_t(flat_p5_0, temporal_pool=True)
+                        if isinstance(out_t_p5_0, tuple): out_t_p5_0 = out_t_p5_0[0]
+                        accumulate_votes(out_t_p5_0['logits'])
+
+                    # PASS 4: Negative Sweep (-2.5)
+                    flat_m2_5 = TF.rotate(flat_imgs, angle=-2.5, interpolation=TF.InterpolationMode.BILINEAR)
+                    out_m2_5 = model(flat_m2_5, temporal_pool=True)
+                    if isinstance(out_m2_5, tuple): out_m2_5 = out_m2_5[0]
+                    accumulate_votes(out_m2_5['logits'])
+                    
+                    if teacher_loaded:
+                        out_t_m2_5 = model_t(flat_m2_5, temporal_pool=True)
+                        if isinstance(out_t_m2_5, tuple): out_t_m2_5 = out_t_m2_5[0]
+                        accumulate_votes(out_t_m2_5['logits'])
+
+                    # PASS 5: Negative Sweep (-5.0)
+                    flat_m5_0 = TF.rotate(flat_imgs, angle=-5.0, interpolation=TF.InterpolationMode.BILINEAR)
+                    out_m5_0 = model(flat_m5_0, temporal_pool=True)
+                    if isinstance(out_m5_0, tuple): out_m5_0 = out_m5_0[0]
+                    accumulate_votes(out_m5_0['logits'])
+                    
+                    if teacher_loaded:
+                        out_t_m5_0 = model_t(flat_m5_0, temporal_pool=True)
+                        if isinstance(out_t_m5_0, tuple): out_t_m5_0 = out_t_m5_0[0]
+                        accumulate_votes(out_t_m5_0['logits'])
+
+            # ==========================================================
+            # STRING-LEVEL ENSEMBLING
+            # ==========================================================
+            sorted_preds = sorted(
+                pred_tracker.items(), 
+                key=lambda item: (item[1]['votes'], item[1]['confidence']), 
+                reverse=True
+            )
+            
+            final_pred_str = sorted_preds[0][0]
+            # Average the confidence based on how many votes the winning string got
+            avg_conf = sorted_preds[0][1]['confidence'] / sorted_preds[0][1]['votes']
 
             # --- METRICS & LOGGING ---
             if args.mode == 'val':
@@ -238,14 +339,15 @@ if __name__ == "__main__":
                 if is_correct:
                     correct_plates += 1
                 else:
-                    failures.append(f"{track_name} | Pred: {final_pred_str} | GT: {gt_text}")
+                    failures.append(f"{track_name} | Pred: {final_pred_str} | GT: {gt_text} | Votes: {sorted_preds[0][1]['votes']}")
                 
-                # --- Layout Specific Tracking ---
-                if len(gt_text) >= 5:
-                    if gt_text[4].isalpha(): # Mercosur uses a letter at the 5th position
+                # --- Layout Specific Tracking (Hyphen-safe) ---
+                clean_gt = gt_text.replace('-', '')
+                if len(clean_gt) >= 5:
+                    if clean_gt[4].isalpha(): 
                         total_mercosur += 1
                         if is_correct: correct_mercosur += 1
-                    else: # Old Brazilian uses a number
+                    else: 
                         total_brazil += 1
                         if is_correct: correct_brazil += 1
                         
@@ -254,7 +356,7 @@ if __name__ == "__main__":
                 submission_lines.append(f"{track_name},{final_pred_str};{avg_conf:.4f}")
             
             total_plates += 1
-
+            
     # 5. FINAL RESULTS
     if args.mode == 'val':
         acc = (correct_plates / total_plates) * 100.0 if total_plates > 0 else 0
@@ -272,7 +374,8 @@ if __name__ == "__main__":
             print(f"❌ Failures saved to {fail_path}")
             
     elif args.mode == 'test':
-        submission_lines.sort() # Ensure numerical track order
+        # Sort numerically by extracting the track ID
+        submission_lines.sort(key=lambda x: int(re.search(r'track_(\d+)', x).group(1)) if re.search(r'track_(\d+)', x) else 0)
         
         with open(args.output, 'w') as f: 
             f.write("\n".join(submission_lines))

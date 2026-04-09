@@ -27,14 +27,17 @@
         .card-header { padding: 8px 15px; background: #202020; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
         
         .card-body { flex-grow: 1; min-height: 0; display: flex; flex-direction: column; padding: 8px; }
-        .img-box { background: #000; border-radius: 4px; flex-grow: 1; display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto; }
+        .img-box { background: #000; border-radius: 4px; flex-grow: 1; display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto; padding-right: 4px; }
         
         .label-mini { font-size: 9px; color: #666; margin-bottom: 2px; text-transform: uppercase; letter-spacing: 0.5px; }
-        img { width: 100%; border: 1px solid #222; background: #050505; }
+        img { width: 100%; border: 1px solid #222; background: #050505; border-radius: 2px; }
         
-        /* Specific sizing for the hierarchy strip to prevent distortion */
-        #hierarchy { object-fit: fill; height: auto; min-height: 60px; }
-        #attn, #latent { object-fit: contain; flex-shrink: 0; }
+        /* Side-by-Side Flex Layout */
+        .input-comparison { display: flex; gap: 10px; }
+        .input-comparison > div { flex: 1; display: flex; flex-direction: column; }
+        .input-comparison img { aspect-ratio: 3/1; object-fit: fill; }
+        
+        #latent { object-fit: contain; flex-shrink: 0; }
 
         .table-container { flex-grow: 1; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #333 transparent; }
         table { width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
@@ -66,24 +69,33 @@
         <div class="top-row">
             <div class="card">
                 <div class="card-header">
-                    <span>LIVE FEATURE & ATTENTION MAPS</span>
+                    <span>LIVE FEATURE MAPS</span>
                     <span id="epoch-badge" class="badge">INIT</span>
                 </div>
                 <div class="card-body">
                     <div class="img-box">
-                        <div>
-                            <div class="label-mini">Attention Target Lock (ViT)</div>
-                            <img id="attn" src="attn_ep.png">
-                        </div>
-                        
-                        <div>
-                            <div class="label-mini">INR Progression (Coarse ➔ Fine ➔ Refined)</div>
-                            <img id="hierarchy" src="latent_hierarchy.png">
-                        </div>
-
-                        <div>
-                            <div class="label-mini">Refined Latent Channels</div>
-                            <img id="latent" src="latent_ep.png">
+                        <div class="input-comparison">
+                            <div style="gap: 10px;">
+                                <div>
+                                    <div class="label-mini">Student Input (LR + Noise)</div>
+                                    <img id="student-in" src="student_in.png">
+                                </div>
+                                <div>
+                                    <div class="label-mini">Student SR (Hallucination)</div>
+                                    <img id="student-sr" src="student_sr.png">
+                                </div>
+                            </div>
+                            
+                            <div style="gap: 10px;">
+                                <div>
+                                    <div class="label-mini">Teacher Target (Clean HR)</div>
+                                    <img id="teacher-in" src="teacher_in.png">
+                                </div>
+                                <div>
+                                    <div class="label-mini">Teacher SR (Oracle)</div>
+                                    <img id="teacher-sr" src="teacher_sr.png">
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -129,10 +141,11 @@
 
         async function update() {
             const r = Math.random();
-            // Refreshing the three core visual buffers
-            document.getElementById('attn').src = 'attn_ep.png?r=' + r;
-            document.getElementById('hierarchy').src = 'latent_hierarchy.png?r=' + r;
-            document.getElementById('latent').src = 'latent_ep.png?r=' + r;
+            // Refreshing the updated visual buffers
+            document.getElementById('student-in').src = 'student_in.png?r=' + r;
+            document.getElementById('teacher-in').src = 'teacher_in.png?r=' + r;
+            document.getElementById('student-sr').src = 'student_sr.png?r=' + r;
+            document.getElementById('teacher-sr').src = 'teacher_sr.png?r=' + r;
             
             fetch('../last.pth', { method: 'HEAD' }).then(res => {
                 const lastMod = new Date(res.headers.get('Last-Modified'));

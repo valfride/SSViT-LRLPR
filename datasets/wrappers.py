@@ -25,17 +25,6 @@ try:
     from PhysicalPlateGenerator import PhysicalPlateGenerator
 except ImportError:
     print("⚠️ Warning: PhysicalPlateGenerator not found. Synthetic generation disabled.")
-# --- NEW: Layout Formatter ---
-def format_brazilian_plate(plate_str):
-    """
-    Dynamically injects a hyphen into old Brazilian plates (LLLNNNN -> LLL-NNNN).
-    Safely ignores Mercosur plates (LLLNLNN) or already formatted plates.
-    """
-    plate_str = str(plate_str).upper().strip()
-    # Check if it is EXACTLY 3 letters followed by 4 numbers
-    if re.fullmatch(r'[A-Z]{3}[0-9]{4}', plate_str):
-        return f"{plate_str[:3]}-{plate_str[3:]}"
-    return plate_str
 
 
 class AdvancedPhysicsMotionBlur(ImageOnlyTransform):
@@ -102,22 +91,25 @@ def _match_color_and_contrast(src: torch.Tensor, target: torch.Tensor) -> torch.
 
 class FourierCCTVDegradation(ImageOnlyTransform):
     """Transfers style/degradation of a real LR crop to an HR image."""
-    def __init__(self, lr_image_pool, beta_range=(0.05, 0.10), jpeg_range=(55, 65), always_apply=False, p=0.5):
+    # ---> THE FIX: Add the `apply_jpeg` parameter
+    def __init__(self, lr_image_pool, beta_range=(0.05, 0.10), jpeg_range=(55, 65), apply_jpeg=True, always_apply=False, p=0.5):
         super().__init__(always_apply, p)
         self.lr_image_pool = lr_image_pool 
         self.beta_range = beta_range
         self.jpeg_range = jpeg_range
+        self.apply_jpeg = apply_jpeg
 
     def apply(self, img, **params):
         target_lr_np = random.choice(self.lr_image_pool)
         beta = random.uniform(self.beta_range[0], self.beta_range[1])
-        jpeg_quality = random.randint(self.jpeg_range[0], self.jpeg_range[1])
-        blur_sigma = random.uniform(2.0, 3.0)
+        
+        # Keep blur extremely subtle if we are preserving edges
+        blur_sigma = random.uniform(0.1, 0.8) 
 
         img_hr = TF.to_tensor(img).unsqueeze(0)
         img_lr = TF.to_tensor(target_lr_np).unsqueeze(0)
 
-        img_hr_blurred = T.GaussianBlur(kernel_size=(7, 7), sigma=(blur_sigma, blur_sigma))(img_hr)
+        img_hr_blurred = T.GaussianBlur(kernel_size=(3, 3), sigma=(blur_sigma, blur_sigma))(img_hr)
         lr_h, lr_w = img_lr.shape[-2:]
         img_hr_physical = F.interpolate(img_hr_blurred, size=(lr_h, lr_w), mode='bicubic', align_corners=False).clamp(0, 1)
 
@@ -156,15 +148,20 @@ class FourierCCTVDegradation(ImageOnlyTransform):
         degraded_y = ((degraded_y - deg_mean) / (deg_std + 1e-8) * hr_std) + hr_mean
         degraded_y = degraded_y.clamp(0, 1)
         
-        hr_ycbcr_mixed = hr_ycbcr.clone()
-        hr_ycbcr_mixed[:, 0:1, :, :] = degraded_y
-        final_rgb = _ycbcr_to_rgb(hr_ycbcr_mixed).clamp(0, 1)
+        content_ycbcr_mixed = hr_ycbcr.clone()
+        content_ycbcr_mixed[:, 0:1, :, :] = degraded_y
+        final_rgb = _ycbcr_to_rgb(content_ycbcr_mixed).clamp(0, 1)
 
-        pil_img = TF.to_pil_image(final_rgb.squeeze(0))
-        buffer = io.BytesIO()
-        pil_img.save(buffer, format="JPEG", quality=jpeg_quality)
-        
-        return np.array(Image.open(buffer))
+        # ---> THE FIX: Branch the output based on the JPEG flag!
+        if self.apply_jpeg:
+            jpeg_quality = random.randint(self.jpeg_range[0], self.jpeg_range[1])
+            pil_img = TF.to_pil_image(final_rgb.squeeze(0))
+            buffer = io.BytesIO()
+            pil_img.save(buffer, format="JPEG", quality=jpeg_quality)
+            return np.array(Image.open(buffer))
+        else:
+            # Return the uncompressed numpy array directly
+            return (final_rgb.squeeze(0).permute(1, 2, 0).numpy() * 255.0).astype(np.uint8)
 
 class FourierLRtoLRMixup(ImageOnlyTransform):
     """Intra-Domain Style Transfer: Swaps styles between two real LR images without structural blur."""
@@ -227,7 +224,8 @@ class FourierLRtoLRMixup(ImageOnlyTransform):
 class Sequential_lr_sr(Dataset):
     def __init__(self, imgW, imgH, aug, image_aspect_ratio, background,
                 test=False, in_images=1, synthetic_prob=0.0, fully_synthetic_prob=0.0, 
-                use_cache=False, skip_low_res=False, dataset=None, **kwargs):
+                use_cache=False, skip_low_res=False, dataset=None, 
+                return_hr=False, use_fda_hr=True, use_fda_lr=True, **kwargs): # <--- NEW FLAGS
         
         self.imgW = imgW      
         self.imgH = imgH      
@@ -235,6 +233,11 @@ class Sequential_lr_sr(Dataset):
         self.dataset = dataset
         self.test = test
         self.normalize = Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        self.return_hr = return_hr
+        
+        # ---> NEW: Save the flags to the class
+        self.use_fda_hr = use_fda_hr
+        self.use_fda_lr = use_fda_lr
         
         assert self.dataset is not None, "Dataset is None"
 
@@ -248,39 +251,47 @@ class Sequential_lr_sr(Dataset):
             ),
         ])
 
-        # 1. Gather a diverse pool of LR styles (ONE per track!)
+        # =========================================================
+        # 1. GROUP BY TRACK (Supports LR Tracks AND HR-Only RODOSOL)
+        # =========================================================
+        from collections import defaultdict
+        self.track_dict = defaultdict(lambda: {'lr': [], 'hr': []})
         self.lr_pool = []
-        target_pool_size = 5000
-        seen_tracks = set() 
         
-        indices = list(range(len(self.dataset)))
-        random.shuffle(indices)
-
-        for idx in indices:
-            if len(self.lr_pool) >= target_pool_size:
-                break 
-                
-            item = self.dataset[idx]
+        for item in self.dataset:
             filename = item.get('name', '')
+            path_str = str(item.get('img_path', ''))
             
-            if filename.startswith('lr-'):
-                path_str = str(item.get('img_path', ''))
-                try:
+            try:
+                if 'track_' in path_str:
                     track_id = path_str.split('track_')[1].split('/')[0] 
-                except IndexError:
-                    track_id = Path(path_str).parent.name 
+                else:
+                    track_id = Path(path_str).stem 
+            except Exception:
+                track_id = filename
                 
-                if track_id not in seen_tracks:
-                    img_raw = item['img_raw']
-                    if img_raw is not None and len(img_raw.shape) == 3:
-                        img_rgb = cv2.cvtColor(img_raw, cv2.COLOR_BGR2RGB)
-                        self.lr_pool.append(img_rgb)
-                        seen_tracks.add(track_id) 
+            if filename.startswith('hr-') or 'hr' in path_str.lower() or 'rodosol' in path_str.lower():
+                self.track_dict[track_id]['hr'].append(item)
+            else:
+                self.track_dict[track_id]['lr'].append(item)
+                
+                # ---> OPTIMIZATION: Only build the FDA style pool if FDA is actually enabled!
+                if (self.use_fda_hr or self.use_fda_lr) and not self.test:
+                    if len(self.lr_pool) < 5000:
+                        img_raw = item['img_raw']
+                        if img_raw is not None and len(img_raw.shape) == 3:
+                            self.lr_pool.append(img_raw)
+                
+        self.valid_tracks = [
+            tid for tid, data in self.track_dict.items() 
+            if len(data['lr']) > 0 or len(data['hr']) > 0
+        ]
         
-        if len(self.lr_pool) == 0:
-            print("⚠️ WARNING: Could not find any unique 'lr-' tracks for the FDA pool!")
+        print(f"📦 Grouped dataset into {len(self.valid_tracks)} unique tracks for 5x faster epochs.")
+        if self.use_fda_hr or self.use_fda_lr:
+            print(f"📊 FDA Style Pool Size: {len(self.lr_pool)}")
         else:
-            print(f"📊 Successfully built FDA Style Pool using {len(self.lr_pool)} unique tracks.")
+            print("⚡ FDA Augmentations Disabled: Skipped building style pool.")
 
         self.syn_prob = synthetic_prob
         if self.syn_prob > 0.0:
@@ -289,16 +300,43 @@ class Sequential_lr_sr(Dataset):
             self.syn_engine = PhysicalPlateGenerator(asset_dir=asset_path)
 
     def __len__(self):
-        return len(self.dataset)
+        return len(self.valid_tracks)
 
     def __getitem__(self, idx):
-        item = self.dataset[idx]
-        img_raw = item['img_raw'].copy()   
-        plate_gt = format_brazilian_plate(item['gt'])           
-        filename = item['name']
+        track_id = self.valid_tracks[idx]
+        track_data = self.track_dict[track_id]
         
-        is_hr_file = filename.startswith("hr-")
-
+        has_lr = len(track_data['lr']) > 0
+        has_hr = len(track_data['hr']) > 0
+        
+        # =========================================================
+        # 2. FRAME SELECTION (Dynamic Routing)
+        # =========================================================
+        if has_lr:
+            item_lr = random.choice(track_data['lr'])
+            img_raw = item_lr['img_raw'].copy()   
+            plate_gt = item_lr['gt']       
+            filename = item_lr['name']
+            is_hr_file = False
+            
+            if self.return_hr:
+                if has_hr:
+                    item_hr = random.choice(track_data['hr'])
+                    img_hr_clean = item_hr['img_raw'].copy()
+                else:
+                    img_hr_clean = img_raw.copy() 
+        else:
+            item_hr = random.choice(track_data['hr'])
+            img_raw = item_hr['img_raw'].copy() 
+            plate_gt = item_hr['gt']
+            filename = item_hr['name']
+            is_hr_file = True 
+            
+            if self.return_hr:
+                img_hr_clean = item_hr['img_raw'].copy()
+        # =========================================================
+        # 4. SYNTHETIC ENGINE
+        # =========================================================
         if getattr(self, 'syn_prob', 0.0) > 0 and random.random() < self.syn_prob:
             try:
                 import string
@@ -314,65 +352,117 @@ class Sequential_lr_sr(Dataset):
                 is_hr_file = True 
                 filename = f"syn_hr_{plate_gt}.jpg" 
                 
+                if self.return_hr:
+                    img_hr_clean = img_raw.copy()
+                    img_hr_resized = cv2.resize(img_hr_clean, (self.imgW, self.imgH), interpolation=cv2.INTER_CUBIC)
+                    img_sr_gt = cv2.resize(img_hr_clean, (sr_W, sr_H), interpolation=cv2.INTER_CUBIC)
+                
             except Exception as e:
                 print(f"❌ ENGINE CRASH on '{plate_gt}': {repr(e)}")
 
-        # --- STEP A: Augmentations via Domain Transfer ---
+        # =========================================================
+        # 5. THE DEGRADATION BRIDGE (Now Optional!)
+        # =========================================================
         if self.aug and not self.test and len(self.lr_pool) > 0:
             
-            # STEP A.1: HR -> LR Degradation
-            if is_hr_file:
+            # ---> THE FIX: Gated behind the self.use_fda_hr flag
+            if is_hr_file and self.use_fda_hr:
                 try:
                     degrader = FourierCCTVDegradation(
                         lr_image_pool=self.lr_pool, 
-                        beta_range=(0.05, 0.10), 
-                        jpeg_range=(55, 65)
+                        beta_range=(0.001, 0.02),
+                        jpeg_range=(85, 95)
                     )
                     img_raw = degrader.apply(img_raw)
                     
-                    if random.random() < 0.3:
-                        bc = A.RandomBrightnessContrast(brightness_limit=0.1, contrast_limit=(-0.1, 0.1), p=1.0)
-                        img_raw = bc(image=img_raw)['image']
+                    # if random.random() < 0.3:
+                    #     bc = A.RandomBrightnessContrast(brightness_limit=0.1, contrast_limit=(-0.1, 0.1), p=1.0)
+                    #     img_raw = bc(image=img_raw)['image']
                 except Exception as e:
                     print(f"❌ FDA CRASH: {e}")
                     
-            # STEP A.2: LR -> LR Style Swap (30% Chance)
-            elif not is_hr_file:
+            # ---> THE FIX: Gated behind the self.use_fda_lr flag
+            elif not is_hr_file and self.use_fda_lr:
                 if random.random() < 0.5:
                     try:
                         lr_mixer = FourierLRtoLRMixup(
                             lr_image_pool=self.lr_pool, 
-                            beta_range=(0.02, 0.08) 
+                            beta_range=(0.001, 0.02)
                         )
                         img_raw = lr_mixer.apply(img_raw)
                     except Exception as e:
                         print(f"❌ LR-to-LR Mixup CRASH: {e}")
 
-        # STEP B: Final Resize (Always happens to guarantee tensor shape)
+        # Final Resizes for the Student
         img_resized = cv2.resize(img_raw, (self.imgW, self.imgH), interpolation=cv2.INTER_CUBIC)
 
-        # STEP C: Geometric Augmentation (Shift/Scale/Rotate)
+        # =========================================================
+        # 6. TEACHER SOFTENING & JOINT GEOMETRIC AUGMENTATION
+        # =========================================================
         if self.aug and not self.test:
-            augmented = self.geo_aug(image=img_resized)
-            img_resized = augmented['image']
+            if self.return_hr:
+                # Stream A: What the Teacher actually looks at
+                img_hr_teacher_input = img_hr_clean.copy()
+                
+                # ---> Mild Teacher Domain Softening (50% chance)
+                if len(self.lr_pool) > 0 and random.random() < 0.5:
+                    try:
+                        mild_degrader = FourierCCTVDegradation(
+                            lr_image_pool=self.lr_pool, 
+                            beta_range=(0.001, 0.02), # Strictly style/lighting swap
+                            apply_jpeg=False          # NO geometric destruction!
+                        )
+                        img_hr_teacher_input = mild_degrader.apply(img_hr_teacher_input)
+                    except Exception as e:
+                        pass # Failsafe: just use the clean image if FDA crashes
+                
+                # Resize the softened image for the Teacher's network
+                img_hr_resized = cv2.resize(img_hr_teacher_input, (self.imgW, self.imgH), interpolation=cv2.INTER_CUBIC)
+                
+                # Stream B: The SR Ground Truth (MUST remain flawlessly clean!)
+                sr_W, sr_H = self.imgW * 2, self.imgH * 2
+                img_sr_gt = cv2.resize(img_hr_clean, (sr_W, sr_H), interpolation=cv2.INTER_CUBIC)
 
-        # Convert to Tensor and Normalize [-1, 1]
+                # ---> THE FIX: JOINT GEOMETRIC AUGMENTATION <---
+                # This ensures the Student LR, Teacher HR, and SR Ground Truth all rotate together!
+                augmented = self.geo_aug(image=img_resized, image_hr=img_hr_resized, image_sr=img_sr_gt)
+                img_resized = augmented['image']
+                img_hr_resized = augmented['image_hr']
+                img_sr_gt = augmented['image_sr']
+            else:
+                augmented = self.geo_aug(image=img_resized)
+                img_resized = augmented['image']
+
+        # =========================================================
+        # 7. TENSOR CONVERSION
+        # =========================================================
         t_lr = self.normalize(ToTensor()(img_resized.copy()))
         
-        return {
+        out_dict = {
             'lr': t_lr,       
             'gt': plate_gt,
             'name': filename,
             'is_hr': is_hr_file
         }
-
+        
+        if self.return_hr:
+            out_dict['hr'] = self.normalize(ToTensor()(img_hr_resized.copy()))
+            out_dict['hr_gt'] = self.normalize(ToTensor()(img_sr_gt.copy()))
+            
+        return out_dict
     def collate_fn(self, batch):
-        return {
+        out_batch = {
             'lr': torch.stack([b['lr'] for b in batch]),
             'gt': [b['gt'] for b in batch],
             'name': [b['name'] for b in batch],
             'is_hr': torch.tensor([b['is_hr'] for b in batch], dtype=torch.bool) 
         }
+        
+        if 'hr' in batch[0]:
+            out_batch['hr'] = torch.stack([b['hr'] for b in batch])
+            out_batch['hr_gt'] = torch.stack([b['hr_gt'] for b in batch]) 
+            
+        return out_batch
 
 @register('VSR_Sequence_collate_fn')
 class Sequential_Sequence_sr(Dataset):
@@ -414,9 +504,11 @@ class Sequential_Sequence_sr(Dataset):
         raw_sequence_items = self.grouped_dataset[idx]
         
         sequence_items = [item for item in raw_sequence_items if not item['name'].startswith('hr-')]
+        # ---> NEW: Grab the HR image for validation!
+        hr_items = [item for item in raw_sequence_items if item['name'].startswith('hr-')]
         
         if len(sequence_items) == 0:
-            raise ValueError(f"Track index {idx} has no LR images! (Only found HR files or it was empty)")
+            raise ValueError(f"Track index {idx} has no LR images!")
         
         if len(sequence_items) < self.in_images:
             sequence_items.extend([sequence_items[-1]] * (self.in_images - len(sequence_items)))
@@ -428,18 +520,28 @@ class Sequential_Sequence_sr(Dataset):
         names = []
         
         for item in sequence_items:
-            img_raw = item['img_raw']
+            img_raw = item['img_raw'].copy()
             lr_img = cv2.resize(img_raw, (self.imgW, self.imgH), interpolation=cv2.INTER_CUBIC)
-            t_lr = self.normalize(ToTensor()(lr_img.copy()))
-            
-            lr_tensors.append(t_lr)
-            gts.append(format_brazilian_plate(item['gt']))
+            lr_tensors.append(self.normalize(ToTensor()(lr_img.copy())))
+            gts.append(item['gt'])
             names.append(item['name'])
 
-        sequence_tensor = torch.stack(lr_tensors)
+        # ---> NEW: Process the HR image
+        if len(hr_items) > 0:
+            hr_img_raw = hr_items[0]['img_raw'].copy()
+        else:
+            # Fallback to the LR image if no HR exists for this track
+            hr_img_raw = sequence_items[0]['img_raw'].copy()
+            
+        hr_img_resized = cv2.resize(hr_img_raw, (self.imgW, self.imgH), interpolation=cv2.INTER_CUBIC)
+        t_hr = self.normalize(ToTensor()(hr_img_resized.copy()))
         
+        # Duplicate the HR image to match the sequence length expected by the model
+        hr_tensors = [t_hr] * len(lr_tensors)
+
         return {
-            'lr_seq': sequence_tensor,       
+            'lr_seq': torch.stack(lr_tensors),       
+            'hr_seq': torch.stack(hr_tensors), # <--- NEW
             'gt': gts[0], 
             'names': names
         }
@@ -447,6 +549,7 @@ class Sequential_Sequence_sr(Dataset):
     def collate_fn(self, batch):
         return {
             'lr_seq': torch.stack([b['lr_seq'] for b in batch]),
+            'hr_seq': torch.stack([b['hr_seq'] for b in batch]), # <--- NEW
             'gt': [b['gt'] for b in batch],
             'names': [b['names'] for b in batch]
         }
