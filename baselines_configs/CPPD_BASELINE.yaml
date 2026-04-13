@@ -30,9 +30,12 @@ optimizer_sr:
   args:
     lr: 1e-4
 
-loss:
-  name: SROCR_loss
-  args: {}
+
+LRScheduler:
+  name: OneCycleLR
+  warmup_epoch: 1.5 # pct_start 0.075*20 = 1.5ep
+  cycle_momentum: False
+
 
 # ==========================================================
 # DATALOADERS

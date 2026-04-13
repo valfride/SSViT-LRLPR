@@ -17,6 +17,11 @@ model_g:
     max_len: 25
     num_classes: 39 
 
+LRScheduler:
+  name: OneCycleLR
+  warmup_epoch: 1.5         # How many epochs to spend warming up the LR
+  cycle_momentum: False     # Keep False for Adam/AdamW
+
 optimizer_sr:
   name: adamW
   args:
@@ -26,7 +31,7 @@ optimizer_sr:
 warmup_epochs: 5 
 
 train_dataset:
-  batch: 128
+  batch: 64
   dataset:
     name: lmdb_dataset
     args:

@@ -26,11 +26,16 @@ optimizer_sr:
 
 warmup_epochs: 5 # Mandatory to prevent gradients shattering in ViT/MDiff
 
+LRScheduler:
+  name: OneCycleLR
+  warmup_epoch: 1.5 # pct_start 0.075*20 = 1.5ep
+  cycle_momentum: False
+
 # ==========================================================
 # DATALOADERS
 # ==========================================================
 train_dataset:
-  batch: 256
+  batch: 64
   dataset:
     name: lmdb_dataset
     args:

@@ -784,8 +784,9 @@ def prepare_targets(cls_loss_type, text_label, converter, device, is_training=Tr
     if cls_loss_type == 'CPPD':
         t1, t2 = converter.encode_cppd(text_label, max_len=7)
         return (t1.to(device), t2.to(device))
-    elif cls_loss_type in ['OTE', 'POLY', 'FL', 'CTC']:
-        encode_func = getattr(converter, f'encode_{"variable" if cls_loss_type in ["POLY", "CTC", "FL"] else "ote"}')
+    # ---> THE FIX: Route LISTER_INTERNAL to the variable encoder! <---
+    elif cls_loss_type in ['OTE', 'POLY', 'FL', 'CTC', 'LISTER_INTERNAL']:
+        encode_func = getattr(converter, f'encode_{"variable" if cls_loss_type in ["POLY", "CTC", "FL", "LISTER_INTERNAL"] else "ote"}')
         return encode_func(text_label, max_len=7).to(device)
     elif cls_loss_type == 'MDIFF_INTERNAL':
         targets = converter.encode_mdiff(text_label, max_len=7)
@@ -1176,7 +1177,7 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
                         attn_weights=preds_lr['attn_maps'], query_texts=decoded_s[0],             
                         epoch=current_epoch, batch_idx=batch_idx, save_dir=save_root / 'train_features'
                     )
-                
+
     final_loss = np.mean(loss_stats['total']) if loss_stats['total'] else 0.0
     if use_distillation: return final_loss, running_acc_seq_t
     return final_loss

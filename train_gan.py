@@ -111,8 +111,46 @@ def get_confusion_weights(dataset, stats_path, top_k=4):
 
     return torch.DoubleTensor(weights)
 
-def create_scheduler(optimizer, epoch_max):
-    return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=50, min_lr=1e-6)
+def create_scheduler(config, optimizer, epoch_max):
+    # 1. Grab the config block, fallback to an empty dict if not found
+    sched_config = config.get('LRScheduler', {})
+    name = sched_config.get('name', 'ReduceLROnPlateau')
+
+    if name == 'OneCycleLR':
+        # Extract the maximum LRs directly from your optimizer groups!
+        # (This perfectly preserves your 10x deform multiplier)
+        max_lrs = [group['lr'] for group in optimizer.param_groups]
+        
+        # Calculate pct_start mathematically based on warmup_epochs
+        warmup_epoch = sched_config.get('warmup_epoch', 1.5)
+        pct_start = warmup_epoch / epoch_max
+        cycle_momentum = sched_config.get('cycle_momentum', False)
+        
+        if is_main_process():
+            print(f"📈 Initializing OneCycleLR | Max LRs: {max_lrs} | Warmup: {warmup_epoch} epochs ({pct_start:.1%} pct_start)")
+            
+        return torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=max_lrs,
+            total_steps=epoch_max, # We are stepping once per epoch at the bottom of the loop
+            pct_start=pct_start,
+            cycle_momentum=cycle_momentum,
+            anneal_strategy='cos'
+        )
+        
+    elif name == 'CosineAnnealingLR':
+        if is_main_process(): print("📈 Initializing CosineAnnealingLR")
+        return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epoch_max, eta_min=1e-6)
+        
+    elif name == 'StepLR':
+        step_size = sched_config.get('step_size', 10)
+        gamma = sched_config.get('gamma', 0.5)
+        if is_main_process(): print(f"📈 Initializing StepLR (Step: {step_size}, Gamma: {gamma})")
+        return torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
+        
+    else:
+        if is_main_process(): print("📉 Initializing Default ReduceLROnPlateau")
+        return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=50, min_lr=1e-6)
 
 def create_teacher_scheduler(optimizer):
     # Patience is only 2! It will quickly drop the LR when the Teacher hits 99%
@@ -180,30 +218,6 @@ def main(config, save_path):
                     loss_fn_spread.ortho_scale], 'lr': 1e-2}
     ]
     optimizer_hyper = torch.optim.Adam(hyper_groups)
-    # -----------------------------------------------------------
-    
-    # ==========================================
-    # NEW: CONDITIONAL TEACHER SETUP
-    # ==========================================
-    #use_distillation = config.get('use_distillation', False)
-    #model_t, optimizer_t, scheduler_t = None, None, None
-
-    #if use_distillation:
-    #    if is_main_process(): print("🎓 Distillation Mode ON: Creating Teacher VSR Model...")
-    #    model_t = models.make(config['model_g']).to(local_rank)
-    #    model_t = model_t.to(memory_format=torch.channels_last)
-
-    #    teacher_lr = base_lr * config.get('teacher_lr_multiplier', 2.0)
-    #    
-    #    # Reuse your group splitting logic here
-    #    optimizer_t = torch.optim.Adam([
-    #        {'params': [p for n, p in model_t.named_parameters() if 'offset_conv' not in n and p.requires_grad], 'lr': teacher_lr},
-    #        {'params': [p for n, p in model_t.named_parameters() if 'offset_conv' in n and p.requires_grad], 'lr': teacher_lr * 10.0}
-    #    ])
-    #    scheduler_t = create_teacher_scheduler(optimizer_t)
-    #    
-    #    if is_main_process(): print(f"Teacher Base LR: {teacher_lr:.2e}")
-    ## ==========================================
 
 	# ==========================================
     # NEW: EMA MEAN TEACHER SETUP
@@ -228,7 +242,7 @@ def main(config, save_path):
         scheduler_t = None
 	
 		# --- 3. Initialize Student Scheduler ---
-    scheduler_g = create_scheduler(optimizer_g, epoch_max)
+    scheduler_g = create_scheduler(config, optimizer_g, epoch_max)
     # --- 4. Resume Logic ---
     start_epoch = 1; best_accuracy = 0.0
     
@@ -285,7 +299,7 @@ def main(config, save_path):
                         if len(optimizer_g.param_groups) > 1:
                             optimizer_g.param_groups[1]['lr'] = base_lr * 10.0
                             
-                        scheduler_g = create_scheduler(optimizer_g, epoch_max)
+                        scheduler_g = create_scheduler(config, optimizer_g, epoch_max)
                     else:
                         if 'scheduler_g' in checkpoint:
                             if is_main_process(): print("✅ Loading previous Scheduler state.")
@@ -369,11 +383,16 @@ def main(config, save_path):
     teacher_patience_counter = 0     # <--- NEW
     
     checkpoint = {}
+    
+    # ---> THE FIX: Initialize the dataloader ONCE before the loop begins!
+    train_loader, train_sampler = make_dataloader(config['train_dataset'], tag='train', save_path=save_path)
+    
     try:
         for epoch in range(start_epoch, epoch_max + 1):
             
-            train_loader, train_sampler = make_dataloader(config['train_dataset'], tag='train', save_path=save_path)
+            # Keep this INSIDE the loop so DDP shuffles correctly every epoch
             if hasattr(train_sampler, 'set_epoch'): train_sampler.set_epoch(epoch)
+            
             if is_main_process(): print(f"🔄 Starting Epoch {epoch}...")
             
             model_g.train()
@@ -492,13 +511,6 @@ def main(config, save_path):
                 if epochs_without_improvement >= early_stop_patience:
                     print(f"🛑 Early stopping triggered! No improvement for {early_stop_patience} epochs.")
                     break # Kills the epoch loop
-                
-            # --- NEW: EXPLICIT MEMORY CLEANUP ---
-            # Kill the 8 multiprocessing workers and free the shared RAM
-            del train_loader
-            del train_sampler
-            gc.collect()
-            torch.cuda.empty_cache() # Optional, but keeps VRAM perfectly fragmented
 
     except KeyboardInterrupt:
         if is_main_process():

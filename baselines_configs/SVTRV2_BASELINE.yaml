@@ -7,14 +7,6 @@ func_train: SROCR_TRAIN
 func_val: SROCR_VAL
 gpu_ids:
 - 0
-loss:
-  args:
-    ignore_index: -100
-    weights:
-      gan_weight: 0.0
-      ocr_weight: 1.0
-      pixel_weight: 0.0
-  name: SROCR_loss
 
 cls_loss: CTC              
 model_g:
@@ -22,6 +14,8 @@ model_g:
   args:
     num_classes: 38
 
+LRScheduler:
+  name: CosineAnnealingLR
 
 name: VSR_FeatureOCR_Curriculum
 optimizer_sr:
@@ -34,7 +28,7 @@ optimizer_sr:
   name: adamW
 resume: null
 train_dataset:
-  batch: 256
+  batch: 64
   dataset:
     args:
       in_memory: true
@@ -55,7 +49,7 @@ train_dataset:
     name: VSR_collate_fn
 use_fp16: true
 val_dataset:
-  batch: 256
+  batch: 64
   dataset:
     args:
       in_memory: true
