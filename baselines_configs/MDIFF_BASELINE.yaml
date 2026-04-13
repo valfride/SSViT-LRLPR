@@ -1,6 +1,8 @@
-name: OTE_BASELINE_Curriculum
+name: MDIFF_BASELINE_Curriculum
 alphabet: 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ
-cls_loss: OTE              
+
+# --- THE ROUTING FLAG ---
+cls_loss: MDIFF_INTERNAL              
 
 epoch_max: 500
 force_lr: true
@@ -10,26 +12,25 @@ use_fp16: true
 resume: null
 
 model_g:
-  name: OTE_BASELINE
+  name: MDIFF_BASELINE
   args:
     in_channels: 3
     max_len: 7
-    num_classes: 37
+    num_classes: 38 # train_utils base classes
 
 optimizer_sr:
   name: adamW
   args:
     lr: 1e-4
+    weight_decay: 0.05
 
-loss:
-  name: SROCR_loss
-  args: {}
+warmup_epochs: 5 # Mandatory to prevent gradients shattering in ViT/MDiff
 
 # ==========================================================
 # DATALOADERS
 # ==========================================================
 train_dataset:
-  batch: 64
+  batch: 256
   dataset:
     name: lmdb_dataset
     args:
@@ -39,18 +40,15 @@ train_dataset:
   wrapper:
     name: VSR_collate_fn
     args:
-      anagram_prob: 0.0
       aug: true
-      background: (127, 127, 127)
-      fully_synthetic_prob: 0.0
-      image_aspect_ratio: 3.0
-      imgH: 32  
-      imgW: 96  
+      imgH: 32
+      imgW: 96
       in_images: 1
-      synthetic_prob: 0.0
+      image_aspect_ratio: 3.0       # <--- THE FIX
+      background: (127, 127, 127)   # <--- THE FIX
 
 val_dataset:
-  batch: 64 
+  batch: 64
   dataset:
     name: lmdb_dataset
     args:
@@ -61,11 +59,9 @@ val_dataset:
     name: VSR_Sequence_collate_fn
     args:
       aug: false
-      background: (127, 127, 127)
-      fully_synthetic_prob: 0.0
-      image_aspect_ratio: 3.0
-      imgH: 32  
-      imgW: 96  
+      imgH: 32
+      imgW: 96
       in_images: 5
-      synthetic_prob: 0.0
       test: true
+      image_aspect_ratio: 3.0       # <--- THE FIX
+      background: (127, 127, 127)   # <--- THE FIX

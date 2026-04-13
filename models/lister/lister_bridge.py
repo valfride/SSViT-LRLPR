@@ -7,9 +7,8 @@ from .lister_decoder import LISTERDecoder
 class LISTER_Baseline(nn.Module):
     def __init__(self, in_channels=3, max_len=7, num_classes=37, **kwargs):
         super().__init__()
-        # 1. SVTRv2 Backbone (configured for 24x72 crops)
         self.encoder = SVTRv2LNConvTwo33(
-            max_sz=[24, 72],
+            max_sz=[32, 96],
             in_channels=in_channels,
             dims=[64, 128, 256],
             depths=[3, 6, 3],

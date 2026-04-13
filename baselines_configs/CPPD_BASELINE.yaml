@@ -20,7 +20,7 @@ model_g:
   args:
     in_channels: 3
     max_len: 7
-    num_classes: 37
+    num_classes: 38
 
 # ==========================================================
 # OPTIMIZERS & LOSS INSTANTIATION
@@ -38,7 +38,7 @@ loss:
 # DATALOADERS
 # ==========================================================
 train_dataset:
-  batch: 64
+  batch: 256
   dataset:
     name: lmdb_dataset
     args:
@@ -53,13 +53,13 @@ train_dataset:
       background: (127, 127, 127)
       fully_synthetic_prob: 0.0
       image_aspect_ratio: 3.0
-      imgH: 24  # Matched to cppd_bridge.py
-      imgW: 72  # Matched to cppd_bridge.py
+      imgH: 32  # Matched to cppd_bridge.py
+      imgW: 96  # Matched to cppd_bridge.py
       in_images: 1
       synthetic_prob: 0.0
 
 val_dataset:
-  batch: 64  # Kept lower (64) because in_images: 5 uses 5x the VRAM!
+  batch: 256  # Kept lower (64) because in_images: 5 uses 5x the VRAM!
   dataset:
     name: lmdb_dataset
     args:
@@ -73,8 +73,8 @@ val_dataset:
       background: (127, 127, 127)
       fully_synthetic_prob: 0.0
       image_aspect_ratio: 3.0
-      imgH: 24  # Matched to cppd_bridge.py
-      imgW: 72  # Matched to cppd_bridge.py
+      imgH: 32  # Matched to cppd_bridge.py
+      imgW: 96  # Matched to cppd_bridge.py
       in_images: 5
       synthetic_prob: 0.0
       test: true

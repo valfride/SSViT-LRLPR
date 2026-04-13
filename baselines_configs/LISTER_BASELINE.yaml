@@ -53,8 +53,8 @@ train_dataset:
       background: (127, 127, 127)
       fully_synthetic_prob: 0.0
       image_aspect_ratio: 3.0
-      imgH: 24  # Matched to lister_bridge.py expected input
-      imgW: 72  # Matched to lister_bridge.py expected input
+      imgH: 32  # Matched to lister_bridge.py expected input
+      imgW: 96  # Matched to lister_bridge.py expected input
       in_images: 1
       synthetic_prob: 0.0
 
@@ -73,8 +73,8 @@ val_dataset:
       background: (127, 127, 127)
       fully_synthetic_prob: 0.0
       image_aspect_ratio: 3.0
-      imgH: 24  # Matched to lister_bridge.py expected input
-      imgW: 72  # Matched to lister_bridge.py expected input
+      imgH: 32  # Matched to lister_bridge.py expected input
+      imgW: 96  # Matched to lister_bridge.py expected input
       in_images: 5
       synthetic_prob: 0.0
       test: true

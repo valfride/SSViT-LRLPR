@@ -15,43 +15,12 @@ import os
 import math
 from collections import Counter
 import higher # Add this at the top of train_utils.py
-from torch.nn.attention import SDPBackend
-
-
 import kornia.augmentation as K
 import torch.nn.functional as F
 import random
 import torch.nn as nn
+from models.igtr.igtr_label_encode import IGTRLabelEncode
 
-# 1. We build a custom module that safely downscales and upscales the whole batch
-class GPULanczosSimulator(nn.Module):
-    def __init__(self, scale_min=0.16, scale_max=0.18):
-        super().__init__()
-        self.scale_min = scale_min
-        self.scale_max = scale_max
-
-    def forward(self, x):
-        # x is (B, C, H, W)
-        scale = random.uniform(self.scale_min, self.scale_max)
-        down_h, down_w = max(1, int(x.shape[2] * scale)), max(1, int(x.shape[3] * scale))
-        
-        # Downscale
-        x_down = F.interpolate(x, size=(down_h, down_w), mode='bicubic', align_corners=False)
-        # Upscale back to original
-        x_up = F.interpolate(x_down, size=(x.shape[2], x.shape[3]), mode='bicubic', align_corners=False)
-        return x_up
-
-# 2. Your new, safe pipeline
-gpu_degrader = K.AugmentationSequential(
-    K.RandomGaussianBlur(kernel_size=(5, 5), sigma=(0.1, 2.0), p=1.0),
-    GPULanczosSimulator(scale_min=0.20, scale_max=0.30), # Replaces the dangerous crop!
-    K.ColorJitter(brightness=0.1, contrast=0.1, p=0.6),
-    K.RandomJPEG(jpeg_quality=(95, 100), p=0.8),
-    data_keys=["input"]
-)
-# ==============================================================================
-# 1. HELPERS
-# ==============================================================================
 def is_main_process():
     """Independent helper to check DDP status without importing from train_gan."""
     if not torch.distributed.is_available() or not torch.distributed.is_initialized():
@@ -129,6 +98,50 @@ class strLabelConverter(object):
             texts.append(''.join(char_list))
         return texts
     
+    def encode_mdiff(self, text_list, max_len=7):
+        """Creates the Masked Language targets (Noisy Batch) for MDiff."""
+        B = len(text_list)
+        eos_id = 0
+        mask_id = 37 # Because out_channels=39, mask_id is 37
+        pad_id = 38  # ignore_index is 38
+        
+        labels, lengths = [], []
+        
+        # 1. Base Encoding
+        for text in text_list:
+            chars = [self.dict.get(c, 0) for c in text[:max_len]]
+            lengths.append(len(chars))
+            chars.append(eos_id)
+            chars += [pad_id] * (max_len + 1 - len(chars))
+            labels.append(chars)
+            
+        labels = torch.tensor(labels, dtype=torch.long)
+        lengths = torch.tensor(lengths, dtype=torch.long)
+        
+        # 2. Diffusion Corruption (The Masking)
+        noisy_batch = labels.clone()
+        masked_indices = torch.zeros_like(labels, dtype=torch.bool)
+        p_mask = torch.ones(B, dtype=torch.float32) * 0.5 # 50% mask probability
+        
+        for i in range(B):
+            valid_len = lengths[i] + 1 
+            for j in range(valid_len):
+                # We randomly mask tokens with a 50% chance
+                if random.random() < 0.5: 
+                    noisy_batch[i, j] = mask_id
+                    masked_indices[i, j] = True
+                    
+            # Ensure at least ONE token is masked so the network has something to learn!
+            if not masked_indices[i].any():
+                idx_to_mask = random.randint(0, valid_len - 1)
+                noisy_batch[i, idx_to_mask] = mask_id
+                masked_indices[i, idx_to_mask] = True
+        
+        # 3. Reflect Targets (Same as labels)
+        reflect_ids = labels.clone()
+        
+        return (labels, reflect_ids, noisy_batch, masked_indices, p_mask, lengths)
+
     def encode_variable(self, text_list, max_len=7):
         EOS_INDEX = 0   
         PAD_INDEX = self.pad_idx  # <--- THE FIX: Use the dynamic property!
@@ -229,7 +242,6 @@ def differentiable_iou_repulsion(corners, margin=0.10):
     
     # Average the penalty across the batch
     return penalty.mean()
-
 
 def viterbi_plate_decoder(batch_logits, converter, return_scores=False):
     B, T, C = batch_logits.shape
@@ -345,7 +357,6 @@ def ctc_greedy_decoder(batch_logits, converter, return_scores=False):
         return decoded_preds, torch.tensor(final_scores, device=batch_logits.device)
     return decoded_preds
 
-
 class SmoothPoly1Loss(nn.Module):
     def __init__(self, epsilon=2.0, smoothing=0.1, ignore_index=38):
         super().__init__()
@@ -376,10 +387,6 @@ class SmoothPoly1Loss(nn.Module):
         # Mask out the padding tokens before taking the mean!
         valid_mask = (targets_flat != self.ignore_index).float()
         return (poly1_loss * valid_mask).sum() / valid_mask.sum()
-    
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 class ShiftInvariantL1Loss(nn.Module):
     """
@@ -664,10 +671,6 @@ def point_spread_loss(heatmap_data, max_variance=0.01):
     # 3. Penalize only if they blast wider than the allowed variance
     violation = F.relu(spread - max_variance)
     return (violation ** 2).mean()
-# ==============================================================================
-# 3. TRAINING LOOP
-# ==============================================================================
-import higher  # MUST BE AT THE TOP OF train_utils.py
 
 def box_size_penalties(corners, max_area=0.20, std_tolerance=2.0):
     """
@@ -755,6 +758,220 @@ class FocalLoss(nn.Module):
         # ---> ANOTHER FP16 FIX: Clamp the denominator to prevent division by absolute zero
         return (focal_loss * valid_mask).sum() / torch.clamp(valid_mask.sum(), min=1e-4)
 
+def build_loss_function(cls_loss_type, converter, device):
+    """Factory to instantiate the correct spatial OCR loss based on the baseline."""
+    if cls_loss_type == 'CTC':
+        return SVTR_CTCLoss(blank_idx=converter.pad_idx, pad_idx=converter.pad_idx).to(device)
+    elif cls_loss_type == 'CPPD':
+        from models.cppd.cppd_bridge import CPPDLossWrapper
+        return CPPDLossWrapper(max_len=7).to(device)
+    elif cls_loss_type == 'OTE':
+        from models.ote.ote_bridge import OTELossWrapper
+        return OTELossWrapper(ignore_index=38).to(device)
+    elif cls_loss_type == 'POLY':
+        return SmoothPoly1Loss(epsilon=1.5, smoothing=0.1).to(device)
+    elif cls_loss_type == 'FL':
+        return FocalLoss(gamma=2.0, alpha=1.0, ignore_index=38).to(device)
+    elif cls_loss_type in ['LISTER_INTERNAL', 'MDIFF_INTERNAL', 'IGTR_INTERNAL']:
+        return None
+    else:
+        raise ValueError(f"Unknown baseline loss type: {cls_loss_type}")
+
+_CACHED_IGTR_ENCODER = None
+def prepare_targets(cls_loss_type, text_label, converter, device, is_training=True):
+    """Routes the text strings to the correct tensor encoding format."""
+    global _CACHED_IGTR_ENCODER
+    if cls_loss_type == 'CPPD':
+        t1, t2 = converter.encode_cppd(text_label, max_len=7)
+        return (t1.to(device), t2.to(device))
+    elif cls_loss_type in ['OTE', 'POLY', 'FL', 'CTC']:
+        encode_func = getattr(converter, f'encode_{"variable" if cls_loss_type in ["POLY", "CTC", "FL"] else "ote"}')
+        return encode_func(text_label, max_len=7).to(device)
+    elif cls_loss_type == 'MDIFF_INTERNAL':
+        targets = converter.encode_mdiff(text_label, max_len=7)
+        return tuple(t.to(device) if isinstance(t, torch.Tensor) else t for t in targets)
+    elif cls_loss_type == 'IGTR_INTERNAL':
+        if is_training:
+            # 1. Initialize the authentic OpenOCR encoder ONLY ONCE
+            if _CACHED_IGTR_ENCODER is None:
+                encoder = IGTRLabelEncode(max_text_length=25, k=8)
+                
+                # Inject your vocabulary
+                custom_dict = converter.dict.copy()
+                custom_dict['</s>'] = 0  
+                custom_dict['<s>'] = 37   
+                custom_dict['<pad>'] = 38 
+                
+                encoder.dict = custom_dict
+                encoder.ignore_index = 38
+                encoder.lower = False
+                
+                _CACHED_IGTR_ENCODER = encoder
+            
+            # Load the cached encoder for the batch!
+            encoder = _CACHED_IGTR_ENCODER
+            
+            # 2. Process the batch
+            batch_targets = [[] for _ in range(12)]
+            
+            def force_1d(val):
+                """Ensures scalars/empty values are cast to 1D lists so PyTorch can stack them."""
+                if val is None: return [0]
+                if isinstance(val, (int, float)): return [val]
+                if isinstance(val, np.ndarray) and val.ndim == 0: return [val.item()]
+                return val
+            
+            for txt in text_label:
+                res = encoder({'label': txt})
+                if res is None or not isinstance(res, dict):
+                    res = {} # Safe fallback
+                
+                # Dynamic key finder
+                def get_val(hints):
+                    for hint in hints:
+                        for k, v in res.items():
+                            if hint in k and k != 'label':
+                                return v
+                    return [0]
+                
+                lbl = res.get('label', [0])
+                batch_targets[0].append(lbl)
+                
+                batch_targets[1].append(force_1d(get_val(['prompt_pos'])))
+                batch_targets[2].append(force_1d(get_val(['prompt_char'])))
+                batch_targets[3].append(force_1d(get_val(['ques_pos'])))
+                batch_targets[4].append(force_1d(get_val(['ques1'])))
+                batch_targets[5].append(force_1d(get_val(['ques2_char'])))
+                batch_targets[6].append(force_1d(get_val(['ques2_ans'])))
+                
+                # Index 7: MANUALLY BUILD 'label_ace' (Exactly length 37)
+                label_ace = [0] * 37
+                for char_idx in lbl:
+                    if isinstance(char_idx, int) and char_idx < 37:
+                        label_ace[char_idx] += 1
+                batch_targets[7].append(label_ace)
+                
+                batch_targets[8].append(force_1d(get_val(['ques4'])))
+                batch_targets[9].append(force_1d(get_val(['ques_len'])))
+                batch_targets[10].append(force_1d(get_val(['ques2_len'])))
+                batch_targets[11].append(force_1d(get_val(['prompt_len'])))
+            
+            # 3. Stack into Tensors
+            tensor_targets = []
+            for i in range(12):
+                if i == 0:
+                    tensor_targets.append(batch_targets[0])
+                else:
+                    tensor_targets.append(torch.tensor(np.array(batch_targets[i]), dtype=torch.long, device=device))
+            
+            return tensor_targets
+        else:
+            return converter.encode_list(text_label).to(device)
+        
+def compute_task_loss(preds, true_targets, loss_fn_spatial, cls_loss_type):
+    """Intelligently calculates the primary OCR loss regardless of architecture."""
+    if 'loss_internal' in preds and preds['loss_internal'] is not None:
+        return preds['loss_internal']
+    elif cls_loss_type in ['CPPD', 'OTE']:
+        return loss_fn_spatial(preds, true_targets)
+    else:
+        return loss_fn_spatial(preds['logits'], true_targets)
+
+def decode_predictions(logits, cls_loss_type, converter, return_scores=False):
+    """Unified API for text decoding."""
+    if cls_loss_type == 'CTC':
+        return ctc_greedy_decoder(logits, converter, return_scores=return_scores)
+    else:
+        return viterbi_plate_decoder(logits, converter, return_scores=return_scores)
+
+def update_ema_teacher(model_g, model_d, current_epoch, total_epochs):
+    """SOTA Adaptive Cosine EMA Schedule."""
+    base_decay = 0.990   
+    max_decay  = 0.9999  
+    cosine_val = math.cos(math.pi * current_epoch / max(1, total_epochs))
+    schedule_multiplier = (cosine_val + 1.0) / 2.0 
+    current_decay = max_decay - (max_decay - base_decay) * schedule_multiplier
+    
+    with torch.no_grad():
+        for param_s, param_t in zip(model_g.parameters(), model_d.parameters()):
+            param_t.data.mul_(current_decay).add_(param_s.data, alpha=1.0 - current_decay)
+
+def compute_distillation_losses(preds_lr, preds_hr, is_hr_mask, config, device):
+    """Encapsulates all KD, FDD, CRD, and Latent math."""
+    losses = {
+        'kl': torch.tensor(0.0, device=device),
+        'latent': torch.tensor(0.0, device=device),
+        'feature': torch.tensor(0.0, device=device),
+        'ocr': torch.tensor(0.0, device=device)
+    }
+    
+    # If there are no valid HR samples in this batch, return zero losses
+    if not is_hr_mask.any():
+        return losses
+
+    # 1. KL Divergence (Logits)
+    teacher_logits = preds_hr['logits'][is_hr_mask].detach()
+    temperature = config.get('distill_temp', 2.0)
+    student_log_probs = F.log_softmax(preds_lr['logits'][is_hr_mask] / temperature, dim=-1)
+    teacher_probs = F.softmax(teacher_logits / temperature, dim=-1)
+    losses['kl'] = F.kl_div(student_log_probs, teacher_probs, reduction='batchmean') * (temperature ** 2)
+
+    # 2. High-Resolution Latent Distillation (Cosine + L1)
+    if 'latent_lr' in preds_lr and 'latent_lr' in preds_hr:
+        s_latent = preds_lr['latent_lr'][is_hr_mask]
+        t_latent = preds_hr['latent_lr'][is_hr_mask].detach()
+        
+        if s_latent.shape[0] > 0:
+            loss_l1_latent = F.l1_loss(s_latent, t_latent)
+            
+            s_flat = s_latent.permute(0, 2, 3, 1).reshape(-1, s_latent.size(1))
+            t_flat = t_latent.permute(0, 2, 3, 1).reshape(-1, t_latent.size(1))
+            cosine_sim = F.cosine_similarity(s_flat, t_flat, dim=-1)
+            loss_cos_latent = 1.0 - cosine_sim.mean()
+            
+            losses['latent'] = loss_l1_latent + loss_cos_latent
+
+    # 3. Directional Feature Distillation (FDD Trajectory)
+    if 'trajectory' in preds_lr and 'trajectory' in preds_hr:
+        s_traj = preds_lr['trajectory']
+        t_traj = preds_hr['trajectory']
+        
+        fdd_loss_accum = 0.0
+        num_steps = len(s_traj) - 1
+        for i in range(num_steps):
+            t_prev, t_next = t_traj[i][is_hr_mask].detach(), t_traj[i+1][is_hr_mask].detach()
+            s_prev, s_next = s_traj[i][is_hr_mask], s_traj[i+1][is_hr_mask]
+            
+            delta_t = t_next - t_prev
+            delta_s = s_next - s_prev
+            
+            dir_loss = 1.0 - F.cosine_similarity(delta_s, delta_t, dim=-1).mean()
+            mag_s = torch.norm(delta_s, p=2, dim=-1)
+            mag_t = torch.norm(delta_t, p=2, dim=-1)
+            mag_loss = F.mse_loss(mag_s, mag_t)
+            
+            fdd_loss_accum += (dir_loss + 0.1 * mag_loss)
+            
+        losses['feature'] = fdd_loss_accum / max(1, num_steps)
+
+    # 4. Contrastive Token Distillation (InfoNCE)
+    if 'query_tokens' in preds_lr and 'query_tokens' in preds_hr:
+        feature_dim = preds_lr['query_tokens'].shape[-1]
+        teacher_tokens = preds_hr['query_tokens'][is_hr_mask].detach().reshape(-1, feature_dim)
+        student_tokens = preds_lr['query_tokens'][is_hr_mask].reshape(-1, feature_dim)
+        
+        if student_tokens.shape[0] > 0:
+            t_norm = F.normalize(teacher_tokens, p=2, dim=-1)
+            s_norm = F.normalize(student_tokens, p=2, dim=-1)
+            
+            sim_matrix = torch.matmul(s_norm, t_norm.T) / 0.1 # 0.1 is Temperature
+            
+            N = student_tokens.shape[0]
+            labels = torch.arange(N, device=device)
+            losses['ocr'] = F.cross_entropy(sim_matrix, labels)
+
+    return losses
+
 @register('SROCR_TRAIN')
 def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimizer_d, optimizer_hyper, loss_fn_spread, config, **kwargs):
     device = next(model_g.parameters()).device
@@ -764,29 +981,19 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
     pbar = tqdm(train_loader, leave=False)
     
     save_root = kwargs.get('save_path', Path('.'))
-    loss_stats = {'total': [], 'cls_s': [], 'cls_t': [], 'distill': []}
+    
+    # ---> UPGRADE 1: Intuitive Loss Dictionary <---
+    loss_stats = {'total': [], 'task_s': [], 'kl': [], 'latent': [], 'feat': [], 'nce': [], 'fmt': []}
     
     running_acc_seq_s, running_acc_char_s = 0.0, 0.0
     running_acc_seq_t, running_acc_char_t = 0.0, 0.0
     
     current_epoch = kwargs.get('epoch', 0)
+    total_epochs = config.get('epochs', 800)
     cls_loss_type = config.get('cls_loss', 'SmoothPoly1')
     
-    if cls_loss_type == 'CTC':
-        loss_fn_spatial = SVTR_CTCLoss(blank_idx=true_converter.pad_idx, pad_idx=true_converter.pad_idx).to(device)
-    elif cls_loss_type == 'CPPD':
-        from models.cppd.cppd_bridge import CPPDLossWrapper
-        loss_fn_spatial = CPPDLossWrapper(max_len=7).to(device)
-    elif cls_loss_type == 'OTE':
-        from models.ote.ote_bridge import OTELossWrapper
-        loss_fn_spatial = OTELossWrapper(ignore_index=38).to(device)
-    elif cls_loss_type == 'POLY':
-        loss_fn_spatial = SmoothPoly1Loss(epsilon=1.5, smoothing=0.1).to(device)
-    elif cls_loss_type == 'FL':
-        loss_fn_spatial = FocalLoss(gamma=2.0, alpha=1.0, ignore_index=38).to(device)
-
+    loss_fn_spatial = build_loss_function(cls_loss_type, true_converter, device)
     epoch_tracker = ConfusionTracker()
-    shift_loss_fn = ShiftInvariantL1Loss(max_shift=3, patch_size=3).to(device)
     
     for batch_idx, batch in enumerate(pbar):
         if batch is None: continue        
@@ -794,7 +1001,6 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
         lr_batch = batch['lr'].to(device, non_blocking=True, memory_format=torch.channels_last)
         text_label = batch['gt'] 
         
-        # --- Safely detect if Distillation is active for this run ---
         use_distillation = (model_d is not None) and ('hr' in batch)
         if use_distillation:
             hr_batch = batch['hr'].to(device, non_blocking=True, memory_format=torch.channels_last)
@@ -802,13 +1008,7 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
             if 'hr_gt' in batch:
                 hr_gt_batch = batch['hr_gt'].to(device, non_blocking=True, memory_format=torch.channels_last)
         
-        if cls_loss_type == 'CPPD':
-            true_targets = true_converter.encode_cppd(text_label, max_len=7)
-            true_targets = (true_targets[0].to(device), true_targets[1].to(device))
-        elif cls_loss_type in ['OTE', 'POLY', 'FL', 'CTC']:
-            true_targets = getattr(true_converter, f'encode_{"variable" if cls_loss_type in ["POLY", "CTC", "FL"] else "ote"}')(text_label, max_len=7).to(device)
-        else:
-            true_targets = true_converter.encode_list(text_label).to(device)
+        true_targets = prepare_targets(cls_loss_type, text_label, true_converter, device)
 
         optimizer_g.zero_grad()
         if use_distillation and optimizer_d is not None:  
@@ -824,26 +1024,18 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
             )
             if isinstance(preds_lr, (tuple, list)): preds_lr = preds_lr[0]
 
-            # Primary Text Loss
-            if 'loss_internal' in preds_lr and preds_lr['loss_internal'] is not None:
-                loss_cls_lr = preds_lr['loss_internal']
-            elif cls_loss_type in ['CPPD', 'OTE']:
-                loss_cls_lr = loss_fn_spatial(preds_lr, true_targets)
-            else:
-                loss_cls_lr = loss_fn_spatial(preds_lr['logits'], true_targets)
+            # Primary Text Loss (The Task)
+            loss_task_s = compute_task_loss(preds_lr, true_targets, loss_fn_spatial, cls_loss_type)
             
-            total_loss_g = loss_cls_lr
+            # ---> THE FIX: Add + 0.0 to break the PyTorch memory reference!
+            total_loss_g = loss_task_s + 0.0
 
-            # ---> NEW: FORMAT ROUTER SUPERVISION
-            # Trains the Dynamic Geometry Router to guess Mercosur vs Old Brazilian
-            loss_router = torch.tensor(0.0, device=device)
+            # ---> UPGRADE 2: Track Format Router (CustomOCR Specific) <---
             if 'format_logits' in preds_lr:
-                # 0 = Old Brazilian, 1 = Mercosur
                 true_format_labels = torch.tensor([get_layout_label(txt) for txt in text_label], device=device)
-                loss_router = F.cross_entropy(preds_lr['format_logits'], true_format_labels)
-                total_loss_g = total_loss_g + (2.0 * loss_router)
-
-            total_loss = total_loss_g
+                loss_fmt = F.cross_entropy(preds_lr['format_logits'], true_format_labels)
+                total_loss_g += loss_fmt
+                loss_stats['fmt'].append(loss_fmt.item())
 
             # ==========================================
             # 2. TEACHER FORWARD PASS & DISTILLATION
@@ -857,58 +1049,35 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
                     )
                     if isinstance(preds_hr, (tuple, list)): preds_hr = preds_hr[0]
                     
-                    if 'loss_internal' in preds_hr and preds_hr['loss_internal'] is not None:
-                        loss_cls_hr = preds_hr['loss_internal']
-                    elif cls_loss_type in ['CPPD', 'OTE']:
-                        loss_cls_hr = loss_fn_spatial(preds_hr, true_targets)
-                    else:
-                        loss_cls_hr = loss_fn_spatial(preds_hr['logits'], true_targets)
+                    loss_task_t = compute_task_loss(preds_hr, true_targets, loss_fn_spatial, cls_loss_type)
 
-                    # Teacher SR Supervision (Teacher strictly learns perfect HR -> HR mapping)
                     if optimizer_d is not None and 'sr_image' in preds_hr and 'hr_gt_batch' in locals():
                         teacher_pixel_loss = F.l1_loss(preds_hr['sr_image'], hr_gt_batch)
-                        loss_cls_hr = loss_cls_hr + (10.0 * teacher_pixel_loss)
+                        loss_task_t += (10.0 * teacher_pixel_loss)
 
-                # ==========================================
-                # DISTILLATION LOSSES (GRADIENT ISOLATION)
-                # ==========================================
-                teacher_logits = preds_hr['logits'][is_hr_mask].detach()
+                distill_losses = compute_distillation_losses(preds_lr, preds_hr, is_hr_mask, config, device)
                 
-                # 1. PIXEL: Dual-Routed Spatial Supervision against GROUND TRUTH
-                loss_distill_pixel = torch.tensor(0.0, device=device)
-                if 'sr_image' in preds_lr and 'hr_gt_batch' in locals():
-                    # Route A: Strict L1 for Perfectly Aligned Images (RODOSOL/Syn)
-                    if is_hr_mask.any():
-                        loss_aligned = F.l1_loss(preds_lr['sr_image'][is_hr_mask], hr_gt_batch[is_hr_mask])
-                        loss_distill_pixel = loss_distill_pixel + loss_aligned
-                        
-                    # Route B: Shift-Invariant L1 for Misaligned CCTV
-                    is_lr_mask = ~is_hr_mask
-                    if is_lr_mask.any():
-                        loss_jittered = shift_loss_fn(preds_lr['sr_image'][is_lr_mask], hr_gt_batch[is_lr_mask])
-                        loss_distill_pixel = loss_distill_pixel + (0.5 * loss_jittered)
-
-                # 2. LOGITS: KL Divergence (Student mimics Teacher's text probabilities)
-                temperature = config.get('distill_temp', 2.0)
-                student_log_probs = F.log_softmax(preds_lr['logits'][is_hr_mask] / temperature, dim=-1)
-                teacher_probs = F.softmax(teacher_logits / temperature, dim=-1)
-                loss_distill_kl = F.kl_div(student_log_probs, teacher_probs, reduction='batchmean') * (temperature ** 2)
-                
-                # Apply Final Distillation Weights
                 kl_weight = config.get('distill_weight_kl', 2.0)
-                gt_pixel_weight = 10.0  
+                latent_weight = config.get('distill_weight_latent', 10.0) 
+                feat_weight = config.get('distill_weight_feat', 0.0)
+                ocr_token_weight = config.get('distill_weight_ocr', 1.0)
                 
-                total_loss_g = total_loss_g + (kl_weight * loss_distill_kl) + (gt_pixel_weight * loss_distill_pixel)
+                total_loss_g += (kl_weight * distill_losses['kl']) + \
+                                (latent_weight * distill_losses['latent']) + \
+                                (feat_weight * distill_losses['feature']) + \
+                                (ocr_token_weight * distill_losses['ocr'])
                                 
-                if optimizer_d is not None:
-                    total_loss = total_loss_g + loss_cls_hr
-                else:
-                    total_loss = total_loss_g
+                total_loss = total_loss_g + loss_task_t if optimizer_d is not None else total_loss_g
+            else:
+                total_loss = total_loss_g
 
         if not torch.isfinite(total_loss):
             print(f"⚠️ Warning: Non-finite loss at batch {batch_idx}. Skipping.")
             continue
 
+        # ==========================================
+        # 3. BACKWARD PASS & EMA
+        # ==========================================
         scaler.scale(total_loss).backward()
         
         scaler.unscale_(optimizer_g)
@@ -919,39 +1088,27 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
             torch.nn.utils.clip_grad_norm_(model_d.parameters(), max_norm=5.0)
 
         scaler.step(optimizer_g)
-        if use_distillation and optimizer_d is not None:  
-            scaler.step(optimizer_d)
-            
         scaler.update()
-        # warmup_epochs = 1000
-        # if use_distillation and optimizer_d is None and current_epoch >= warmup_epochs:
-            
-        #     # ---> THE FIX: The Brain Transplant! 
-        #     # On the exact first batch of the warmup epoch, clone the Student!
-        #     if current_epoch == warmup_epochs and batch_idx == 0:
-        #         print("\n🧠 Executing Brain Transplant: Student -> Teacher...")
-        #         model_d.load_state_dict(model_g.state_dict())
-            
-        #     # Now proceed with the normal 0.9999 EMA drip...
-        #     decay = 0.9999 
-        #     with torch.no_grad():
-        #         for (name_s, param_s), (name_t, param_t) in zip(model_g.named_parameters(), model_d.named_parameters()):
-        #             is_eye_or_hand = ('patch_embed' in name_s) or ('latent_sr' in name_s) or ('hr_refine' in name_s)
-        #             if not is_eye_or_hand:
-        #                 param_t.data.mul_(decay).add_(param_s.data, alpha=1.0 - decay)
+        
+        if use_distillation and model_d is not None:
+            update_ema_teacher(model_g, model_d, current_epoch, total_epochs)
                         
         # ====================================================================
         # METRICS & VISUALIZATION
         # ====================================================================
         with torch.no_grad():
             loss_stats['total'].append(total_loss.item())
-            loss_stats['cls_s'].append(loss_cls_lr.item()) 
+            loss_stats['task_s'].append(loss_task_s.item()) 
             
-            if batch_idx % 10 == 0:
-                if cls_loss_type == 'CTC':
-                    decoded_s = ctc_greedy_decoder(preds_lr['logits'], true_converter)
-                else:
-                    decoded_s = decode_batch_logits(preds_lr['logits'], true_converter)
+            # ---> UPGRADE 3: Honest Distillation Tracking <---
+            if use_distillation:
+                loss_stats['kl'].append((distill_losses['kl'] * kl_weight).item())
+                loss_stats['latent'].append((distill_losses['latent'] * latent_weight).item())
+                loss_stats['feat'].append((distill_losses['feature'] * feat_weight).item())                
+                loss_stats['nce'].append((distill_losses['ocr'] * ocr_token_weight).item())                
+                
+            if batch_idx % 5 == 0:
+                decoded_s = decode_predictions(preds_lr['logits'], cls_loss_type, true_converter)
                 
                 acc_s_seq = sum([1 for p, t in zip(decoded_s, text_label) if p == t]) / len(text_label)
                 running_acc_seq_s = (running_acc_seq_s * 0.9) + (acc_s_seq * 0.1) if running_acc_seq_s > 0 else acc_s_seq
@@ -965,10 +1122,7 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
                 
                 decoded_t = decoded_s 
                 if use_distillation:
-                    if cls_loss_type == 'CTC':
-                        decoded_t = ctc_greedy_decoder(preds_hr['logits'], true_converter)
-                    else:
-                        decoded_t = decode_batch_logits(preds_hr['logits'], true_converter)
+                    decoded_t = decode_predictions(preds_hr['logits'], cls_loss_type, true_converter)
                     
                     acc_t_seq = sum([1 for p, t in zip(decoded_t, text_label) if p == t]) / len(text_label)
                     running_acc_seq_t = (running_acc_seq_t * 0.9) + (acc_t_seq * 0.1) if running_acc_seq_t > 0 else acc_t_seq
@@ -977,13 +1131,27 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
                     acc_t_chr = correct_chars_t / max(total_chars, 1)
                     running_acc_char_t = (running_acc_char_t * 0.9) + (acc_t_chr * 0.1) if running_acc_char_t > 0 else acc_t_chr
                 
+                # ---> UPGRADE 4: The Dynamic Progress Bar <---
                 postfix_dict = {
                     'Loss': f"{np.mean(loss_stats['total'][-50:]):.4f}",
+                    'Task': f"{np.mean(loss_stats['task_s'][-50:]):.4f}", 
                     'S-Seq': f"{running_acc_seq_s:.1%}", 
                     'S-Chr': f"{running_acc_char_s:.1%}",
                 }
                 
+                # Only show Format Loss if CustomOCR is actively routing!
+                if len(loss_stats['fmt']) > 0:
+                    postfix_dict['Fmt'] = f"{np.mean(loss_stats['fmt'][-50:]):.4f}"
+                
                 if use_distillation:
+                    postfix_dict['KL'] = f"{np.mean(loss_stats['kl'][-50:]):.4f}"
+                    postfix_dict['Lat'] = f"{np.mean(loss_stats['latent'][-50:]):.4f}"
+                    
+                    # Only clutter the bar with FDD if it's actually turned on
+                    if feat_weight > 0:
+                        postfix_dict['FDD'] = f"{np.mean(loss_stats['feat'][-50:]):.4f}"
+                        
+                    postfix_dict['NCE'] = f"{np.mean(loss_stats['nce'][-50:]):.4f}"
                     postfix_dict['T-Seq'] = f"{running_acc_seq_t:.1%}"
                     postfix_dict['T-Chr'] = f"{running_acc_char_t:.1%}"
                 
@@ -995,16 +1163,13 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
                     visualize_feature_maps(
                         student_sr=preds_lr['sr_image'], 
                         teacher_sr=preds_hr['sr_image'] if use_distillation else None, 
-                        lr_images=lr_batch, 
-                        hr_images=hr_batch if use_distillation else None, 
-                        batch_idx=batch_idx, 
-                        epoch=current_epoch, 
-                        save_dir=save_root / 'train_features'
+                        lr_images=lr_batch, hr_images=hr_batch if use_distillation else None, 
+                        batch_idx=batch_idx, epoch=current_epoch, save_dir=save_root / 'train_features'
                     )
                 
                 if 'attn_maps' in preds_lr and preds_lr['attn_maps'] is not None:
                     if 'decoded_s' not in locals():
-                        decoded_s = ctc_greedy_decoder(preds_lr['logits'], true_converter) if cls_loss_type == 'CTC' else decode_batch_logits(preds_lr['logits'], true_converter)
+                        decoded_s = decode_predictions(preds_lr['logits'], cls_loss_type, true_converter)
                         
                     visualize_vit_attention(
                         image_tensor=lr_batch, latent_tensor=preds_lr.get('latent_lr', None), 
@@ -1013,26 +1178,25 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
                     )
                 
     final_loss = np.mean(loss_stats['total']) if loss_stats['total'] else 0.0
-    
-    if use_distillation:
-        return final_loss, running_acc_seq_t
-        
+    if use_distillation: return final_loss, running_acc_seq_t
     return final_loss
 
 @register('SROCR_VAL')
 def SROCR_VAL(val_loader, model_g, model_d, loss_fn, config, **kwargs):
     model_g.eval() 
+    if model_d is not None:
+        model_d.eval()
+        
     device = next(model_g.parameters()).device
     true_converter = strLabelConverter(config.get('alphabet', "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
+    cls_loss_type = config.get('cls_loss', 'SmoothPoly1')
     
-    # --- NEW: Validation Error Tracker ---
     val_tracker = ConfusionTracker()
     save_root = kwargs.get('save_path', Path('.'))
     
-    correct_sequences = 0
+    correct_sequences_s = 0
+    correct_sequences_t = 0
     total_sequences = 0
-    correct_chars = 0
-    total_chars = 0
 
     with torch.no_grad():
         for batch in tqdm(val_loader, desc="Validation"):
@@ -1040,103 +1204,89 @@ def SROCR_VAL(val_loader, model_g, model_d, loss_fn, config, **kwargs):
             text_labels = batch['gt']     
 
             B, Seq_Len, C, H, W = lr_seqs.shape
-            flat_imgs = lr_seqs.view(B * Seq_Len, C, H, W)
-            flat_imgs = flat_imgs.contiguous().to(memory_format=torch.channels_last)
-            with torch.amp.autocast('cuda', enabled=config.get('use_fp16', False)):
-                output = model_g(flat_imgs, temporal_pool=True) 
-                if isinstance(output, (tuple, list)): output = output[0]
-                logits = output['logits']
-
-            cls_loss_type = config.get('cls_loss', 'SmoothPoly1')
-            # --- THE NEW FIX: Trust the Transformer ---
-            if cls_loss_type == 'CTC':
-                all_decoded_preds, all_scores = ctc_greedy_decoder(logits, true_converter, return_scores=True)
-            else:
-                # 1. Decode the raw strings without rigid layout masks
-                all_decoded_preds = decode_batch_logits(logits, true_converter)
-                # 2. Calculate the raw confidence score for the ensembling logic
-                all_scores = F.log_softmax(logits, dim=-1).max(dim=-1)[0].sum(dim=1)
-
-            for b in range(B):
-                seq_preds = all_decoded_preds[b * Seq_Len : (b + 1) * Seq_Len]
-                seq_scores = all_scores[b * Seq_Len : (b + 1) * Seq_Len]
-                
-                pred_tracker = {}
-                for pred_str, conf_score in zip(seq_preds, seq_scores):
-                    if pred_str not in pred_tracker:
-                        pred_tracker[pred_str] = {'votes': 0, 'confidence': 0.0}
-                    
-                    pred_tracker[pred_str]['votes'] += 1
-                    pred_tracker[pred_str]['confidence'] += conf_score.item()
-                
-                sorted_preds = sorted(
-                    pred_tracker.items(), 
-                    key=lambda item: (item[1]['votes'], item[1]['confidence']), 
-                    reverse=True
-                )
-                
-                winning_prediction = sorted_preds[0][0]
-                gt = text_labels[b]
-                
-                # --- NEW: Track the post-ensembled errors! ---
-                val_tracker.update([winning_prediction], [gt])
-                
-                total_sequences += 1
-                if winning_prediction == gt: correct_sequences += 1
-                
-                total_chars += len(gt)
-                correct_chars += sum(1 for pc, gc in zip(winning_prediction, gt) if pc == gc)
+            # Both models will now evaluate the exact same blurry images
+            flat_imgs = lr_seqs.view(B * Seq_Len, C, H, W).contiguous().to(memory_format=torch.channels_last)
             
-    acc_seq = correct_sequences / total_sequences if total_sequences else 0.0
-    acc_char = correct_chars / total_chars if total_chars else 0.0
-    
-    # ==========================================
-    # NEW: EVALUATE THE TEACHER ON HR VALIDATION
-    # ==========================================
-    # ==========================================
-    # NEW: EVALUATE THE TEACHER ON HR VALIDATION
-    # ==========================================
-    acc_seq_t = 0.0
-    if model_d is not None and 'hr_seq' in next(iter(val_loader)):
-        model_d.eval()
-        correct_sequences_t = 0
-        total_sequences_t = 0
-        
-        # ---> THE FIX: Add this line to prevent the VRAM explosion!
-        with torch.no_grad(): 
-            for batch in val_loader:
-                hr_seqs = batch['hr_seq'].to(device, non_blocking=True)
-                text_labels = batch['gt']
-                B, Seq_Len, C, H, W = hr_seqs.shape
-                
-                flat_hr = hr_seqs.view(B * Seq_Len, C, H, W).contiguous().to(memory_format=torch.channels_last)
-                
+            # ==========================================
+            # 1. STUDENT INFERENCE
+            # ==========================================
+            with torch.amp.autocast('cuda', enabled=config.get('use_fp16', False)):
+                output_s = model_g(flat_imgs, temporal_pool=True) 
+                if isinstance(output_s, (tuple, list)): output_s = output_s[0]
+                logits_s = output_s['logits']
+
+            # ==========================================
+            # 2. TEACHER INFERENCE (EMA on LR)
+            # ==========================================
+            logits_t = None
+            if model_d is not None:
                 with torch.amp.autocast('cuda', enabled=config.get('use_fp16', False)):
-                    out_t = model_d(flat_hr, temporal_pool=True)
-                    logits_t = out_t['logits'] if isinstance(out_t, dict) else out_t[0]['logits']
+                    output_t = model_d(flat_imgs, temporal_pool=True)
+                    if isinstance(output_t, (tuple, list)): output_t = output_t[0]
+                    logits_t = output_t['logits']
+
+            # ==========================================
+            # 3. DECODING
+            # ==========================================
+            if cls_loss_type == 'CTC':
+                all_preds_s, all_scores_s = ctc_greedy_decoder(logits_s, true_converter, return_scores=True)
+                if logits_t is not None:
+                    all_preds_t, all_scores_t = ctc_greedy_decoder(logits_t, true_converter, return_scores=True)
+            else:
+                all_preds_s = decode_batch_logits(logits_s, true_converter)
+                all_scores_s = F.log_softmax(logits_s, dim=-1).max(dim=-1)[0].sum(dim=1)
                 
-                if cls_loss_type == 'CTC':
-                    preds_t = ctc_greedy_decoder(logits_t, true_converter)
-                else:
-                    preds_t = decode_batch_logits(logits_t, true_converter)
+                if logits_t is not None:
+                    all_preds_t = decode_batch_logits(logits_t, true_converter)
+                    all_scores_t = F.log_softmax(logits_t, dim=-1).max(dim=-1)[0].sum(dim=1)
+
+            # ==========================================
+            # 4. TEMPORAL ENSEMBLING (VOTING)
+            # ==========================================
+            for b in range(B):
+                gt = text_labels[b]
+                total_sequences += 1
+                
+                # --- Student Voting ---
+                seq_preds_s = all_preds_s[b * Seq_Len : (b + 1) * Seq_Len]
+                seq_scores_s = all_scores_s[b * Seq_Len : (b + 1) * Seq_Len]
+                
+                tracker_s = {}
+                for p_str, conf in zip(seq_preds_s, seq_scores_s):
+                    if p_str not in tracker_s: tracker_s[p_str] = {'votes': 0, 'confidence': 0.0}
+                    tracker_s[p_str]['votes'] += 1
+                    tracker_s[p_str]['confidence'] += conf.item()
+                
+                win_s = sorted(tracker_s.items(), key=lambda item: (item[1]['votes'], item[1]['confidence']), reverse=True)[0][0]
+                if win_s == gt: correct_sequences_s += 1
+                
+                # Update confusion tracker with Student's final ensembled answer
+                val_tracker.update([win_s], [gt])
+
+                # --- Teacher Voting ---
+                if logits_t is not None:
+                    seq_preds_t = all_preds_t[b * Seq_Len : (b + 1) * Seq_Len]
+                    seq_scores_t = all_scores_t[b * Seq_Len : (b + 1) * Seq_Len]
                     
-                # Since the Teacher sees the exact same HR image 5 times, we just take the first frame's answer
-                for b in range(B):
-                    pred_str = preds_t[b * Seq_Len]
-                    if pred_str == text_labels[b]: 
-                        correct_sequences_t += 1
-                    total_sequences_t += 1
-                
-        acc_seq_t = correct_sequences_t / total_sequences_t if total_sequences_t else 0.0
+                    tracker_t = {}
+                    for p_str, conf in zip(seq_preds_t, seq_scores_t):
+                        if p_str not in tracker_t: tracker_t[p_str] = {'votes': 0, 'confidence': 0.0}
+                        tracker_t[p_str]['votes'] += 1
+                        tracker_t[p_str]['confidence'] += conf.item()
+                        
+                    win_t = sorted(tracker_t.items(), key=lambda item: (item[1]['votes'], item[1]['confidence']), reverse=True)[0][0]
+                    if win_t == gt: correct_sequences_t += 1
+            
+    acc_seq_s = correct_sequences_s / total_sequences if total_sequences else 0.0
+    acc_seq_t = correct_sequences_t / total_sequences if total_sequences else 0.0
 
     print(f"\n{'='*30} SEQUENCE EVALUATION {'='*30}")
     print(f"Total Sequences: {total_sequences}")
-    print(f"Student Acc: {acc_seq:.2%} | Teacher HR Acc: {acc_seq_t:.2%}") # <--- UPDATED PRINT
+    print(f"Student Acc: {acc_seq_s:.2%} | Teacher (EMA) Acc: {acc_seq_t:.2%}")
     print(f"{'='*81}\n")
     
-    # --- NEW: Save the true validation blind spots for the next epoch ---
     total_failures = val_tracker.get_worst_pairs_dict(top_k=50) 
     with open(save_root / 'confusion_stats.json', 'w') as f: 
         json.dump(total_failures, f, indent=4)
     
-    return 0.0, acc_seq, acc_seq_t
+    return 0.0, acc_seq_s, acc_seq_t

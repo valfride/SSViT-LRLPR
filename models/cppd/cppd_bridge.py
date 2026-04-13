@@ -33,7 +33,7 @@ class CPPDBaseline(nn.Module):
     def __init__(self, in_channels=3, max_len=7, num_classes=37, **kwargs):
         super().__init__()
         self.encoder = SVTRNet(
-            img_size=[24, 72], # Natively locked to your YOLO crop size
+            img_size=[32, 96], # <--- THE FIX: Explicitly tell SVTR the new shape
             in_channels=in_channels, out_char_num=max_len, out_channels=256,
             patch_merging='Conv', embed_dim=[128, 256, 384], depth=[6, 6, 6],
             num_heads=[4, 8, 12], mixer=['Conv']*8 + ['Global']*10,
@@ -41,7 +41,7 @@ class CPPDBaseline(nn.Module):
         )
         self.decoder = CPPDDecoder(
             in_channels=384, out_channels=num_classes, num_layer=2,
-            vis_seq=36, # THE FIX: 24x72 downsampled by SVTR yields 36 patches (2x18 grid)
+            vis_seq=48, # <--- THE FIX: 32x96 yields exactly 48 flattened patches (2x24)
             pos_len=False, rec_layer=1, max_len=max_len
         )
         

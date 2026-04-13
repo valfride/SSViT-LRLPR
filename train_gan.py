@@ -112,7 +112,7 @@ def get_confusion_weights(dataset, stats_path, top_k=4):
     return torch.DoubleTensor(weights)
 
 def create_scheduler(optimizer, epoch_max):
-    return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=20, min_lr=1e-6)
+    return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=50, min_lr=1e-6)
 
 def create_teacher_scheduler(optimizer):
     # Patience is only 2! It will quickly drop the LR when the Teacher hits 99%
@@ -129,33 +129,49 @@ def main(config, save_path):
     model_g = model_g.to(memory_format=torch.channels_last)
     
     # --- UPDATED: Optimizer Setup (WITH LAYOUT MULTIPLIER) ---
-    base_lr = float(config['optimizer_sr']['args']['lr'])
+    # --- UPDATED: Dynamic Optimizer Setup ---
+    base_lr = float(config['optimizer_sr']['args'].get('lr', 1e-4))
     
-    # We will separate the parameters into two lists
     deform_offset_params = []
     base_params = []
     
     for name, param in model_g.named_parameters():
-        if not param.requires_grad:
-            continue
-            
-        # Check if this parameter belongs to an offset predictor
+        if not param.requires_grad: continue
         if 'offset_conv' in name:
             deform_offset_params.append(param)
         else:
             base_params.append(param)
             
-    # Create the parameter groups
     optim_groups = [
         {'params': base_params, 'lr': base_lr},
-        {'params': deform_offset_params, 'lr': base_lr},
+        {'params': deform_offset_params, 'lr': base_lr * 10.0 if len(deform_offset_params) > 0 else base_lr},
     ]
     
+    # 1. Get the optimizer name and args from the YAML
+    opt_name = config['optimizer_sr'].get('name', 'adam').lower()
+    opt_kwargs = config['optimizer_sr'].get('args', {}).copy()
+    
+    # 2. Remove 'lr' from kwargs since we already passed it specifically into the optim_groups
+    if 'lr' in opt_kwargs:
+        del opt_kwargs['lr']
+        
+    # 3. Dynamically build the requested optimizer and pass the kwargs (like weight_decay, betas, etc.)
+    if opt_name == 'adamw':
+        optimizer_g = torch.optim.AdamW(optim_groups, **opt_kwargs)
+    elif opt_name == 'adam':
+        optimizer_g = torch.optim.Adam(optim_groups, **opt_kwargs)
+    elif opt_name == 'sgd':
+        optimizer_g = torch.optim.SGD(optim_groups, **opt_kwargs)
+    elif opt_name == 'rmsprop':
+        optimizer_g = torch.optim.RMSprop(optim_groups, **opt_kwargs)
+    else:
+        raise ValueError(f"Unknown optimizer defined in config: {opt_name}")
+        
     if is_main_process(): 
+        print(f"🚀 Initialized {opt_name.upper()} Optimizer")
         print(f"Base params: {len(base_params)} | Deform: {len(deform_offset_params)}")
-        print(f"Base LR: {base_lr} | Deform LR: {base_lr} ")
-
-    optimizer_g = torch.optim.Adam(optim_groups)
+        print(f"Base LR: {base_lr} | Kwargs: {opt_kwargs}")
+        
     loss_fn_spread = HyperAttentionLoss(grid_h=12, grid_w=36).to(local_rank)
     hyper_groups = [
         {'params': [loss_fn_spread.v_stretch, loss_fn_spread.iris_scale], 'lr': 1e-2},
@@ -169,34 +185,56 @@ def main(config, save_path):
     # ==========================================
     # NEW: CONDITIONAL TEACHER SETUP
     # ==========================================
+    #use_distillation = config.get('use_distillation', False)
+    #model_t, optimizer_t, scheduler_t = None, None, None
+
+    #if use_distillation:
+    #    if is_main_process(): print("🎓 Distillation Mode ON: Creating Teacher VSR Model...")
+    #    model_t = models.make(config['model_g']).to(local_rank)
+    #    model_t = model_t.to(memory_format=torch.channels_last)
+
+    #    teacher_lr = base_lr * config.get('teacher_lr_multiplier', 2.0)
+    #    
+    #    # Reuse your group splitting logic here
+    #    optimizer_t = torch.optim.Adam([
+    #        {'params': [p for n, p in model_t.named_parameters() if 'offset_conv' not in n and p.requires_grad], 'lr': teacher_lr},
+    #        {'params': [p for n, p in model_t.named_parameters() if 'offset_conv' in n and p.requires_grad], 'lr': teacher_lr * 10.0}
+    #    ])
+    #    scheduler_t = create_teacher_scheduler(optimizer_t)
+    #    
+    #    if is_main_process(): print(f"Teacher Base LR: {teacher_lr:.2e}")
+    ## ==========================================
+
+	# ==========================================
+    # NEW: EMA MEAN TEACHER SETUP
+    # ==========================================
     use_distillation = config.get('use_distillation', False)
     model_t, optimizer_t, scheduler_t = None, None, None
 
     if use_distillation:
-        if is_main_process(): print("🎓 Distillation Mode ON: Creating Teacher VSR Model...")
+        if is_main_process(): print("ðEMA Distillation Mode ON: Creating Mean Teacher...")
         model_t = models.make(config['model_g']).to(local_rank)
         model_t = model_t.to(memory_format=torch.channels_last)
 
-        teacher_lr = base_lr * config.get('teacher_lr_multiplier', 2.0)
+        # 1. Brain Transplant: Initialize Teacher with exact Student weights!
+        model_t.load_state_dict(model_g.state_dict())
         
-        # Reuse your group splitting logic here
-        optimizer_t = torch.optim.Adam([
-            {'params': [p for n, p in model_t.named_parameters() if 'offset_conv' not in n and p.requires_grad], 'lr': teacher_lr},
-            {'params': [p for n, p in model_t.named_parameters() if 'offset_conv' in n and p.requires_grad], 'lr': teacher_lr * 10.0}
-        ])
-        scheduler_t = create_teacher_scheduler(optimizer_t)
-        
-        if is_main_process(): print(f"Teacher Base LR: {teacher_lr:.2e}")
-    # ==========================================
-
-    # --- 3. Initialize Student Scheduler ---
+        # 2. Freeze the Teacher completely (It learns via EMA, not Backprop)
+        for param in model_t.parameters():
+            param.requires_grad = False
+            
+        # 3. Explicitly set these to None so the training loop knows we are in EMA mode
+        optimizer_t = None
+        scheduler_t = None
+	
+		# --- 3. Initialize Student Scheduler ---
     scheduler_g = create_scheduler(optimizer_g, epoch_max)
     # --- 4. Resume Logic ---
     start_epoch = 1; best_accuracy = 0.0
     
     # Initialize state variables here so they can be overwritten by the checkpoint
     best_models = [] 
-    early_stop_patience = config.get('early_stop_patience', 50)
+    early_stop_patience = config.get('early_stop_patience', 100)
     epochs_without_improvement = 0
     
     resume_path = config.get('resume')
@@ -220,7 +258,7 @@ def main(config, save_path):
             # --- NEW: Safely resume the tracker and patience ---
             best_models = checkpoint.get('best_models', [])
             epochs_without_improvement = checkpoint.get('epochs_without_improvement', 0)
-            
+            # epochs_without_improvement = 0
             if is_main_process() and epochs_without_improvement > 0:
                 print(f"♻️ Resumed Early Stopping counter at {epochs_without_improvement}/{early_stop_patience} epochs.")
             if is_main_process() and len(best_models) > 0:
@@ -292,7 +330,6 @@ def main(config, save_path):
         if use_distillation:
             model_t = DDP(model_t, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False)
         
-    loss_fn = losses.make(config['loss']).to(local_rank)
     train_step = train_funcs.make(config['func_train']) 
     val_step = train_funcs.make(config['func_val'])
 
@@ -367,7 +404,7 @@ def main(config, save_path):
                 train_loss, teacher_train_acc = train_out
             else:
                 train_loss = train_out
-            val_loss, accuracy, teacher_val_acc = val_step(val_loader, model_g, model_t, loss_fn, config, save_path=save_path)
+            val_loss, accuracy, teacher_val_acc = val_step(val_loader, model_g, model_t, None, config, save_path=save_path)
 
             # ==========================================
             # THE FIX: TRACK PATIENCE USING HR VAL ACCURACY
@@ -418,15 +455,20 @@ def main(config, save_path):
                 }
                 
                 # Safely inject Teacher states into the dict
+                
                 if use_distillation:
                     checkpoint['model_t_sd'] = model_t.module.state_dict() if hasattr(model_t, 'module') else model_t.state_dict()
-                    checkpoint['optimizer_t'] = optimizer_t.state_dict()
-                    checkpoint['scheduler_t'] = scheduler_t.state_dict()
                     
-                    # ---> NEW: Save the freeze state!
+                    # ---> THE FIX: Only save if they are not None (EMA Mode)
+                    if optimizer_t is not None:
+                        checkpoint['optimizer_t'] = optimizer_t.state_dict()
+                    if scheduler_t is not None:
+                        checkpoint['scheduler_t'] = scheduler_t.state_dict()
+                    
                     checkpoint['teacher_frozen'] = teacher_frozen
                     checkpoint['teacher_best_acc'] = teacher_best_acc
                     checkpoint['teacher_patience_counter'] = teacher_patience_counter
+				
 
                 torch.save(checkpoint, save_path / 'last.pth')
                 

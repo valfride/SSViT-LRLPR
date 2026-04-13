@@ -2,11 +2,6 @@ import torch
 import torch.nn as nn
 from models import register
 
-# try:
-#     from .svtrv2 import SVTRv2
-#     from .ctc_decoder import CTCDecoder
-# except ImportError:
-#     print("⚠️ Please place svtrv2.py and ctc_decoder.py in your models/ folder.")
 from .svtrv2 import SVTRv2
 from models.ctc_decoder import CTCDecoder
 

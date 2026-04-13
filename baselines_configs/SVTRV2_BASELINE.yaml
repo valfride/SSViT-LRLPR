@@ -20,7 +20,7 @@ cls_loss: CTC
 model_g:
   name: SVTRV2_BASELINE
   args:
-    num_classes: 37
+    num_classes: 38
 
 
 name: VSR_FeatureOCR_Curriculum

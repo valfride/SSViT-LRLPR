@@ -241,15 +241,18 @@ class Sequential_lr_sr(Dataset):
         
         assert self.dataset is not None, "Dataset is None"
 
+        assert self.dataset is not None, "Dataset is None"
+
+        # ---> THE FIX: Explicitly map custom keys to the 'image' pipeline
         self.geo_aug = A.Compose([
             A.ShiftScaleRotate(
                 shift_limit=0.05, 
-                scale_limit=(-0.02, 0.02), 
+                scale_limit=(-0.03, 0.03), 
                 rotate_limit=5,    
                 p=0.5, 
                 border_mode=cv2.BORDER_REPLICATE
             ),
-        ])
+        ], additional_targets={'image_hr': 'image', 'image_sr': 'image'}) # <--- CRITICAL FIX
 
         # =========================================================
         # 1. GROUP BY TRACK (Supports LR Tracks AND HR-Only RODOSOL)
@@ -277,7 +280,7 @@ class Sequential_lr_sr(Dataset):
                 
                 # ---> OPTIMIZATION: Only build the FDA style pool if FDA is actually enabled!
                 if (self.use_fda_hr or self.use_fda_lr) and not self.test:
-                    if len(self.lr_pool) < 5000:
+                    if len(self.lr_pool) < 10000:
                         img_raw = item['img_raw']
                         if img_raw is not None and len(img_raw.shape) == 3:
                             self.lr_pool.append(img_raw)
@@ -370,8 +373,8 @@ class Sequential_lr_sr(Dataset):
                 try:
                     degrader = FourierCCTVDegradation(
                         lr_image_pool=self.lr_pool, 
-                        beta_range=(0.001, 0.02),
-                        jpeg_range=(85, 95)
+                        beta_range=(0.01, 0.08),
+                        jpeg_range=(65, 85)
                     )
                     img_raw = degrader.apply(img_raw)
                     
@@ -404,31 +407,35 @@ class Sequential_lr_sr(Dataset):
                 # Stream A: What the Teacher actually looks at
                 img_hr_teacher_input = img_hr_clean.copy()
                 
-                # ---> Mild Teacher Domain Softening (50% chance)
                 if len(self.lr_pool) > 0 and random.random() < 0.5:
                     try:
                         mild_degrader = FourierCCTVDegradation(
                             lr_image_pool=self.lr_pool, 
-                            beta_range=(0.001, 0.02), # Strictly style/lighting swap
-                            apply_jpeg=False          # NO geometric destruction!
+                            beta_range=(0.001, 0.02),
+                            apply_jpeg=False          
                         )
                         img_hr_teacher_input = mild_degrader.apply(img_hr_teacher_input)
                     except Exception as e:
-                        pass # Failsafe: just use the clean image if FDA crashes
+                        pass
                 
                 # Resize the softened image for the Teacher's network
                 img_hr_resized = cv2.resize(img_hr_teacher_input, (self.imgW, self.imgH), interpolation=cv2.INTER_CUBIC)
                 
-                # Stream B: The SR Ground Truth (MUST remain flawlessly clean!)
-                sr_W, sr_H = self.imgW * 2, self.imgH * 2
-                img_sr_gt = cv2.resize(img_hr_clean, (sr_W, sr_H), interpolation=cv2.INTER_CUBIC)
+                # ---> THE FIX 1: Temporarily resize the Ground Truth to perfectly match the base dimensions!
+                img_sr_base = cv2.resize(img_hr_clean, (self.imgW, self.imgH), interpolation=cv2.INTER_CUBIC)
 
-                # ---> THE FIX: JOINT GEOMETRIC AUGMENTATION <---
-                # This ensures the Student LR, Teacher HR, and SR Ground Truth all rotate together!
-                augmented = self.geo_aug(image=img_resized, image_hr=img_hr_resized, image_sr=img_sr_gt)
+                # ---> THE FIX 2: Safely apply the joint rotation to identical shapes!
+                augmented = self.geo_aug(image=img_resized, image_hr=img_hr_resized, image_sr=img_sr_base)
+                
                 img_resized = augmented['image']
                 img_hr_resized = augmented['image_hr']
-                img_sr_gt = augmented['image_sr']
+                
+                # ---> THE FIX 3: Scale the perfectly-aligned SR Ground Truth up to its final resolution!
+                # Note: Multiply imgW and imgH by whatever your LatentUpsampler upscale_factor is (e.g., 2)
+                upscale_factor = 1 
+                sr_W, sr_H = self.imgW * upscale_factor, self.imgH * upscale_factor
+                img_sr_gt = cv2.resize(augmented['image_sr'], (sr_W, sr_H), interpolation=cv2.INTER_CUBIC)
+                
             else:
                 augmented = self.geo_aug(image=img_resized)
                 img_resized = augmented['image']

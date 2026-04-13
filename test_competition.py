@@ -13,12 +13,11 @@ import pickle
 import numpy as np
 import torchvision.transforms.functional as TF
 
-
-
 # ==============================================================================
 # 1. THE IMPORT FIX (Single Source of Truth)
 # ==============================================================================
 from train_funcs.train_utils import ctc_greedy_decoder, decode_batch_logits, strLabelConverter
+
 # ==============================================================================
 # MAIN EXECUTION
 # ==============================================================================
@@ -34,21 +33,19 @@ if __name__ == "__main__":
     parser.add_argument("--output", default="submission.txt")
     args = parser.parse_args()
 
-
-
     utils.setup_seed(42)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     with open(args.config, "r") as f: config = yaml.load(f, Loader=yaml.FullLoader)
     
-    cls_loss_type = config.get('cls_loss', 'SmoothPoly1') # <--- ADD THIS LINE
+    cls_loss_type = config.get('cls_loss', 'SmoothPoly1') 
     
     print("Building Architecture...")
     # ---> STUDENT MODEL
     model = models.make(config['model_g']).to(device)
     model.eval()
 
-    # ---> TEACHER MODEL (Oracle - Only built if requested!)
+    # ---> TEACHER MODEL (EMA Oracle - Only built if requested!)
     teacher_loaded = False
     if args.ensemble:
         model_t = models.make(config['model_g']).to(device)
@@ -161,7 +158,7 @@ if __name__ == "__main__":
                 state_dict_t = {k.replace('module.', ''): v for k, v in raw_sd_t.items()}
                 model_t.load_state_dict(state_dict_t, strict=False)
                 teacher_loaded = True
-                print("✅ Teacher Oracle Loaded for Ensembling!")
+                print("✅ EMA Teacher Loaded for Ensembling!")
             else:
                 print("⚠️ --ensemble requested, but no Teacher found in checkpoint. Running Student only.")
 
@@ -196,7 +193,7 @@ if __name__ == "__main__":
             if match:
                 track_names_ordered.append(match.group(1))
 
-    # BULLETPROOF SQUEEZE: Compress 15,000 names down to exactly 3,000 unique tracks
+    # BULLETPROOF SQUEEZE: Compress names down to unique tracks
     track_names_ordered = list(dict.fromkeys(track_names_ordered))
 
     correct_plates = 0
@@ -239,13 +236,10 @@ if __name__ == "__main__":
             pred_tracker = {}
 
             # Helper function to decode and accumulate votes
-            # Helper function to decode and accumulate votes
             def accumulate_votes(logits_tensor):
-                # ---> THE FIX: Branch the decoding logic!
                 if cls_loss_type == 'CTC':
                     preds, scores = ctc_greedy_decoder(logits_tensor, true_converter, return_scores=True)
                 else:
-                    # Standard Cross-Entropy Decoding (for FL, CPPD, OTE)
                     preds = decode_batch_logits(logits_tensor, true_converter)
                     scores = F.log_softmax(logits_tensor, dim=-1).max(dim=-1)[0].sum(dim=1)
                     
@@ -257,21 +251,17 @@ if __name__ == "__main__":
 
             with torch.amp.autocast('cuda', enabled=config.get('use_fp16', True)):
                 # ==========================================
-                # PASS 1: Base Resolution (STUDENT)
+                # PASS 1: Base Resolution
                 # ==========================================
+                # Student evaluates the blurry LR images
                 output_base = model(flat_imgs, temporal_pool=True) 
                 if isinstance(output_base, tuple): output_base = output_base[0]
                 accumulate_votes(output_base['logits'])
                 
-                # ---> THE CASCADE UPGRADE: The Teacher reads the Student's drawing!
-                if teacher_loaded and 'sr_image' in output_base:
-                    # Detach the SR image so gradients don't leak, and pass the full HR tensor!
-                    generated_hr = output_base['sr_image'].detach()
-                    
-                    # The Teacher reads the hallucinated HR image
-                    out_base_t = model_t(generated_hr, temporal_pool=True)
+                # ---> THE FIX: The EMA Teacher evaluates the EXACT SAME blurry LR images!
+                if teacher_loaded:
+                    out_base_t = model_t(flat_imgs, temporal_pool=True)
                     if isinstance(out_base_t, tuple): out_base_t = out_base_t[0]
-                    
                     accumulate_votes(out_base_t['logits'])
                 
                 if args.tta:

@@ -8,9 +8,8 @@ test/*
 *flattened_*.txt
 tst/
 UFPR-ALPR-Dataset/
-datasets/synEngine/datasets/
-datasets/synEngine/test_synthetic_outputs/
-
+datasets/synEngine/*
+outputs_*/
 # Checkpoints and Logs
 *.pth
 *.pt

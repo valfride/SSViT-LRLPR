@@ -5,9 +5,6 @@ import numpy as np
 from torch.nn.init import ones_, trunc_normal_, zeros_
 from models.ctc_decoder import CTCDecoder
 # 1. Import your Custom Backbone Components
-from models.custom.VSR_curvature_att import FReLU, HighContrastGate, DeformableProj
-
-# 2. Import common Transformer helpers from the OpenOCR codebase
 from models.common import DropPath, Identity, Mlp, Embeddings
 
 # ==============================================================================
@@ -94,23 +91,31 @@ class PureDeformableSpotter(nn.Module):
         # ==========================================
         # 1. THE FORMAT-AWARE GEOMETRY
         # ==========================================
-        # Layout A: Mercosur (Equidistant spacing)
         x_merc = torch.linspace(0.05, 0.95, num_chars)
         y_merc = torch.full((num_chars,), 0.5) 
         self.ref_points_mercosur = nn.Parameter(torch.stack([x_merc, y_merc], dim=-1).unsqueeze(0))
 
-        # Layout B: Old Brazilian (Gap between char 3 and 4)
-        # Spatial positions roughly mimicking: LLL (gap) NNNN
         x_old = torch.tensor([0.05, 0.18, 0.31,   0.55, 0.68, 0.81, 0.94])
         y_old = torch.full((num_chars,), 0.5)
         self.ref_points_old = nn.Parameter(torch.stack([x_old, y_old], dim=-1).unsqueeze(0))
 
-        # 2. The Format Router (Global Image Context -> 2 Classes)
-        self.format_router = nn.Sequential(
+        # ---> THE UPGRADE: Separation of Global Pool
+        self.global_pool = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
-            nn.Flatten(),
-            nn.Linear(dim, 2) # Outputs: [Logit_Mercosur, Logit_Old]
+            nn.Flatten()
         )
+        
+        self.format_router = nn.Linear(dim, 2) 
+
+        # ---> THE UPGRADE: Elastic Shift Predictor
+        self.elastic_shift = nn.Sequential(
+            nn.Linear(dim, dim // 2),
+            nn.GELU(),
+            nn.Linear(dim // 2, num_chars * 2) # Predicts an (X, Y) shift for all 7 chars
+        )
+        # ZERO INIT: Ensures the model starts with 0.0 shift and doesn't break pre-trained logic!
+        nn.init.constant_(self.elastic_shift[2].weight, 0.0)
+        nn.init.constant_(self.elastic_shift[2].bias, 0.0)
         # ==========================================
 
         self.layers = nn.ModuleList([PureDeformableLayer(dim=dim) for _ in range(num_layers)])
@@ -124,31 +129,34 @@ class PureDeformableSpotter(nn.Module):
         feature_map = self.memory_proj(x)
         
         # ==========================================
-        # 2. DYNAMIC GEOMETRY ROUTING
+        # 2. ELASTIC GEOMETRY ROUTING
         # ==========================================
-        # Guess the layout based on the semantic edge map
-        format_logits = self.format_router(feature_map) # Shape: (B, 2)
-        format_weights = F.softmax(format_logits, dim=-1) # Shape: (B, 2)
+        pooled_context = self.global_pool(feature_map)
         
-        # Isolate the weights and reshape them for broadcasting
+        format_logits = self.format_router(pooled_context) 
+        format_weights = F.softmax(format_logits, dim=-1) 
+        
         w_merc = format_weights[:, 0].view(B, 1, 1)
         w_old = format_weights[:, 1].view(B, 1, 1)
         
-        # Expand the static parameters to match the batch size
         ref_merc_b = self.ref_points_mercosur.expand(B, -1, -1)
         ref_old_b = self.ref_points_old.expand(B, -1, -1)
         
-        # The Differentiable Blend: The winning layout pulls the points to its physical location!
-        dynamic_ref_points = (w_merc * ref_merc_b) + (w_old * ref_old_b)
+        # Step A: The rigid base guess
+        base_ref_points = (w_merc * ref_merc_b) + (w_old * ref_old_b)
+        
+        # Step B: The Elastic Shift
+        shifts = self.elastic_shift(pooled_context).view(B, -1, 2)
+        
+        # Combine and clamp to ensure we don't throw lassos out of bounds
+        dynamic_ref_points = torch.clamp(base_ref_points + shifts, 0.0, 1.0)
         # ==========================================
         
         for layer in self.layers:
-            # Pass the dynamically generated points into the Attention mechanism!
             query = layer(query, pos_embed, feature_map, dynamic_ref_points)
             
         logits = self.classifier(query)
         
-        # We must return the format_logits so the loss function can train the Router!
         return logits, query, feature_map, format_logits
 
 class QueryRefinementNet(nn.Module):
@@ -199,7 +207,7 @@ class SurgicalFocusBlock(nn.Module):
         return identity * a_w * a_h
 
 class CustomOCR(nn.Module):
-    def __init__(self, input_shape=(128, 32, 96), num_classes=37, num_chars=7, **kwargs):
+    def __init__(self, input_shape=(64, 32, 96), num_classes=37, num_chars=7, **kwargs):
         super().__init__()
         in_channels = input_shape[0] 
         

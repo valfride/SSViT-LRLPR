@@ -20,7 +20,7 @@ class OTEBaseline(nn.Module):
     def __init__(self, in_channels=3, max_len=7, num_classes=37, **kwargs):
         super().__init__()
         self.encoder = SVTRNet(
-            img_size=[24, 72], in_channels=in_channels, out_char_num=max_len, out_channels=256,
+            img_size=[32, 96], in_channels=in_channels, out_char_num=max_len, out_channels=256,
             patch_merging='Conv', embed_dim=[128, 256, 384], depth=[6, 6, 6],
             num_heads=[4, 8, 12], mixer=['Conv']*8 + ['Global']*10,
             local_mixer=[[5, 5], [5, 5], [5, 5]], last_stage=False, prenorm=True
