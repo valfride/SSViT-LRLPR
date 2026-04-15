@@ -1,5 +1,6 @@
 # Datasets
 *LMDB*/
+*lmdb*/
 RodoSol*/
 Competition*/
 .vscode*/
@@ -8,8 +9,11 @@ test/*
 *flattened_*.txt
 tst/
 UFPR-ALPR-Dataset/
-datasets/synEngine/*
+datasets/synEngine/
 outputs_*/
+competition*/
+
+
 # Checkpoints and Logs
 *.pth
 *.pt
@@ -20,7 +24,12 @@ outputs_*/
 *.zip
 outputs/
 train_features/
+experiments/
 loss_log.csv
 
 # Cache
 __pycache__/
+
+# other_files
+run_baselines.sh
+

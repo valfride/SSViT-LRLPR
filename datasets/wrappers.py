@@ -17,15 +17,6 @@ from PIL import Image
 from albumentations.core.transforms_interface import ImageOnlyTransform
 import sys
 import re
-# --- NEW: Dynamically add synEngine to the Python Path ---
-CURRENT_DIR = Path(__file__).resolve().parent
-SYN_ENGINE_DIR = CURRENT_DIR / "synEngine"
-sys.path.append(str(SYN_ENGINE_DIR))
-try:
-    from PhysicalPlateGenerator import PhysicalPlateGenerator
-except ImportError:
-    print("⚠️ Warning: PhysicalPlateGenerator not found. Synthetic generation disabled.")
-
 
 class AdvancedPhysicsMotionBlur(ImageOnlyTransform):
     """Simulates physically accurate vehicle motion blur."""
@@ -234,7 +225,7 @@ class Sequential_lr_sr(Dataset):
         self.test = test
         self.normalize = Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
         self.return_hr = return_hr
-        
+        self.eraser_prob = 0
         # ---> NEW: Save the flags to the class
         self.use_fda_hr = use_fda_hr
         self.use_fda_lr = use_fda_lr
@@ -243,17 +234,28 @@ class Sequential_lr_sr(Dataset):
 
         assert self.dataset is not None, "Dataset is None"
 
-        # ---> THE FIX: Explicitly map custom keys to the 'image' pipeline
         self.geo_aug = A.Compose([
+            # 1. Base Affine: Slightly higher rotation limits for tilted plates
             A.ShiftScaleRotate(
                 shift_limit=0.05, 
-                scale_limit=(-0.03, 0.03), 
-                rotate_limit=5,    
+                scale_limit=(-0.05, 0.05), 
+                rotate_limit=7,    
                 p=0.5, 
                 border_mode=cv2.BORDER_REPLICATE
             ),
-        ], additional_targets={'image_hr': 'image', 'image_sr': 'image'}) # <--- CRITICAL FIX
+            # 2. Camera Angle: Simulates looking at the plate from the side/above
+            A.Perspective(scale=(0.02, 0.10), p=0.4, fit_output=True),
+            
+            # 3. Lens Warp: Simulates the slight bulging of cheap traffic cameras
+            A.GridDistortion(num_steps=4, distort_limit=0.1, p=0.3, border_mode=cv2.BORDER_REPLICATE),
+        ], additional_targets={'image_hr': 'image', 'image_sr': 'image'})
 
+        # =========================================================
+        # ---> NEW: LR-Safe PyTorch Augmentations for the ViT
+        # =========================================================
+        self.color_aug = T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.0, hue=0.0)
+        # Drops a tiny black box (2% to 8% of the image) 40% of the time to force ViT global attention
+        # self.eraser = T.RandomErasing(p=0.4, scale=(0.02, 0.08), ratio=(0.3, 3.3), value=0)
         # =========================================================
         # 1. GROUP BY TRACK (Supports LR Tracks AND HR-Only RODOSOL)
         # =========================================================
@@ -280,7 +282,7 @@ class Sequential_lr_sr(Dataset):
                 
                 # ---> OPTIMIZATION: Only build the FDA style pool if FDA is actually enabled!
                 if (self.use_fda_hr or self.use_fda_lr) and not self.test:
-                    if len(self.lr_pool) < 10000:
+                    if len(self.lr_pool) < 50000:
                         img_raw = item['img_raw']
                         if img_raw is not None and len(img_raw.shape) == 3:
                             self.lr_pool.append(img_raw)
@@ -295,12 +297,6 @@ class Sequential_lr_sr(Dataset):
             print(f"📊 FDA Style Pool Size: {len(self.lr_pool)}")
         else:
             print("⚡ FDA Augmentations Disabled: Skipped building style pool.")
-
-        self.syn_prob = synthetic_prob
-        if self.syn_prob > 0.0:
-            asset_path = str(SYN_ENGINE_DIR / "assets")
-            print(f"🚀 Booting Synthetic Engine (Chance: {self.syn_prob * 100}%)")
-            self.syn_engine = PhysicalPlateGenerator(asset_dir=asset_path)
 
     def __len__(self):
         return len(self.valid_tracks)
@@ -337,34 +333,9 @@ class Sequential_lr_sr(Dataset):
             
             if self.return_hr:
                 img_hr_clean = item_hr['img_raw'].copy()
-        # =========================================================
-        # 4. SYNTHETIC ENGINE
-        # =========================================================
-        if getattr(self, 'syn_prob', 0.0) > 0 and random.random() < self.syn_prob:
-            try:
-                import string
-                if random.random() < 0.5:
-                    letters = ''.join(random.choices(string.ascii_uppercase, k=3))
-                    numbers = ''.join(random.choices(string.digits, k=4))
-                    plate_gt = f"{letters}{numbers}"
-                
-                img_bgr, standard_label = self.syn_engine.generate(plate_gt)
-                plate_gt = standard_label
-                img_raw = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-                
-                is_hr_file = True 
-                filename = f"syn_hr_{plate_gt}.jpg" 
-                
-                if self.return_hr:
-                    img_hr_clean = img_raw.copy()
-                    img_hr_resized = cv2.resize(img_hr_clean, (self.imgW, self.imgH), interpolation=cv2.INTER_CUBIC)
-                    img_sr_gt = cv2.resize(img_hr_clean, (sr_W, sr_H), interpolation=cv2.INTER_CUBIC)
-                
-            except Exception as e:
-                print(f"❌ ENGINE CRASH on '{plate_gt}': {repr(e)}")
 
         # =========================================================
-        # 5. THE DEGRADATION BRIDGE (Now Optional!)
+        # 3. THE DEGRADATION BRIDGE (Now Optional!)
         # =========================================================
         if self.aug and not self.test and len(self.lr_pool) > 0:
             
@@ -441,9 +412,20 @@ class Sequential_lr_sr(Dataset):
                 img_resized = augmented['image']
 
         # =========================================================
-        # 7. TENSOR CONVERSION
-        # =========================================================
-        t_lr = self.normalize(ToTensor()(img_resized.copy()))
+        # 7. TENSOR CONVERSION & LR-SAFE AUGMENTATION
+        # =========================================================        
+        
+        t_lr = ToTensor()(img_resized.copy())
+        
+        if self.aug and not self.test:
+            t_lr = self.color_aug(t_lr)
+            # Dynamically apply the eraser based on the current probability
+            if random.random() < self.eraser_prob:
+                eraser = T.RandomErasing(p=1.0, scale=(0.01, 0.15), ratio=(0.1, 4.1), value=0)
+                t_lr = eraser(t_lr)
+            
+        # 3. Normalize to (-1.0 to 1.0)
+        t_lr = self.normalize(t_lr)
         
         out_dict = {
             'lr': t_lr,       

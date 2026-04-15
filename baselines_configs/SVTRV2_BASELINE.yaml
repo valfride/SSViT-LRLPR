@@ -2,11 +2,10 @@ alphabet: 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ
 distill_decay_epochs: 50
 epoch_max: 3000
 epoch_save: 50
-force_lr: true
+force_lr: false
 func_train: SROCR_TRAIN
 func_val: SROCR_VAL
-gpu_ids:
-- 0
+
 
 cls_loss: CTC              
 model_g:
@@ -32,7 +31,7 @@ train_dataset:
   dataset:
     args:
       in_memory: true
-      path_split: ./CompetitionDataset_LMDB_plus
+      path_split: ./competition_dataset_lmdb
       phase: training
     name: lmdb_dataset
   wrapper:
@@ -53,7 +52,7 @@ val_dataset:
   dataset:
     args:
       in_memory: true
-      path_split: ./CompetitionDataset_LMDB_plus
+      path_split: ./competition_dataset_lmdb
       phase: validation
     name: lmdb_dataset
   wrapper:

@@ -769,7 +769,7 @@ def build_loss_function(cls_loss_type, converter, device):
         from models.ote.ote_bridge import OTELossWrapper
         return OTELossWrapper(ignore_index=38).to(device)
     elif cls_loss_type == 'POLY':
-        return SmoothPoly1Loss(epsilon=1.5, smoothing=0.1).to(device)
+        return SmoothPoly1Loss(epsilon=4.0, smoothing=0.1).to(device)
     elif cls_loss_type == 'FL':
         return FocalLoss(gamma=2.0, alpha=1.0, ignore_index=38).to(device)
     elif cls_loss_type in ['LISTER_INTERNAL', 'MDIFF_INTERNAL', 'IGTR_INTERNAL']:
@@ -885,16 +885,24 @@ def decode_predictions(logits, cls_loss_type, converter, return_scores=False):
     else:
         return viterbi_plate_decoder(logits, converter, return_scores=return_scores)
 
-def update_ema_teacher(model_g, model_d, current_epoch, total_epochs):
-    """SOTA Adaptive Cosine EMA Schedule."""
-    base_decay = 0.990   
-    max_decay  = 0.9999  
-    cosine_val = math.cos(math.pi * current_epoch / max(1, total_epochs))
-    schedule_multiplier = (cosine_val + 1.0) / 2.0 
-    current_decay = max_decay - (max_decay - base_decay) * schedule_multiplier
+def update_ema_ghost(model_g, model_ghost, current_epoch, total_epochs, warmup_epochs=0):
+    """SOTA Adaptive Cosine EMA Schedule with Warmup."""
+    if current_epoch < warmup_epochs:
+        current_decay = 0.0 # Force a 100% hard copy during the unstable warmup phase
+    else:
+        base_decay = 0.990   
+        max_decay  = 0.9999  
+        effective_total = max(1, total_epochs - warmup_epochs)
+        
+        # ---> THE FIX: Clamp the epoch so the cosine wave never loops back up!
+        effective_epoch = min(current_epoch - warmup_epochs, effective_total) 
+        
+        cosine_val = math.cos(math.pi * effective_epoch / effective_total)
+        schedule_multiplier = (cosine_val + 1.0) / 2.0 
+        current_decay = max_decay - (max_decay - base_decay) * schedule_multiplier
     
     with torch.no_grad():
-        for param_s, param_t in zip(model_g.parameters(), model_d.parameters()):
+        for param_s, param_t in zip(model_g.parameters(), model_ghost.parameters()):
             param_t.data.mul_(current_decay).add_(param_s.data, alpha=1.0 - current_decay)
 
 def compute_distillation_losses(preds_lr, preds_hr, is_hr_mask, config, device):
@@ -974,7 +982,7 @@ def compute_distillation_losses(preds_lr, preds_hr, is_hr_mask, config, device):
     return losses
 
 @register('SROCR_TRAIN')
-def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimizer_d, optimizer_hyper, loss_fn_spread, config, **kwargs):
+def SROCR_TRAIN(train_loader, val_loader, model_g, model_ghost, optimizer_g, config, **kwargs):
     device = next(model_g.parameters()).device
     true_converter = strLabelConverter(config.get('alphabet', "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
     use_fp16 = config.get('use_fp16', False)
@@ -982,16 +990,13 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
     pbar = tqdm(train_loader, leave=False)
     
     save_root = kwargs.get('save_path', Path('.'))
-    
-    # ---> UPGRADE 1: Intuitive Loss Dictionary <---
-    loss_stats = {'total': [], 'task_s': [], 'kl': [], 'latent': [], 'feat': [], 'nce': [], 'fmt': []}
+    loss_stats = {'total': [], 'task_s': []}
     
     running_acc_seq_s, running_acc_char_s = 0.0, 0.0
-    running_acc_seq_t, running_acc_char_t = 0.0, 0.0
-    
     current_epoch = kwargs.get('epoch', 0)
-    total_epochs = config.get('epochs', 800)
+    epoch_max_ema = config.get('epoch_max_ema', 50)
     cls_loss_type = config.get('cls_loss', 'SmoothPoly1')
+    use_ema_ghost = config.get('use_ema_ghost', False)
     
     loss_fn_spatial = build_loss_function(cls_loss_type, true_converter, device)
     epoch_tracker = ConfusionTracker()
@@ -1002,111 +1007,50 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
         lr_batch = batch['lr'].to(device, non_blocking=True, memory_format=torch.channels_last)
         text_label = batch['gt'] 
         
-        use_distillation = (model_d is not None) and ('hr' in batch)
-        if use_distillation:
-            hr_batch = batch['hr'].to(device, non_blocking=True, memory_format=torch.channels_last)
-            is_hr_mask = batch['is_hr'].to(device)
-            if 'hr_gt' in batch:
-                hr_gt_batch = batch['hr_gt'].to(device, non_blocking=True, memory_format=torch.channels_last)
-        
         true_targets = prepare_targets(cls_loss_type, text_label, true_converter, device)
 
         optimizer_g.zero_grad()
-        if use_distillation and optimizer_d is not None:  
-            optimizer_d.zero_grad()
             
         with torch.amp.autocast('cuda', enabled=use_fp16):
             # ==========================================
             # 1. STUDENT FORWARD PASS
             # ==========================================
-            preds_lr = model_g(
-                lr_batch, temporal_pool=True, tgt=true_targets, 
-                epoch=current_epoch, return_attn=True 
-            )
+            preds_lr = model_g(lr_batch, temporal_pool=True, tgt=true_targets, epoch=current_epoch)
             if isinstance(preds_lr, (tuple, list)): preds_lr = preds_lr[0]
 
-            # Primary Text Loss (The Task)
-            loss_task_s = compute_task_loss(preds_lr, true_targets, loss_fn_spatial, cls_loss_type)
-            
-            # ---> THE FIX: Add + 0.0 to break the PyTorch memory reference!
-            total_loss_g = loss_task_s + 0.0
-
-            # ---> UPGRADE 2: Track Format Router (CustomOCR Specific) <---
-            if 'format_logits' in preds_lr:
-                true_format_labels = torch.tensor([get_layout_label(txt) for txt in text_label], device=device)
-                loss_fmt = F.cross_entropy(preds_lr['format_logits'], true_format_labels)
-                total_loss_g += loss_fmt
-                loss_stats['fmt'].append(loss_fmt.item())
-
-            # ==========================================
-            # 2. TEACHER FORWARD PASS & DISTILLATION
-            # ==========================================
-            if use_distillation:
-                context_manager = torch.no_grad() if optimizer_d is None else torch.enable_grad()
-                with context_manager:
-                    preds_hr = model_d(
-                        hr_batch, temporal_pool=True, tgt=true_targets, 
-                        epoch=current_epoch, return_attn=False 
-                    )
-                    if isinstance(preds_hr, (tuple, list)): preds_hr = preds_hr[0]
-                    
-                    loss_task_t = compute_task_loss(preds_hr, true_targets, loss_fn_spatial, cls_loss_type)
-
-                    if optimizer_d is not None and 'sr_image' in preds_hr and 'hr_gt_batch' in locals():
-                        teacher_pixel_loss = F.l1_loss(preds_hr['sr_image'], hr_gt_batch)
-                        loss_task_t += (10.0 * teacher_pixel_loss)
-
-                distill_losses = compute_distillation_losses(preds_lr, preds_hr, is_hr_mask, config, device)
-                
-                kl_weight = config.get('distill_weight_kl', 2.0)
-                latent_weight = config.get('distill_weight_latent', 10.0) 
-                feat_weight = config.get('distill_weight_feat', 0.0)
-                ocr_token_weight = config.get('distill_weight_ocr', 1.0)
-                
-                total_loss_g += (kl_weight * distill_losses['kl']) + \
-                                (latent_weight * distill_losses['latent']) + \
-                                (feat_weight * distill_losses['feature']) + \
-                                (ocr_token_weight * distill_losses['ocr'])
-                                
-                total_loss = total_loss_g + loss_task_t if optimizer_d is not None else total_loss_g
-            else:
-                total_loss = total_loss_g
+            # Primary Text Loss
+            total_loss = compute_task_loss(preds_lr, true_targets, loss_fn_spatial, cls_loss_type) + 0.0
 
         if not torch.isfinite(total_loss):
             print(f"⚠️ Warning: Non-finite loss at batch {batch_idx}. Skipping.")
             continue
 
         # ==========================================
-        # 3. BACKWARD PASS & EMA
+        # 2. BACKWARD PASS & GHOST TRACKING
         # ==========================================
         scaler.scale(total_loss).backward()
         
         scaler.unscale_(optimizer_g)
         torch.nn.utils.clip_grad_norm_(model_g.parameters(), max_norm=5.0)
         
-        if use_distillation and optimizer_d is not None:  
-            scaler.unscale_(optimizer_d)
-            torch.nn.utils.clip_grad_norm_(model_d.parameters(), max_norm=5.0)
-
         scaler.step(optimizer_g)
         scaler.update()
         
-        if use_distillation and model_d is not None:
-            update_ema_teacher(model_g, model_d, current_epoch, total_epochs)
+        # SILENT GHOST UPDATE
+        if use_ema_ghost and model_ghost is not None:
+            # ---> THE FIX: Hard stop the EMA updates to save compute and freeze the Oracle
+            # if current_epoch <= epoch_max_ema:
+            warmup_epochs = config.get('ema_warmup_epochs', 5)
+            update_ema_ghost(model_g, model_ghost, current_epoch, epoch_max_ema, warmup_epochs)
+            # else:
+            #     pass # Ghost is now mathematically frozen and acts as a pure generalized Oracle!
                         
         # ====================================================================
-        # METRICS & VISUALIZATION
+        # METRICS & LOGGING
         # ====================================================================
         with torch.no_grad():
             loss_stats['total'].append(total_loss.item())
-            loss_stats['task_s'].append(loss_task_s.item()) 
-            
-            # ---> UPGRADE 3: Honest Distillation Tracking <---
-            if use_distillation:
-                loss_stats['kl'].append((distill_losses['kl'] * kl_weight).item())
-                loss_stats['latent'].append((distill_losses['latent'] * latent_weight).item())
-                loss_stats['feat'].append((distill_losses['feature'] * feat_weight).item())                
-                loss_stats['nce'].append((distill_losses['ocr'] * ocr_token_weight).item())                
+            loss_stats['task_s'].append(total_loss.item()) 
                 
             if batch_idx % 5 == 0:
                 decoded_s = decode_predictions(preds_lr['logits'], cls_loss_type, true_converter)
@@ -1121,76 +1065,29 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_d, optimizer_g, optimiz
                 
                 epoch_tracker.update(decoded_s, text_label) 
                 
-                decoded_t = decoded_s 
-                if use_distillation:
-                    decoded_t = decode_predictions(preds_hr['logits'], cls_loss_type, true_converter)
-                    
-                    acc_t_seq = sum([1 for p, t in zip(decoded_t, text_label) if p == t]) / len(text_label)
-                    running_acc_seq_t = (running_acc_seq_t * 0.9) + (acc_t_seq * 0.1) if running_acc_seq_t > 0 else acc_t_seq
-                    
-                    correct_chars_t = sum(sum(1 for pc, tc in zip(p, t) if pc == tc) for p, t in zip(decoded_t, text_label))
-                    acc_t_chr = correct_chars_t / max(total_chars, 1)
-                    running_acc_char_t = (running_acc_char_t * 0.9) + (acc_t_chr * 0.1) if running_acc_char_t > 0 else acc_t_chr
-                
-                # ---> UPGRADE 4: The Dynamic Progress Bar <---
                 postfix_dict = {
                     'Loss': f"{np.mean(loss_stats['total'][-50:]):.4f}",
-                    'Task': f"{np.mean(loss_stats['task_s'][-50:]):.4f}", 
                     'S-Seq': f"{running_acc_seq_s:.1%}", 
                     'S-Chr': f"{running_acc_char_s:.1%}",
                 }
                 
-                # Only show Format Loss if CustomOCR is actively routing!
-                if len(loss_stats['fmt']) > 0:
-                    postfix_dict['Fmt'] = f"{np.mean(loss_stats['fmt'][-50:]):.4f}"
-                
-                if use_distillation:
-                    postfix_dict['KL'] = f"{np.mean(loss_stats['kl'][-50:]):.4f}"
-                    postfix_dict['Lat'] = f"{np.mean(loss_stats['latent'][-50:]):.4f}"
-                    
-                    # Only clutter the bar with FDD if it's actually turned on
-                    if feat_weight > 0:
-                        postfix_dict['FDD'] = f"{np.mean(loss_stats['feat'][-50:]):.4f}"
-                        
-                    postfix_dict['NCE'] = f"{np.mean(loss_stats['nce'][-50:]):.4f}"
-                    postfix_dict['T-Seq'] = f"{running_acc_seq_t:.1%}"
-                    postfix_dict['T-Chr'] = f"{running_acc_char_t:.1%}"
-                
                 pbar.set_postfix(postfix_dict)
-                write_live_monitor(save_root / 'live_monitor.txt', text_label, decoded_s, decoded_t, current_epoch, batch_idx)
-
-            if batch_idx % 20 == 0:
-                if 'sr_image' in preds_lr and preds_lr['sr_image'] is not None:
-                    visualize_feature_maps(
-                        student_sr=preds_lr['sr_image'], 
-                        teacher_sr=preds_hr['sr_image'] if use_distillation else None, 
-                        lr_images=lr_batch, hr_images=hr_batch if use_distillation else None, 
-                        batch_idx=batch_idx, epoch=current_epoch, save_dir=save_root / 'train_features'
-                    )
-                
-                if 'attn_maps' in preds_lr and preds_lr['attn_maps'] is not None:
-                    if 'decoded_s' not in locals():
-                        decoded_s = decode_predictions(preds_lr['logits'], cls_loss_type, true_converter)
-                        
-                    visualize_vit_attention(
-                        image_tensor=lr_batch, latent_tensor=preds_lr.get('latent_lr', None), 
-                        attn_weights=preds_lr['attn_maps'], query_texts=decoded_s[0],             
-                        epoch=current_epoch, batch_idx=batch_idx, save_dir=save_root / 'train_features'
-                    )
 
     final_loss = np.mean(loss_stats['total']) if loss_stats['total'] else 0.0
-    if use_distillation: return final_loss, running_acc_seq_t
     return final_loss
 
 @register('SROCR_VAL')
-def SROCR_VAL(val_loader, model_g, model_d, loss_fn, config, **kwargs):
+def SROCR_VAL(val_loader, model_g, model_ghost, config, **kwargs):
     model_g.eval() 
-    if model_d is not None:
-        model_d.eval()
+    if model_ghost is not None:
+        model_ghost.eval()
         
     device = next(model_g.parameters()).device
     true_converter = strLabelConverter(config.get('alphabet', "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
     cls_loss_type = config.get('cls_loss', 'SmoothPoly1')
+    
+    # 1. Initialize the correct loss function for the baseline
+    loss_fn_spatial = build_loss_function(cls_loss_type, true_converter, device)
     
     val_tracker = ConfusionTracker()
     save_root = kwargs.get('save_path', Path('.'))
@@ -1198,6 +1095,10 @@ def SROCR_VAL(val_loader, model_g, model_d, loss_fn, config, **kwargs):
     correct_sequences_s = 0
     correct_sequences_t = 0
     total_sequences = 0
+    
+    # Track the running validation loss
+    total_val_loss = 0.0
+    val_batches = 0
 
     with torch.no_grad():
         for batch in tqdm(val_loader, desc="Validation"):
@@ -1205,24 +1106,40 @@ def SROCR_VAL(val_loader, model_g, model_d, loss_fn, config, **kwargs):
             text_labels = batch['gt']     
 
             B, Seq_Len, C, H, W = lr_seqs.shape
-            # Both models will now evaluate the exact same blurry images
+            
+            # Flatten the images (B * Seq_Len, C, H, W)
             flat_imgs = lr_seqs.view(B * Seq_Len, C, H, W).contiguous().to(memory_format=torch.channels_last)
             
+            # 2. Expand the labels to match the flattened sequence length
+            flat_labels = []
+            for label in text_labels:
+                flat_labels.extend([label] * Seq_Len)
+                
+            # 3. Prepare the mathematically correct targets for the loss function
+            true_targets = prepare_targets(cls_loss_type, flat_labels, true_converter, device, is_training=False)
+            
             # ==========================================
-            # 1. STUDENT INFERENCE
+            # 1. STUDENT INFERENCE & LOSS COMPUTATION
             # ==========================================
             with torch.amp.autocast('cuda', enabled=config.get('use_fp16', False)):
                 output_s = model_g(flat_imgs, temporal_pool=True) 
                 if isinstance(output_s, (tuple, list)): output_s = output_s[0]
                 logits_s = output_s['logits']
+                
+                # Calculate Validation Loss
+                if loss_fn_spatial is not None:
+                    loss_s = compute_task_loss(output_s, true_targets, loss_fn_spatial, cls_loss_type)
+                    if torch.isfinite(loss_s):
+                        total_val_loss += loss_s.item()
+                        val_batches += 1
 
             # ==========================================
-            # 2. TEACHER INFERENCE (EMA on LR)
+            # 2. GHOST INFERENCE (Fixed Variable Name)
             # ==========================================
             logits_t = None
-            if model_d is not None:
+            if model_ghost is not None:
                 with torch.amp.autocast('cuda', enabled=config.get('use_fp16', False)):
-                    output_t = model_d(flat_imgs, temporal_pool=True)
+                    output_t = model_ghost(flat_imgs, temporal_pool=True)
                     if isinstance(output_t, (tuple, list)): output_t = output_t[0]
                     logits_t = output_t['logits']
 
@@ -1261,7 +1178,6 @@ def SROCR_VAL(val_loader, model_g, model_d, loss_fn, config, **kwargs):
                 win_s = sorted(tracker_s.items(), key=lambda item: (item[1]['votes'], item[1]['confidence']), reverse=True)[0][0]
                 if win_s == gt: correct_sequences_s += 1
                 
-                # Update confusion tracker with Student's final ensembled answer
                 val_tracker.update([win_s], [gt])
 
                 # --- Teacher Voting ---
@@ -1280,14 +1196,16 @@ def SROCR_VAL(val_loader, model_g, model_d, loss_fn, config, **kwargs):
             
     acc_seq_s = correct_sequences_s / total_sequences if total_sequences else 0.0
     acc_seq_t = correct_sequences_t / total_sequences if total_sequences else 0.0
+    avg_val_loss = total_val_loss / val_batches if val_batches > 0 else 0.0
 
     print(f"\n{'='*30} SEQUENCE EVALUATION {'='*30}")
     print(f"Total Sequences: {total_sequences}")
-    print(f"Student Acc: {acc_seq_s:.2%} | Teacher (EMA) Acc: {acc_seq_t:.2%}")
+    print(f"Student Acc: {acc_seq_s:.2%} | Ghost (EMA) Acc: {acc_seq_t:.2%}")
     print(f"{'='*81}\n")
     
     total_failures = val_tracker.get_worst_pairs_dict(top_k=50) 
     with open(save_root / 'confusion_stats.json', 'w') as f: 
         json.dump(total_failures, f, indent=4)
     
-    return 0.0, acc_seq_s, acc_seq_t
+    # Returns the mathematically valid loss instead of 0.0
+    return avg_val_loss, acc_seq_s, acc_seq_t

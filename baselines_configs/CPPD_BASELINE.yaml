@@ -41,12 +41,12 @@ LRScheduler:
 # DATALOADERS
 # ==========================================================
 train_dataset:
-  batch: 256
+  batch: 64
   dataset:
     name: lmdb_dataset
     args:
       in_memory: true
-      path_split: ./CompetitionDataset_LMDB_plus
+      path_split: ./competition_dataset_lmdb
       phase: training
   wrapper:
     name: VSR_collate_fn
@@ -62,12 +62,12 @@ train_dataset:
       synthetic_prob: 0.0
 
 val_dataset:
-  batch: 256  # Kept lower (64) because in_images: 5 uses 5x the VRAM!
+  batch: 64  # Kept lower (64) because in_images: 5 uses 5x the VRAM!
   dataset:
     name: lmdb_dataset
     args:
       in_memory: true
-      path_split: ./CompetitionDataset_LMDB_plus
+      path_split: ./competition_dataset_lmdb
       phase: validation
   wrapper:
     name: VSR_Sequence_collate_fn

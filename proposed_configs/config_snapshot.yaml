@@ -1,0 +1,84 @@
+name: VSR_DenseRoPE_Poly
+alphabet: 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ
+resume: null
+finetune: False
+# ==========================================================
+# ROUTING & TRAINING FLAGS
+# ==========================================================
+cls_loss: POLY              # Routes directly to SmoothPoly1Loss (No CTC, No HyperLoss)
+use_distillation: false     # Explicitly disables the Mean Teacher / HR processing
+
+use_ema_ghost: true           # Turns ON the silent EMA tracking model
+ema_warmup_epochs: 5          # The Ghost will strictly copy the Student for 5 epochs before decaying
+epoch_max_ema: 50              # The Ghost will stop updating after 50 epochs to save compute (Can be set to epoch_max for full tracking)
+
+use_fp16: true
+force_lr: true
+
+epoch_max: 1000
+func_train: SROCR_TRAIN
+func_val: SROCR_VAL
+
+# ==========================================================
+# MODEL ARCHITECTURE (The Dense RoPE ViT)
+# ==========================================================
+model_g:
+  name: VSR_CURVATURE
+  args:
+    in_channels: 3
+    feature_dim: 256        # The bottleneck semantic depth
+    cnn_heads: 8            # Number of attention heads in the Restormer Block
+    d_model: 384            # Dimension of the ViT tokens
+    vit_heads: 12            # Number of attention heads for the 2D RoPE Cross-Attention
+    num_chars: 7            # Exactly 7 queries mapping 1-to-1 to the PolyLoss
+
+# ==========================================================
+# OPTIMIZATION
+# ==========================================================
+optimizer_sr:
+  name: adamW
+  args:
+    lr: 1e-4
+    weight_decay: 0.05
+# ==========================================================
+# DATASETS
+# ==========================================================
+train_dataset:
+  batch: 128
+  dataset:
+    name: lmdb_dataset
+    args:
+      in_memory: true
+      path_split: ./competition_dataset_lmdb
+      phase: training
+  wrapper:
+    name: VSR_collate_fn
+    args:
+      aug: true
+      imgH: 32
+      imgW: 96
+      in_images: 1
+      image_aspect_ratio: 3.0
+      background: (127, 127, 127)
+      return_hr: false
+      use_fda_hr: false
+      use_fda_lr: true
+
+val_dataset:
+  batch: 32
+  dataset:
+    name: lmdb_dataset
+    args:
+      in_memory: true
+      path_split: ./competition_dataset_lmdb
+      phase: validation
+  wrapper:
+    name: VSR_Sequence_collate_fn
+    args:
+      aug: false
+      imgH: 32
+      imgW: 96
+      in_images: 5
+      test: true
+      image_aspect_ratio: 3.0
+      background: (127, 127, 127)

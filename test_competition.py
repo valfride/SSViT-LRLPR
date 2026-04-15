@@ -28,8 +28,8 @@ if __name__ == "__main__":
     parser.add_argument("--split", required=True)
     parser.add_argument("--mode", required=True, choices=['val', 'test'])
     parser.add_argument("--swa", action="store_true", help="Enable Stochastic Weight Averaging") 
+    parser.add_argument("--num_swa", type=int, default=5, help="Number of top checkpoints to average")
     parser.add_argument("--tta", action="store_true", help="Enable Test-Time Augmentation")
-    parser.add_argument("--ensemble", action="store_true", help="Enable Dual-Model Teacher/Student Ensemble")
     parser.add_argument("--output", default="submission.txt")
     args = parser.parse_args()
 
@@ -41,15 +41,9 @@ if __name__ == "__main__":
     cls_loss_type = config.get('cls_loss', 'SmoothPoly1') 
     
     print("Building Architecture...")
-    # ---> STUDENT MODEL
+    # ---> SINGLE INFERENCE MODEL (Will become either the Ghost, the SWA, or the Student)
     model = models.make(config['model_g']).to(device)
     model.eval()
-
-    # ---> TEACHER MODEL (EMA Oracle - Only built if requested!)
-    teacher_loaded = False
-    if args.ensemble:
-        model_t = models.make(config['model_g']).to(device)
-        model_t.eval()
 
     # --- SWA / CHECKPOINT LOADING ---
     ckpt_dir = Path(args.checkpoints)
@@ -60,7 +54,7 @@ if __name__ == "__main__":
         return float(match.group(1)) if match else 0.0
 
     if args.swa:
-        print("\n⚖️   SWA ENABLED: Averaging Top Models...")
+        print(f"\n⚖️   SWA ENABLED: Targeting Top {args.num_swa} Models...")
         pth_files = list(ckpt_dir.glob("model_acc_*.pth"))
         if not pth_files: 
             print("⚠️  No top models found for SWA. Falling back to last.pth")
@@ -68,71 +62,66 @@ if __name__ == "__main__":
         
         pth_files.sort(key=extract_acc, reverse=True)
         
-        valid_state_dicts_g = []
-        valid_state_dicts_t = []
+        # Calculate how many models we actually have available to safely display in the UI
+        actual_models_used = min(args.num_swa, len(pth_files))
+        print(f"📊 Found {len(pth_files)} checkpoints. Averaging the best {actual_models_used}.")
         
+        valid_state_dicts = []
+        
+        # Load the reference checkpoint
         first_checkpoint = torch.load(pth_files[0], map_location=device, weights_only=False)
-        ref_sd_g = {k.replace('module.', ''): v for k, v in first_checkpoint['model_g_sd'].items()}
-        valid_state_dicts_g.append(ref_sd_g)
         
-        if args.ensemble and 'model_t_sd' in first_checkpoint:
-            ref_sd_t = {k.replace('module.', ''): v for k, v in first_checkpoint['model_t_sd'].items()}
-            valid_state_dicts_t.append(ref_sd_t)
+        # HONESTY UPGRADE: Always prioritize the Ghost EMA weights if they exist
+        target_key = 'model_ghost_sd' if 'model_ghost_sd' in first_checkpoint else 'model_g_sd'
+        print(f"🧠 SWA Target Source: '{target_key}'")
+        
+        ref_sd = {k.replace('module.', ''): v for k, v in first_checkpoint[target_key].items()}
+        valid_state_dicts.append(ref_sd)
             
         print(f"  ✅ [REF]     {pth_files[0].name}")
 
-        for pth in pth_files[1:5]: 
+        # ---> THE FIX: Dynamically slice based on the user's argument
+        for pth in pth_files[1:args.num_swa]: 
             try:
                 full_ckpt = torch.load(pth, map_location=device, weights_only=False)
-                clean_sd_g = {k.replace('module.', ''): v for k, v in full_ckpt['model_g_sd'].items()}
+                # Ensure the subsequent checkpoints also use the same target key
+                if target_key not in full_ckpt:
+                    print(f"  ⚠️ [SKIP]    {pth.name} (Missing {target_key})")
+                    continue
+                    
+                clean_sd = {k.replace('module.', ''): v for k, v in full_ckpt[target_key].items()}
                 
                 is_compatible = True
-                if set(clean_sd_g.keys()) != set(ref_sd_g.keys()):
+                if set(clean_sd.keys()) != set(ref_sd.keys()):
                     is_compatible = False
                 else:
-                    for k in ref_sd_g.keys():
-                        if clean_sd_g[k].shape != ref_sd_g[k].shape:
+                    for k in ref_sd.keys():
+                        if clean_sd[k].shape != ref_sd[k].shape:
                             is_compatible = False
                             break
                 
                 if is_compatible:
                     print(f"  ✅ [INCLUDE] {pth.name}")
-                    valid_state_dicts_g.append(clean_sd_g)
-                    
-                    # Only collect Teacher if SWA AND Ensemble are active
-                    if args.ensemble and 'model_t_sd' in full_ckpt:
-                        clean_sd_t = {k.replace('module.', ''): v for k, v in full_ckpt['model_t_sd'].items()}
-                        valid_state_dicts_t.append(clean_sd_t)
+                    valid_state_dicts.append(clean_sd)
                 else:
                     print(f"  ⚠️ [SKIP]    {pth.name} (Shape/Arch Mismatch)")
             except Exception as e:
                 print(f"  ❌ [ERROR]   {pth.name}: {e}")
 
-        if not valid_state_dicts_g: raise RuntimeError("No compatible checkpoints found!")
+        if not valid_state_dicts: raise RuntimeError("No compatible checkpoints found!")
         
-        # Average Student
-        swa_dict_g = {k: v.clone().float() for k, v in valid_state_dicts_g[0].items()}
-        for i in range(1, len(valid_state_dicts_g)):
-            for k, v in valid_state_dicts_g[i].items():
-                swa_dict_g[k] += v.float()
-        for k in swa_dict_g.keys(): swa_dict_g[k] /= len(valid_state_dicts_g)
-        model.load_state_dict(swa_dict_g, strict=False)
-        print("✅ SWA Student Weights Loaded.")
+        # Calculate the SWA
+        swa_dict = {k: v.clone().float() for k, v in valid_state_dicts[0].items()}
+        for i in range(1, len(valid_state_dicts)):
+            for k, v in valid_state_dicts[i].items():
+                swa_dict[k] += v.float()
+        for k in swa_dict.keys(): swa_dict[k] /= len(valid_state_dicts)
         
-        # Average Teacher (If available across the sweep)
-        if args.ensemble and len(valid_state_dicts_t) == len(valid_state_dicts_g):
-            swa_dict_t = {k: v.clone().float() for k, v in valid_state_dicts_t[0].items()}
-            for i in range(1, len(valid_state_dicts_t)):
-                for k, v in valid_state_dicts_t[i].items():
-                    swa_dict_t[k] += v.float()
-            for k in swa_dict_t.keys(): swa_dict_t[k] /= len(valid_state_dicts_t)
-            model_t.load_state_dict(swa_dict_t, strict=False)
-            teacher_loaded = True
-            print("✅ SWA Teacher Weights Loaded for Ensembling!")
-        elif args.ensemble:
-            print("⚠️ --ensemble requested, but Teacher SWA failed (not all checkpoints had Teacher weights).")
+        model.load_state_dict(swa_dict, strict=False)
+        print("✅ SWA Weights Successfully Loaded into the Inference Model.")
 
     else:
+        # SINGLE CHECKPOINT LOADING
         pth_files = list(ckpt_dir.glob("model_acc_*.pth"))
         if pth_files:
             pth_files.sort(key=extract_acc, reverse=True)
@@ -140,27 +129,22 @@ if __name__ == "__main__":
             print(f"\nLoading Best Checkpoint: {best_ckpt}")
         else:
             best_ckpt = ckpt_dir / 'last.pth'
+            print(f"\nLoading Fallback Checkpoint: {best_ckpt}")
             
-        print(f"\nLoading Single Checkpoint: {best_ckpt}")
         if not best_ckpt.exists(): raise FileNotFoundError(f"Checkpoint not found: {best_ckpt}")
         
         full_ckpt = torch.load(best_ckpt, map_location=device, weights_only=False)
         
-        # Load Student
-        raw_sd = full_ckpt['model_g_sd']
+        # HONESTY UPGRADE: Prioritize the Ghost
+        if 'model_ghost_sd' in full_ckpt:
+            print("👻 Found Ghost EMA weights! Promoting Ghost to Primary Inference Model.")
+            raw_sd = full_ckpt['model_ghost_sd']
+        else:
+            print("👤 No Ghost weights found. Loading standard Student model.")
+            raw_sd = full_ckpt['model_g_sd']
+            
         state_dict = {k.replace('module.', ''): v for k, v in raw_sd.items()}
         model.load_state_dict(state_dict, strict=False)
-
-        # ---> Load Teacher (Only if requested)
-        if args.ensemble:
-            if 'model_t_sd' in full_ckpt:
-                raw_sd_t = full_ckpt['model_t_sd']
-                state_dict_t = {k.replace('module.', ''): v for k, v in raw_sd_t.items()}
-                model_t.load_state_dict(state_dict_t, strict=False)
-                teacher_loaded = True
-                print("✅ EMA Teacher Loaded for Ensembling!")
-            else:
-                print("⚠️ --ensemble requested, but no Teacher found in checkpoint. Running Student only.")
 
     # --- DATASET ---
     print(f"\nPreparing Data from {args.split}...")
@@ -253,61 +237,37 @@ if __name__ == "__main__":
                 # ==========================================
                 # PASS 1: Base Resolution
                 # ==========================================
-                # Student evaluates the blurry LR images
                 output_base = model(flat_imgs, temporal_pool=True) 
                 if isinstance(output_base, tuple): output_base = output_base[0]
                 accumulate_votes(output_base['logits'])
                 
-                # ---> THE FIX: The EMA Teacher evaluates the EXACT SAME blurry LR images!
-                if teacher_loaded:
-                    out_base_t = model_t(flat_imgs, temporal_pool=True)
-                    if isinstance(out_base_t, tuple): out_base_t = out_base_t[0]
-                    accumulate_votes(out_base_t['logits'])
-                
+                # ==========================================
+                # TTA: HONEST AUGMENTATION ENSEMBLE
+                # ==========================================
                 if args.tta:
-                    # PASS 2: Positive Sweep (+2.5)
+                    # Positive Sweep (+2.5)
                     flat_p2_5 = TF.rotate(flat_imgs, angle=2.5, interpolation=TF.InterpolationMode.BILINEAR)
                     out_p2_5 = model(flat_p2_5, temporal_pool=True)
                     if isinstance(out_p2_5, tuple): out_p2_5 = out_p2_5[0]
                     accumulate_votes(out_p2_5['logits'])
-                    
-                    if teacher_loaded:
-                        out_t_p2_5 = model_t(flat_p2_5, temporal_pool=True)
-                        if isinstance(out_t_p2_5, tuple): out_t_p2_5 = out_t_p2_5[0]
-                        accumulate_votes(out_t_p2_5['logits'])
 
-                    # PASS 3: Positive Sweep (+5.0)
+                    # Positive Sweep (+5.0)
                     flat_p5_0 = TF.rotate(flat_imgs, angle=5.0, interpolation=TF.InterpolationMode.BILINEAR)
                     out_p5_0 = model(flat_p5_0, temporal_pool=True)
                     if isinstance(out_p5_0, tuple): out_p5_0 = out_p5_0[0]
                     accumulate_votes(out_p5_0['logits'])
-                    
-                    if teacher_loaded:
-                        out_t_p5_0 = model_t(flat_p5_0, temporal_pool=True)
-                        if isinstance(out_t_p5_0, tuple): out_t_p5_0 = out_t_p5_0[0]
-                        accumulate_votes(out_t_p5_0['logits'])
 
-                    # PASS 4: Negative Sweep (-2.5)
+                    # Negative Sweep (-2.5)
                     flat_m2_5 = TF.rotate(flat_imgs, angle=-2.5, interpolation=TF.InterpolationMode.BILINEAR)
                     out_m2_5 = model(flat_m2_5, temporal_pool=True)
                     if isinstance(out_m2_5, tuple): out_m2_5 = out_m2_5[0]
                     accumulate_votes(out_m2_5['logits'])
-                    
-                    if teacher_loaded:
-                        out_t_m2_5 = model_t(flat_m2_5, temporal_pool=True)
-                        if isinstance(out_t_m2_5, tuple): out_t_m2_5 = out_t_m2_5[0]
-                        accumulate_votes(out_t_m2_5['logits'])
 
-                    # PASS 5: Negative Sweep (-5.0)
+                    # Negative Sweep (-5.0)
                     flat_m5_0 = TF.rotate(flat_imgs, angle=-5.0, interpolation=TF.InterpolationMode.BILINEAR)
                     out_m5_0 = model(flat_m5_0, temporal_pool=True)
                     if isinstance(out_m5_0, tuple): out_m5_0 = out_m5_0[0]
                     accumulate_votes(out_m5_0['logits'])
-                    
-                    if teacher_loaded:
-                        out_t_m5_0 = model_t(flat_m5_0, temporal_pool=True)
-                        if isinstance(out_t_m5_0, tuple): out_t_m5_0 = out_t_m5_0[0]
-                        accumulate_votes(out_t_m5_0['logits'])
 
             # ==========================================================
             # STRING-LEVEL ENSEMBLING

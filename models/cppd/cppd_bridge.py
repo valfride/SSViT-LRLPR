@@ -15,6 +15,16 @@ class CPPDLossWrapper(nn.Module):
         
     def forward(self, preds_dict, targets):
         char_tgt, node_tgt = targets
+        
+        # ---> THE FIX: Validation Mode Check
+        if 'node_feats' not in preds_dict:
+            # During validation, node_feats are dropped. We just calculate 
+            # standard Cross Entropy on the logits so the val loop doesn't crash.
+            logits_flat = preds_dict['logits'].flatten(0, 1)
+            char_tgt_flat = char_tgt.flatten(0, 1)
+            return self.edge_ce(logits_flat, char_tgt_flat)
+            
+        # ---> Normal Training Mode
         node_feats = preds_dict['node_feats']
         edge_feats = preds_dict['edge_feats']
         
@@ -24,8 +34,8 @@ class CPPDLossWrapper(nn.Module):
         loss_node = loss_char_node + loss_pos_node
         
         edge_feats = edge_feats.flatten(0, 1)
-        char_tgt = char_tgt.flatten(0, 1)
-        loss_edge = self.edge_ce(edge_feats, char_tgt)
+        char_tgt_flat = char_tgt.flatten(0, 1)
+        loss_edge = self.edge_ce(edge_feats, char_tgt_flat)
         
         return loss_node + loss_edge
 

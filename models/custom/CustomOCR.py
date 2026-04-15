@@ -179,12 +179,19 @@ class QueryRefinementNet(nn.Module):
 # ==============================================================================
 # 3. SURGEON HELPER BLOCKS & CUSTOM OCR
 # ==============================================================================
+import math
+
 class SurgicalFocusBlock(nn.Module):
     def __init__(self, in_channels, reduction=32):
         super().__init__()
         self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
         self.pool_w = nn.AdaptiveAvgPool2d((1, None))
-        mip = max(8, in_channels // reduction)
+        
+        # 1. Calculate raw mip
+        raw_mip = max(8, in_channels // reduction)
+        # 2. Force it to be a multiple of 4 for GroupNorm safety
+        mip = math.ceil(raw_mip / 4) * 4 
+        
         self.conv1 = nn.Conv2d(in_channels, mip, kernel_size=1, stride=1, padding=0)
         self.bn1 = nn.GroupNorm(4, mip) 
         self.act = nn.Hardswish()
@@ -202,8 +209,11 @@ class SurgicalFocusBlock(nn.Module):
         y = self.act(y) 
         x_h, x_w = torch.split(y, [h, w], dim=2)
         x_w = x_w.permute(0, 1, 3, 2)
+        
+        # 3. Use sigmoid to create the 0-to-1 attention gates
         a_h = self.conv_h(x_h).sigmoid()
         a_w = self.conv_w(x_w).sigmoid()
+        
         return identity * a_w * a_h
 
 class CustomOCR(nn.Module):

@@ -25,7 +25,7 @@ LRScheduler:
 optimizer_sr:
   name: adamW
   args:
-    lr: 5e-4
+    lr: 1e-4
     weight_decay: 0.05
 
 warmup_epochs: 5 
@@ -36,7 +36,7 @@ train_dataset:
     name: lmdb_dataset
     args:
       in_memory: true
-      path_split: ./CompetitionDataset_LMDB_plus
+      path_split: ./competition_dataset_lmdb
       phase: training
   wrapper:
     name: VSR_collate_fn
@@ -49,12 +49,12 @@ train_dataset:
       background: (127, 127, 127)
 
 val_dataset:
-  batch: 32
+  batch: 64
   dataset:
     name: lmdb_dataset
     args:
       in_memory: true
-      path_split: ./CompetitionDataset_LMDB_plus
+      path_split: ./competition_dataset_lmdb
       phase: validation
   wrapper:
     name: VSR_Sequence_collate_fn

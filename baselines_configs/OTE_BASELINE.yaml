@@ -35,7 +35,7 @@ train_dataset:
     name: lmdb_dataset
     args:
       in_memory: true
-      path_split: ./CompetitionDataset_LMDB_plus
+      path_split: ./competition_dataset_lmdb
       phase: training
   wrapper:
     name: VSR_collate_fn
@@ -56,7 +56,7 @@ val_dataset:
     name: lmdb_dataset
     args:
       in_memory: true
-      path_split: ./CompetitionDataset_LMDB_plus
+      path_split: ./competition_dataset_lmdb
       phase: validation
   wrapper:
     name: VSR_Sequence_collate_fn
