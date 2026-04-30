@@ -254,14 +254,10 @@ if __name__ == "__main__":
                 # PASS 1: Base Resolution
                 # CRITICAL: Removed temporal_pool=True to prevent latent spatial smearing
                 # ==========================================
-                output_base = model(flat_imgs, epoch=100)
-                if isinstance(output_base, tuple): 
-                    output_base = output_base[0]
-    
+                output_base = model(flat_imgs, epoch=100) 
+                if isinstance(output_base, tuple): output_base = output_base[0]
                 view_logits.append(output_base['logits'])
-                # print(f"Base View Logits Shape: {output_base['logits'].shape}")
-                # print(f"Sample Logits (Base View): {output_base['logits']}")
-
+                
                 # ==========================================
                 # TTA: HONEST AUGMENTATION ENSEMBLE
                 # ==========================================
@@ -293,68 +289,37 @@ if __name__ == "__main__":
             # ==========================================================
             # LATE-STAGE SOFT ENSEMBLING (The 80% Push)
             # ==========================================================
-            # ==========================================================
-            # DECOUPLED FUSION (Bayesian Accuracy + Honest Calibration)
-            # ==========================================================
-            # ==========================================================
-            # DECOUPLED FUSION (Bayesian Accuracy + Honest Calibration)
-            # ==========================================================
-            accumulated_log_probs = 0.0 
-            accumulated_raw_probs = 0.0 
-
+            accumulated_probs = 0.0
+            
             for logits_tensor in view_logits:
+                # logits_tensor shape: (B * Seq_Len, num_chars, num_classes)
                 _, num_chars, num_classes = logits_tensor.shape
+                
+                # Reshape to sequence format: (B, Seq_Len, num_chars, num_classes)
                 logits_seq = logits_tensor.view(B, Seq_Len, num_chars, num_classes)
                 
-                # ---------------------------------------------------------
-                # 1. THE SAFETY CHECK (Prevent Double-Softmax)
-                # ---------------------------------------------------------
-                if torch.allclose(logits_seq.sum(dim=-1), torch.ones_like(logits_seq.sum(dim=-1)), atol=1e-2):
-                    # The 'logits' are actually probabilities (e.g., CPPD, IGTR).
-                    probs_seq = logits_seq
-                    
-                    # Use standard log (with epsilon) since they are already probabilities
-                    log_probs = torch.log(probs_seq + 1e-8) 
-                else:
-                    # The model output raw logits (e.g., VSR_CURVATURE). Safe to Softmax!
-                    probs_seq = torch.softmax(logits_seq, dim=-1)
-                    # Use PyTorch's built-in log_softmax for numerical stability
-                    log_probs = F.log_softmax(logits_seq, dim=-1)
-
-                # ---------------------------------------------------------
-                # 2. THE ORACLE (Log-Space for Bayesian Product)
-                # ---------------------------------------------------------
-                temporal_log_probs = log_probs.sum(dim=1) 
-                accumulated_log_probs = accumulated_log_probs + temporal_log_probs
+                # Convert raw logits to probabilities
+                probs_seq = torch.softmax(logits_seq, dim=-1)
                 
-                # ---------------------------------------------------------
-                # 3. THE AUDITOR (Linear-Space for Arithmetic Mean)
-                # ---------------------------------------------------------
-                # Notice we use the safe `probs_seq` here, NOT a new softmax!
-                temporal_raw_probs = probs_seq.mean(dim=1)
-                accumulated_raw_probs = accumulated_raw_probs + temporal_raw_probs
-
-            # --- THE DECISION (Oracle) ---
-            fused_pseudo_logits = accumulated_log_probs
+                # Mean pool across the 5 sequence frames (Bypasses YOLO jitter!)
+                fused_temporal_probs = probs_seq.max(dim=1) 
+                accumulated_probs = accumulated_probs + fused_temporal_probs
+                
+            # 1. Average the probabilities across all collected views
+            final_fused_probs = accumulated_probs / len(view_logits)
             
-            # --- THE CONFIDENCE (Auditor) ---
-            # Average the raw probabilities across TTA views (if any)
-            honest_probs = accumulated_raw_probs / len(view_logits)
-            # Convert honest probabilities to pseudo-logits just so the decoder can calculate the score!
-            honest_pseudo_logits = torch.log(honest_probs + 1e-8)
+            # 2. Convert back to log-probabilities (pseudo-logits) for the decoder
+            fused_pseudo_logits = torch.log(final_fused_probs + 1e-8)
 
             # ==========================================================
             # PURE VISUAL DECODING (Unbiased / SROCR_VAL Equivalent)
             # ==========================================================
             if cls_loss_type == 'CTC':
-                # Use Bayesian for the text, Auditor for the score
-                preds, _ = ctc_greedy_decoder(fused_pseudo_logits, true_converter, return_scores=True)
-                _, scores = ctc_greedy_decoder(honest_pseudo_logits, true_converter, return_scores=True)
+                preds, scores = ctc_greedy_decoder(fused_pseudo_logits, true_converter, return_scores=True)
             else:
-                # Use Bayesian for the text
+                # Native, unbiased decoding for POLY, CPPD, IGTR, OTE, LISTER
                 preds = decode_batch_logits(fused_pseudo_logits, true_converter)
-                # Use Auditor for the score
-                scores = F.log_softmax(honest_pseudo_logits, dim=-1).max(dim=-1)[0].sum(dim=1)
+                scores = F.log_softmax(fused_pseudo_logits, dim=-1).max(dim=-1)[0].sum(dim=1)
             
             final_pred_str = preds[0]
             avg_conf = scores[0].item() if isinstance(scores[0], torch.Tensor) else scores[0]
@@ -375,17 +340,22 @@ if __name__ == "__main__":
                 else:
                     failures.append(f"{track_name} | Pred: {final_pred_str} | GT: {gt_text} | Conf: {avg_conf:.4f} | Matches: {match_count}")
                 
+                # ---> ADD THIS: Normalize log-prob to 0.0-1.0 and track it
                 import math
-                if cls_loss_type == 'CTC':
-                    # CTC already returns a normalized 0.0 to 1.0 probability. Do not exponentiate!
-                    normalized_conf = avg_conf
-                else:
-                    # Attention returns the sum of log-probs. We must exponentiate to get the geometric mean.
-                    normalized_conf = math.exp(avg_conf / max(1, len(final_pred_str)))
-                    
+                normalized_conf = math.exp(avg_conf / max(1, len(final_pred_str)))
                 confidence_tracking.append({'correct': is_correct, 'conf': normalized_conf})
                 # <--- END ADD
-                # <--- END ADD
+
+                # --- Layout Specific Tracking (Hyphen-safe) ---
+                clean_gt = gt_text.replace('-', '')
+                if len(clean_gt) >= 5:
+                    if clean_gt[4].isalpha(): 
+                        total_mercosur += 1
+                        if is_correct: correct_mercosur += 1
+                    else: 
+                        total_brazil += 1
+                        if is_correct: correct_brazil += 1
+                        
                 pbar.set_postfix({'SeqAcc': f"{correct_plates/(total_plates+1):.1%}"})
             else:
                 submission_lines.append(f"{track_name},{final_pred_str};{avg_conf:.4f}")

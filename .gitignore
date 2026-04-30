@@ -24,6 +24,7 @@ competition*/
 *.zip
 outputs/
 train_features/
+train/
 experiments/
 loss_log.csv
 

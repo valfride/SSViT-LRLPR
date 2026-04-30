@@ -384,10 +384,20 @@ class SmoothPoly1Loss(nn.Module):
 
         poly1_loss = ce_loss + self.epsilon * (1.0 - pt)
         
-        # Mask out the padding tokens before taking the mean!
+        # Reshape to apply spatial weights: (B, 7)
+        poly1_seq = poly1_loss.view(-1, 7)
+        
+        # Create a weight mask that penalizes Index 2 and Index 3 heavily
+        # Normal weights = 1.0, Gap weights = 1.5
+        spatial_weights = torch.tensor([1.0, 1.0, 1.5, 1.5, 1.0, 1.0, 1.0], device=logits.device)
+        poly1_weighted = poly1_seq * spatial_weights
+        
+        # Flatten back and mask out the padding tokens
+        poly1_flat = poly1_weighted.view(-1)
         valid_mask = (targets_flat != self.ignore_index).float()
-        return (poly1_loss * valid_mask).sum() / valid_mask.sum()
-
+        
+        return (poly1_flat * valid_mask).sum() / valid_mask.sum()
+    
 class ShiftInvariantL1Loss(nn.Module):
     """
     A spatially-relaxed L1 loss that forgives YOLO bounding box misalignment.
@@ -758,7 +768,7 @@ class FocalLoss(nn.Module):
         # ---> ANOTHER FP16 FIX: Clamp the denominator to prevent division by absolute zero
         return (focal_loss * valid_mask).sum() / torch.clamp(valid_mask.sum(), min=1e-4)
 
-def build_loss_function(cls_loss_type, converter, device):
+def build_loss_function(cls_loss_type, converter, device, current_epoch=None):
     """Factory to instantiate the correct spatial OCR loss based on the baseline."""
     if cls_loss_type == 'CTC':
         return SVTR_CTCLoss(blank_idx=converter.pad_idx, pad_idx=converter.pad_idx).to(device)
@@ -769,7 +779,30 @@ def build_loss_function(cls_loss_type, converter, device):
         from models.ote.ote_bridge import OTELossWrapper
         return OTELossWrapper(ignore_index=38).to(device)
     elif cls_loss_type == 'POLY':
-        return SmoothPoly1Loss(epsilon=4.0, smoothing=0.1).to(device)
+        
+        # ==========================================
+        # ---> UPGRADE: Dynamic PolyLoss Annealing
+        # ==========================================
+        max_epsilon = 2.0
+        warmup_epochs = 30
+        
+        if current_epoch is not None: # We are Training
+            if current_epoch <= warmup_epochs:
+                # Smooth cosine ramp from 0.0 to max_epsilon
+                progress = (current_epoch - 1) / max(1, warmup_epochs - 1)
+                current_eps = max_epsilon * 0.5 * (1.0 - math.cos(math.pi * progress))
+            else:
+                current_eps = max_epsilon
+                
+            if is_main_process():
+                print(f"📉 PolyLoss Schedule | Epoch {current_epoch} | Epsilon: {current_eps:.3f}")
+        else:
+            # We are Validating. Lock epsilon to max_epsilon so the validation 
+            # loss metric remains consistent and comparable across all epochs.
+            current_eps = max_epsilon 
+
+        return SmoothPoly1Loss(epsilon=current_eps, smoothing=0.1).to(device)
+    
     elif cls_loss_type == 'FL':
         return FocalLoss(gamma=2.0, alpha=1.0, ignore_index=38).to(device)
     elif cls_loss_type in ['LISTER_INTERNAL', 'MDIFF_INTERNAL', 'IGTR_INTERNAL']:
@@ -885,25 +918,30 @@ def decode_predictions(logits, cls_loss_type, converter, return_scores=False):
     else:
         return viterbi_plate_decoder(logits, converter, return_scores=return_scores)
 
-def update_ema_ghost(model_g, model_ghost, current_epoch, total_epochs, warmup_epochs=0):
-    """SOTA Adaptive Cosine EMA Schedule with Warmup."""
+# In train_utils.py
+def update_ema_ghost(model_g, model_ghost, epochs_since_reset, cycle_length, warmup_epochs=0, current_epoch=0):
+    """Cyclic EMA Schedule with Warmup. Pulses when Student hits a new peak."""
     if current_epoch < warmup_epochs:
         current_decay = 0.0 # Force a 100% hard copy during the unstable warmup phase
     else:
         base_decay = 0.990   
         max_decay  = 0.9999  
-        effective_total = max(1, total_epochs - warmup_epochs)
         
-        # ---> THE FIX: Clamp the epoch so the cosine wave never loops back up!
-        effective_epoch = min(current_epoch - warmup_epochs, effective_total) 
+        # Smoothly transition from base_decay to max_decay over 'cycle_length' epochs
+        effective_epoch = min(epochs_since_reset, cycle_length) 
         
-        cosine_val = math.cos(math.pi * effective_epoch / effective_total)
+        cosine_val = math.cos(math.pi * effective_epoch / cycle_length)
         schedule_multiplier = (cosine_val + 1.0) / 2.0 
+        
+        # At peak (effective_epoch=0), multiplier is 1.0 -> current_decay = 0.990
+        # At stagnation (effective_epoch=cycle_length), multiplier is 0.0 -> current_decay = 0.9999
         current_decay = max_decay - (max_decay - base_decay) * schedule_multiplier
     
     with torch.no_grad():
         for param_s, param_t in zip(model_g.parameters(), model_ghost.parameters()):
             param_t.data.mul_(current_decay).add_(param_s.data, alpha=1.0 - current_decay)
+            
+    return current_decay
 
 def compute_distillation_losses(preds_lr, preds_hr, is_hr_mask, config, device):
     """Encapsulates all KD, FDD, CRD, and Latent math."""
@@ -994,11 +1032,13 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_ghost, optimizer_g, con
     
     running_acc_seq_s, running_acc_char_s = 0.0, 0.0
     current_epoch = kwargs.get('epoch', 0)
-    epoch_max_ema = config.get('epoch_max_ema', 50)
+    epochs_without_improvement = kwargs.get('epochs_without_improvement', 0) # <--- GET THE STATE
+    epoch_max_ema = config.get('epoch_max_ema', 50) # Repurpose as the Cycle Length for the EMA schedule
     cls_loss_type = config.get('cls_loss', 'SmoothPoly1')
     use_ema_ghost = config.get('use_ema_ghost', False)
     
-    loss_fn_spatial = build_loss_function(cls_loss_type, true_converter, device)
+    # ---> UPGRADE: Pass the current_epoch into the factory
+    loss_fn_spatial = build_loss_function(cls_loss_type, true_converter, device, current_epoch=current_epoch)
     epoch_tracker = ConfusionTracker()
     
     for batch_idx, batch in enumerate(pbar):
@@ -1038,13 +1078,16 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_ghost, optimizer_g, con
         
         # SILENT GHOST UPDATE
         if use_ema_ghost and model_ghost is not None:
-            # ---> THE FIX: Hard stop the EMA updates to save compute and freeze the Oracle
-            # if current_epoch <= epoch_max_ema:
             warmup_epochs = config.get('ema_warmup_epochs', 5)
-            update_ema_ghost(model_g, model_ghost, current_epoch, epoch_max_ema, warmup_epochs)
-            # else:
-            #     pass # Ghost is now mathematically frozen and acts as a pure generalized Oracle!
-                        
+            
+            # ---> THE UPGRADE: Cyclic EMA Reset
+            current_decay = update_ema_ghost(
+                model_g, model_ghost, 
+                epochs_since_reset=epochs_without_improvement, 
+                cycle_length=epoch_max_ema, 
+                warmup_epochs=warmup_epochs, 
+                current_epoch=current_epoch
+            )
         # ====================================================================
         # METRICS & LOGGING
         # ====================================================================
@@ -1065,11 +1108,16 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_ghost, optimizer_g, con
                 
                 epoch_tracker.update(decoded_s, text_label) 
                 
+                
                 postfix_dict = {
                     'Loss': f"{np.mean(loss_stats['total'][-50:]):.4f}",
                     'S-Seq': f"{running_acc_seq_s:.1%}", 
                     'S-Chr': f"{running_acc_char_s:.1%}",
                 }
+
+                if use_ema_ghost:
+                    postfix_dict['EMA'] = f"{current_decay:.4f}"
+
                 
                 pbar.set_postfix(postfix_dict)
 
@@ -1086,8 +1134,8 @@ def SROCR_VAL(val_loader, model_g, model_ghost, config, **kwargs):
     true_converter = strLabelConverter(config.get('alphabet', "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
     cls_loss_type = config.get('cls_loss', 'SmoothPoly1')
     
-    # 1. Initialize the correct loss function for the baseline
-    loss_fn_spatial = build_loss_function(cls_loss_type, true_converter, device)
+    # ---> UPGRADE: Pass current_epoch=None to lock validation to max_epsilon
+    loss_fn_spatial = build_loss_function(cls_loss_type, true_converter, device, current_epoch=None)
     
     val_tracker = ConfusionTracker()
     save_root = kwargs.get('save_path', Path('.'))
@@ -1144,55 +1192,54 @@ def SROCR_VAL(val_loader, model_g, model_ghost, config, **kwargs):
                     logits_t = output_t['logits']
 
             # ==========================================
-            # 3. DECODING
+            # 3. TEMPORAL SOFT ENSEMBLING (Zero-Cost Upgrade)
+            # ==========================================
+            # logits_s shape: (B * Seq_Len, T, C)
+            _, T_len, C_classes = logits_s.shape
+            
+            # Reshape to group by sequence: (B, Seq_Len, T, C)
+            logits_seq_s = logits_s.view(B, Seq_Len, T_len, C_classes)
+            
+            # Convert to probabilities and Mean-Pool across the 5 frames
+            probs_seq_s = torch.softmax(logits_seq_s, dim=-1)
+            fused_probs_s = probs_seq_s.mean(dim=1) # Shape: (B, T, C)
+            
+            # Convert back to pseudo-logits for the decoder
+            fused_logits_s = torch.log(fused_probs_s + 1e-8)
+
+            # Do the same for the Ghost if it exists
+            if logits_t is not None:
+                logits_seq_t = logits_t.reshape(B, Seq_Len, T_len, C_classes)
+                fused_probs_t = torch.softmax(logits_seq_t, dim=-1).mean(dim=1)
+                fused_logits_t = torch.log(fused_probs_t + 1e-8)
+
+            # ==========================================
+            # 4. DECODING (Once per sequence!)
             # ==========================================
             if cls_loss_type == 'CTC':
-                all_preds_s, all_scores_s = ctc_greedy_decoder(logits_s, true_converter, return_scores=True)
+                seq_preds_s, seq_scores_s = ctc_greedy_decoder(fused_logits_s, true_converter, return_scores=True)
                 if logits_t is not None:
-                    all_preds_t, all_scores_t = ctc_greedy_decoder(logits_t, true_converter, return_scores=True)
+                    seq_preds_t, seq_scores_t = ctc_greedy_decoder(fused_logits_t, true_converter, return_scores=True)
             else:
-                all_preds_s = decode_batch_logits(logits_s, true_converter)
-                all_scores_s = F.log_softmax(logits_s, dim=-1).max(dim=-1)[0].sum(dim=1)
+                seq_preds_s = decode_batch_logits(fused_logits_s, true_converter)
+                seq_scores_s = F.log_softmax(fused_logits_s, dim=-1).max(dim=-1)[0].sum(dim=1)
                 
                 if logits_t is not None:
-                    all_preds_t = decode_batch_logits(logits_t, true_converter)
-                    all_scores_t = F.log_softmax(logits_t, dim=-1).max(dim=-1)[0].sum(dim=1)
+                    seq_preds_t = decode_batch_logits(fused_logits_t, true_converter)
+                    seq_scores_t = F.log_softmax(fused_logits_t, dim=-1).max(dim=-1)[0].sum(dim=1)
 
             # ==========================================
-            # 4. TEMPORAL ENSEMBLING (VOTING)
+            # 5. SCORING
             # ==========================================
             for b in range(B):
-                gt = text_labels[b]
+                gt = text_labels[b]  # Only need 1 GT per sequence now
                 total_sequences += 1
                 
-                # --- Student Voting ---
-                seq_preds_s = all_preds_s[b * Seq_Len : (b + 1) * Seq_Len]
-                seq_scores_s = all_scores_s[b * Seq_Len : (b + 1) * Seq_Len]
+                if seq_preds_s[b] == gt: correct_sequences_s += 1
+                val_tracker.update([seq_preds_s[b]], [gt])
                 
-                tracker_s = {}
-                for p_str, conf in zip(seq_preds_s, seq_scores_s):
-                    if p_str not in tracker_s: tracker_s[p_str] = {'votes': 0, 'confidence': 0.0}
-                    tracker_s[p_str]['votes'] += 1
-                    tracker_s[p_str]['confidence'] += conf.item()
-                
-                win_s = sorted(tracker_s.items(), key=lambda item: (item[1]['votes'], item[1]['confidence']), reverse=True)[0][0]
-                if win_s == gt: correct_sequences_s += 1
-                
-                val_tracker.update([win_s], [gt])
-
-                # --- Teacher Voting ---
-                if logits_t is not None:
-                    seq_preds_t = all_preds_t[b * Seq_Len : (b + 1) * Seq_Len]
-                    seq_scores_t = all_scores_t[b * Seq_Len : (b + 1) * Seq_Len]
-                    
-                    tracker_t = {}
-                    for p_str, conf in zip(seq_preds_t, seq_scores_t):
-                        if p_str not in tracker_t: tracker_t[p_str] = {'votes': 0, 'confidence': 0.0}
-                        tracker_t[p_str]['votes'] += 1
-                        tracker_t[p_str]['confidence'] += conf.item()
-                        
-                    win_t = sorted(tracker_t.items(), key=lambda item: (item[1]['votes'], item[1]['confidence']), reverse=True)[0][0]
-                    if win_t == gt: correct_sequences_t += 1
+                if logits_t is not None and seq_preds_t[b] == gt: 
+                    correct_sequences_t += 1
             
     acc_seq_s = correct_sequences_s / total_sequences if total_sequences else 0.0
     acc_seq_t = correct_sequences_t / total_sequences if total_sequences else 0.0
@@ -1204,7 +1251,7 @@ def SROCR_VAL(val_loader, model_g, model_ghost, config, **kwargs):
     print(f"{'='*81}\n")
     
     total_failures = val_tracker.get_worst_pairs_dict(top_k=50) 
-    with open(save_root / 'confusion_stats.json', 'w') as f: 
+    with open(save_root / 'confusion_stats.json', 'w+') as f: 
         json.dump(total_failures, f, indent=4)
     
     # Returns the mathematically valid loss instead of 0.0

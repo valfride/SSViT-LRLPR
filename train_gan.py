@@ -107,7 +107,7 @@ def main(config, save_path):
             
     optim_groups = [
         {'params': base_params, 'lr': base_lr},
-        {'params': deform_offset_params, 'lr': base_lr * 10.0 if len(deform_offset_params) > 0 else base_lr},
+        # {'params': deform_offset_params, 'lr': base_lr * 10.0 if len(deform_offset_params) > 0 else base_lr},
     ]
     
     opt_name = config['optimizer_sr'].get('name', 'adamw').lower()
@@ -200,9 +200,9 @@ def main(config, save_path):
             
             # ---> THE CURRICULUM RAMP
             # Scales from 0.0 to 0.5 over the first 40 epochs
-            new_p = min(0.5, (epoch / 40.0) * 0.5)
-            train_loader.dataset.eraser_prob = new_p
-            print(f"📈 Epoch {epoch}: RandomErasing Probability set to {new_p:.2f}")
+            # new_p = min(0.5, (epoch / 40.0) * 0.5)
+            # train_loader.dataset.eraser_prob = new_p
+            # print(f"📈 Epoch {epoch}: RandomErasing Probability set to {new_p:.2f}")
 
             model_g.train()
             if use_ema_ghost: model_ghost.train() # Keep dropout identical
@@ -211,7 +211,8 @@ def main(config, save_path):
                 train_loader, val_loader,
                 model_g, model_ghost,         
                 optimizer_g, config,          
-                epoch=epoch, save_path=save_path
+                epoch=epoch, save_path=save_path,
+                epochs_without_improvement=epochs_without_improvement # <--- ADD THIS
             )
             
             val_loss, accuracy, ghost_val_acc = val_step(val_loader, model_g, model_ghost, config, save_path=save_path)

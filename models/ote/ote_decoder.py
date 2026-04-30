@@ -7,26 +7,37 @@ from .nrtr_decoder import TransformerBlock, Embeddings
 
 
 class CPA(nn.Module):
-
     def __init__(self, dim, max_len=25):
         super(CPA, self).__init__()
-
         self.fc1 = nn.Linear(dim, dim)
-        self.fc2 = nn.Linear(dim, dim)
+        
+        # ---> THE FIX: fc2 MUST output 1 to collapse the attention score!
+        self.fc2 = nn.Linear(dim, 1) 
+        
         self.fc3 = nn.Linear(dim, dim)
-        self.pos_embed = nn.Parameter(torch.zeros([1, max_len + 1, dim],
-                                                  dtype=torch.float32),
-                                      requires_grad=True)
+        self.pos_embed = nn.Parameter(torch.zeros([1, max_len + 1, dim], dtype=torch.float32), requires_grad=True)
         trunc_normal_(self.pos_embed, std=0.02)
 
     def forward(self, feat):
-        # feat: B, L, Dim
-        feat = feat.mean(1).unsqueeze(1)  # B, 1, Dim
-        x = self.fc1(feat) + self.pos_embed  # B max_len dim
-        x = F.softmax(self.fc2(F.tanh(x)), -1)  # B max_len dim
-        x = self.fc3(feat * x)  # B max_len dim
+        # feat: [B, L, Dim] (Visual features from SVTR)
+        # pos_embed: [1, T, Dim] where T = max_len + 1
+        
+        # 1. Project and Broadcast shapes to [B, T, L, Dim]
+        feat_proj = self.fc1(feat).unsqueeze(1)          # [B, 1, L, Dim]
+        pos_query = self.pos_embed.unsqueeze(2)          # [1, T, 1, Dim]
+        
+        # 2. Calculate Attention Scores: [B, T, L, 1]
+        attn_scores = self.fc2(torch.tanh(feat_proj + pos_query))
+        
+        # 3. Softmax over the sequence length L (dim=2) to get spatial weights
+        attn_weights = F.softmax(attn_scores, dim=2)     # [B, T, L, 1]
+        
+        # 4. Weighted sum of the original features based on attention
+        context = torch.sum(feat.unsqueeze(1) * attn_weights, dim=2) # [B, T, Dim]
+        
+        # 5. Final Projection
+        x = self.fc3(context) 
         return x
-
 
 class ARDecoder(nn.Module):
 

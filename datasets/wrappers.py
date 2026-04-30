@@ -18,6 +18,42 @@ from albumentations.core.transforms_interface import ImageOnlyTransform
 import sys
 import re
 
+class TokenAwareMasking(object):
+    """
+    Drops image data strictly along token/patch boundaries (MAE-style).
+    This forces the ViT to use global context without creating fractional tokens.
+    """
+    def __init__(self, patch_size=8, mask_ratio_range=(0.1, 0.25), p=1.0):
+        self.patch_size = patch_size
+        self.mask_ratio_range = mask_ratio_range
+        self.p = p
+
+    def __call__(self, img_tensor):
+        if random.random() > self.p:
+            return img_tensor
+            
+        c, h, w = img_tensor.shape
+        # Calculate the 8x8 grid dimensions
+        gh, gw = h // self.patch_size, w // self.patch_size
+        num_patches = gh * gw
+        
+        # Decide how many patches to drop
+        mask_ratio = random.uniform(*self.mask_ratio_range)
+        num_mask = int(num_patches * mask_ratio)
+        
+        # Create a flat mask of 1s and 0s
+        mask_idx = torch.randperm(num_patches)[:num_mask]
+        mask_flat = torch.ones(num_patches, device=img_tensor.device)
+        mask_flat[mask_idx] = 0.0
+        
+        # Reshape and upscale the mask back to image dimensions
+        mask_grid = mask_flat.view(1, 1, gh, gw)
+        mask_spatial = F.interpolate(mask_grid, size=(h, w), mode='nearest').squeeze(0)
+        
+        # Note: Since the tensor will already be normalized to [-1, 1], 
+        # multiplying by 0 gives a neutral 50% grey, which is the perfect "blank" token!
+        return img_tensor * mask_spatial
+
 class AdvancedPhysicsMotionBlur(ImageOnlyTransform):
     """Simulates physically accurate vehicle motion blur."""
     def __init__(self, velocity_range=(7, 25), angle_range=(-20, 20), always_apply=False, p=0.5):
@@ -81,9 +117,9 @@ def _match_color_and_contrast(src: torch.Tensor, target: torch.Tensor) -> torch.
     return matched.clamp(0, 1)
 
 class FourierCCTVDegradation(ImageOnlyTransform):
-    """Transfers style/degradation of a real LR crop to an HR image."""
-    # ---> THE FIX: Add the `apply_jpeg` parameter
-    def __init__(self, lr_image_pool, beta_range=(0.05, 0.10), jpeg_range=(55, 65), apply_jpeg=True, always_apply=False, p=0.5):
+    """Transfers style/degradation of a real LR crop with ViT-safe Edge Preservation."""
+    # ---> THE FIX 1: Lower the beta_range to a conservative (0.01, 0.04)
+    def __init__(self, lr_image_pool, beta_range=(0.01, 0.04), jpeg_range=(65, 85), apply_jpeg=True, always_apply=False, p=0.5):
         super().__init__(always_apply, p)
         self.lr_image_pool = lr_image_pool 
         self.beta_range = beta_range
@@ -93,8 +129,6 @@ class FourierCCTVDegradation(ImageOnlyTransform):
     def apply(self, img, **params):
         target_lr_np = random.choice(self.lr_image_pool)
         beta = random.uniform(self.beta_range[0], self.beta_range[1])
-        
-        # Keep blur extremely subtle if we are preserving edges
         blur_sigma = random.uniform(0.1, 0.8) 
 
         img_hr = TF.to_tensor(img).unsqueeze(0)
@@ -127,7 +161,11 @@ class FourierCCTVDegradation(ImageOnlyTransform):
         
         Y, X = torch.meshgrid(torch.arange(H), torch.arange(W), indexing='ij')
         dist_sq = (X - c_w)**2 + (Y - c_h)**2
-        mask = torch.exp(-dist_sq / (2 * (sigma**2))).unsqueeze(0).unsqueeze(0)
+        
+        # ---> THE FIX 2: Butterworth Filter for Sharp High-Frequency Preservation
+        # The power of 4 creates a steep drop-off, protecting edges!
+        mask = 1.0 / (1.0 + (dist_sq / (sigma**2))**4)
+        mask = mask.unsqueeze(0).unsqueeze(0)
         
         amp_hr_mixed = (amp_lr * mask) + (amp_hr * (1 - mask))
         fft_mixed = amp_hr_mixed * torch.exp(1j * phase_hr)
@@ -143,7 +181,6 @@ class FourierCCTVDegradation(ImageOnlyTransform):
         content_ycbcr_mixed[:, 0:1, :, :] = degraded_y
         final_rgb = _ycbcr_to_rgb(content_ycbcr_mixed).clamp(0, 1)
 
-        # ---> THE FIX: Branch the output based on the JPEG flag!
         if self.apply_jpeg:
             jpeg_quality = random.randint(self.jpeg_range[0], self.jpeg_range[1])
             pil_img = TF.to_pil_image(final_rgb.squeeze(0))
@@ -151,7 +188,6 @@ class FourierCCTVDegradation(ImageOnlyTransform):
             pil_img.save(buffer, format="JPEG", quality=jpeg_quality)
             return np.array(Image.open(buffer))
         else:
-            # Return the uncompressed numpy array directly
             return (final_rgb.squeeze(0).permute(1, 2, 0).numpy() * 255.0).astype(np.uint8)
 
 class FourierLRtoLRMixup(ImageOnlyTransform):
@@ -235,19 +271,16 @@ class Sequential_lr_sr(Dataset):
         assert self.dataset is not None, "Dataset is None"
 
         self.geo_aug = A.Compose([
-            # 1. Base Affine: Slightly higher rotation limits for tilted plates
             A.ShiftScaleRotate(
-                shift_limit=0.05, 
-                scale_limit=(-0.05, 0.05), 
-                rotate_limit=7,    
+                shift_limit=0.02,   # Drop from 0.05
+                scale_limit=(-0.02, 0.02), 
+                rotate_limit=5,     # Drop from 7
                 p=0.5, 
                 border_mode=cv2.BORDER_REPLICATE
             ),
-            # 2. Camera Angle: Simulates looking at the plate from the side/above
-            A.Perspective(scale=(0.02, 0.10), p=0.4, fit_output=True),
-            
-            # 3. Lens Warp: Simulates the slight bulging of cheap traffic cameras
-            A.GridDistortion(num_steps=4, distort_limit=0.1, p=0.3, border_mode=cv2.BORDER_REPLICATE),
+            A.Perspective(scale=(0.01, 0.03), p=0.3, fit_output=True), # Drop scale limits
+            # Turn GridDistortion OFF for now. It destroys tiny text.
+            # A.GridDistortion(num_steps=4, distort_limit=0.1, p=0.3, border_mode=cv2.BORDER_REPLICATE), 
         ], additional_targets={'image_hr': 'image', 'image_sr': 'image'})
 
         # =========================================================
@@ -419,13 +452,16 @@ class Sequential_lr_sr(Dataset):
         
         if self.aug and not self.test:
             t_lr = self.color_aug(t_lr)
-            # Dynamically apply the eraser based on the current probability
-            if random.random() < self.eraser_prob:
-                eraser = T.RandomErasing(p=1.0, scale=(0.01, 0.15), ratio=(0.1, 4.1), value=0)
-                t_lr = eraser(t_lr)
             
-        # 3. Normalize to (-1.0 to 1.0)
+        # 3. Normalize to (-1.0 to 1.0) FIRST
         t_lr = self.normalize(t_lr)
+        
+        # ---> THE FIX: Apply Token-Aware Masking AFTER normalization
+        # so dropped patches become 0.0 (Neutral Grey) instead of -1.0 (Black)
+        # if self.aug and not self.test:
+        #     if random.random() < self.eraser_prob:
+        #         token_masker = TokenAwareMasking(patch_size=8, mask_ratio_range=(0.1, 0.25), p=1.0)
+        #         t_lr = token_masker(t_lr)
         
         out_dict = {
             'lr': t_lr,       
