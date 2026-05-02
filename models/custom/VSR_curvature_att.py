@@ -24,6 +24,52 @@ class FReLU(nn.Module):
         spatial_context = self.norm(self.spatial_condition(x))
         return torch.max(x, spatial_context)
 
+# class HighContrastGate(nn.Module):
+#     def __init__(self, num_channels, reduction=16):
+#         super().__init__()
+#         # We multiply by 2 because we are concatenating Max and Avg for each axis
+#         mip = max(8, (num_channels * 2) // reduction)
+        
+#         # MLPs process the axes independently to prevent memory explosion
+#         self.mlp_h = nn.Sequential(
+#             nn.Conv2d(num_channels * 2, mip, kernel_size=1),
+#             nn.GroupNorm(4, mip),
+#             nn.ReLU(inplace=True),
+#             nn.Conv2d(mip, num_channels, kernel_size=1) 
+#         )
+        
+#         self.mlp_w = nn.Sequential(
+#             nn.Conv2d(num_channels * 2, mip, kernel_size=1),
+#             nn.GroupNorm(4, mip),
+#             nn.ReLU(inplace=True),
+#             nn.Conv2d(mip, num_channels, kernel_size=1) 
+#         )
+
+#     def forward(self, x):
+#         # 1. Height Profile (Squash Width)
+#         avg_h = x.mean(dim=3, keepdim=True)       # (B, C, H, 1)
+#         max_h = x.max(dim=3, keepdim=True)[0]     # (B, C, H, 1)
+#         pool_h = torch.cat([avg_h, max_h], dim=1) # (B, 2C, H, 1)
+        
+#         # 2. Width Profile (Squash Height)
+#         avg_w = x.mean(dim=2, keepdim=True)       # (B, C, 1, W)
+#         max_w = x.max(dim=2, keepdim=True)[0]     # (B, C, 1, W)
+#         pool_w = torch.cat([avg_w, max_w], dim=1) # (B, 2C, 1, W)
+
+#         # 3. Calculate Gate Parameters for each axis
+#         params_h = self.mlp_h(pool_h)             # (B, 2C, H, 1)
+#         params_w = self.mlp_w(pool_w)             # (B, 2C, 1, W)
+
+#         # 4. THE MAGIC: Coordinate Broadcast Addition
+#         # (B, 2C, H, 1) + (B, 2C, 1, W) automatically outputs a full (B, 2C, H, W) tensor!
+#         params = params_h + params_w              # (B, 2C, H, W)
+
+#         # 5. Split into tau and beta
+#         tau, beta = torch.split(params, params.size(1) // 2, dim=1)
+
+#         # 6. Apply pixel-perfect 2D affine transformation
+#         return x * torch.sigmoid(params hcb* tau ) + beta
+
 class HighContrastGate(nn.Module):
     def __init__(self, num_channels, reduction=16):
         super().__init__()
@@ -199,7 +245,7 @@ class LatentUpsampler(nn.Module):
         return self.act(self.norm(x))
 
 class SpatialFeatureExtractor(nn.Module):
-    def __init__(self, in_channels=3, feature_dim=128, cnn_heads=4):
+    def __init__(self, in_channels=3, feature_dim=128, cnn_heads=4, use_hcg=True):
         super().__init__()
         self.stem = nn.Sequential(
             # 1. The Front Door: Safely extend the raw image border!
@@ -208,8 +254,7 @@ class SpatialFeatureExtractor(nn.Module):
                 padding_mode='replicate'  # <--- ADDED
             ),
             nn.GroupNorm(8, feature_dim),
-            HighContrastGate(feature_dim),
-            
+            HighContrastGate(feature_dim) if use_hcg else nn.Identity(),            
             # 2. The Squeeze Layer: Safely compress without edge artifacts
             nn.Conv2d(
                 feature_dim, feature_dim, 3, stride=2, padding=1, 
@@ -347,8 +392,9 @@ class CustomRoPELayer(nn.Module):
         k = self.k_proj(kv).view(B, KV_len, self.num_heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(kv).view(B, KV_len, self.num_heads, self.head_dim).transpose(1, 2)
         
-        k = apply_rotary_emb(k, freqs)
-        
+        if freqs is not None:
+            k = apply_rotary_emb(k, freqs)
+            
         attn = (q @ k.transpose(-2, -1)) * self.scale
         attn = attn.softmax(dim=-1) 
         
@@ -367,7 +413,7 @@ class CustomRoPELayer(nn.Module):
         return query
 
 class ViT_CrossAttn_OCR(nn.Module):
-    def __init__(self, in_channels=256, d_model=256, num_chars=7, num_classes=37, num_layers=3, num_heads=8, dropout=0.1, drop_path_rate=0.2):
+    def __init__(self, in_channels=256, d_model=256, num_chars=7, num_classes=37, num_layers=3, num_heads=8, dropout=0.1, drop_path_rate=0.2, use_rope=True):
         super().__init__()
         self.d_model = d_model
         self.num_heads = num_heads
@@ -394,8 +440,13 @@ class ViT_CrossAttn_OCR(nn.Module):
         )
 
         self.input_norm = nn.LayerNorm(d_model)
-
-        self.rope = RotaryEmbedding2D(dim=d_model // num_heads, max_h=32, max_w=96)
+        self.use_rope = use_rope
+        if self.use_rope:
+            self.rope = RotaryEmbedding2D(dim=d_model // num_heads, max_h=32, max_w=96)
+        else:
+            # Fallback 1D Absolute Positional Embedding (16x48 grid = 768 tokens)
+            self.abs_pos_embed = nn.Parameter(torch.zeros(1, 768, d_model))
+            nn.init.trunc_normal_(self.abs_pos_embed, std=0.02)
 
         self.mask_token = nn.Parameter(torch.zeros(1, 1, d_model))
         nn.init.normal_(self.mask_token, std=1.0)
@@ -449,7 +500,7 @@ class ViT_CrossAttn_OCR(nn.Module):
             current_queries = (current_queries * (1.0 - mask)) + (tgt_emb * mask)
         
         H_patches, W_patches = features.shape[2], features.shape[3]
-        freqs = self.rope(H_patches, W_patches) 
+        freqs = self.rope(H_patches, W_patches) if self.use_rope else None
 
         final_tokens = current_queries
         
@@ -463,7 +514,7 @@ class ViT_CrossAttn_OCR(nn.Module):
 # 4. WRAPPER CLASSES
 # ==============================================================================
 class CustomOCR(nn.Module):
-    def __init__(self, input_shape=(128, 32, 96), num_classes=37, num_chars=7, d_model=256, num_heads=8):
+    def __init__(self, input_shape=(128, 32, 96), num_classes=37, num_chars=7, d_model=256, num_heads=8, use_hcg=True, use_sfb=True, use_rope=True):
         super().__init__()
         in_channels = input_shape[0] 
         
@@ -473,7 +524,7 @@ class CustomOCR(nn.Module):
         self.stem = nn.Sequential(
             nn.Conv2d(in_channels, mid_channels, 3, 1, 1),
             nn.GroupNorm(8, mid_channels),
-            HighContrastGate(mid_channels), 
+            HighContrastGate(mid_channels) if use_hcg else nn.Identity(),
             # Scale the Deformable groups safely to match the width
             DeformableProj(mid_channels, mid_channels, kernel_size=3, offset_groups=max(4, mid_channels // 16)),
             nn.GroupNorm(8, mid_channels),
@@ -483,13 +534,14 @@ class CustomOCR(nn.Module):
             FReLU(in_channels)
         )
         
-        self.surgical_focus = SurgicalFocusBlock(in_channels=in_channels, reduction=8)
+        self.surgical_focus = SurgicalFocusBlock(in_channels=in_channels, reduction=8) if use_sfb else nn.Identity()
         
         self.vit_expert = ViT_CrossAttn_OCR(
             in_channels=in_channels, d_model=d_model, num_chars=num_chars,
             num_layers=3, num_classes=num_classes, num_heads=num_heads,
             dropout=0.1,           
-            drop_path_rate=0.2     
+            drop_path_rate=0.2,
+            use_rope=use_rope # Pass RoPE toggle down   
         )
 
     def forward(self, x, tgt=None, epoch=0, **kwargs):
@@ -508,10 +560,15 @@ class CustomOCR(nn.Module):
 class Cgnet(nn.Module):
     def __init__(self, in_channels=3, mode='hybrid', feature_dim=128, cnn_heads=4, d_model=256, vit_heads=8, **kwargs): 
         super(Cgnet, self).__init__()
+
+        use_hcg = kwargs.get('use_hcg', True)
+        use_sfb = kwargs.get('use_sfb', True)
+        use_rope = kwargs.get('use_rope', True)
+
         self.mode = mode.lower()
         self.feature_dim = feature_dim
         
-        self.student_extractor = SpatialFeatureExtractor(in_channels, feature_dim, cnn_heads=cnn_heads)
+        self.student_extractor = SpatialFeatureExtractor(in_channels, feature_dim, cnn_heads=cnn_heads, use_hcg=use_hcg)
         
         if self.mode in ['ocr', 'hybrid']:
             self.student_ocr = CustomOCR(
@@ -519,7 +576,10 @@ class Cgnet(nn.Module):
                 num_classes=38, # 36 chars + EOS + PAD
                 num_chars=7, 
                 d_model=d_model,     
-                num_heads=vit_heads  
+                num_heads=vit_heads,
+                use_hcg=use_hcg,    # <--- ADD THIS
+                use_sfb=use_sfb,    # <--- ADD THIS
+                use_rope=use_rope   # <--- ADD THIS
             )
 
     def forward(self, x, temporal_pool=False, return_latent=True, **kwargs): 

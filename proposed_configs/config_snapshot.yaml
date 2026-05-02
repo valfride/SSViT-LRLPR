@@ -24,7 +24,7 @@ optimizer_sr:
   name: adamW
 resume: null
 train_dataset:
-  batch: 256
+  batch: 64
   dataset:
     args:
       in_memory: true

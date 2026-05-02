@@ -373,25 +373,25 @@ class ViT_CrossAttn_OCR(nn.Module):
         self.num_heads = num_heads
         
         # ---> UPGRADE: Unrestricted feature mapping (No d_model // 2 compression)
-        # self.patch_embed = nn.Sequential(
-        #     nn.Conv2d(in_channels, d_model, kernel_size=3, stride=1, padding=1),
-        #     nn.GroupNorm(8, d_model), FReLU(d_model),
-        #     nn.Conv2d(d_model, d_model, kernel_size=3, stride=2, padding=1), 
-        #     nn.GroupNorm(8, d_model), FReLU(d_model),
-        #     nn.Conv2d(d_model, d_model, kernel_size=3, stride=1, padding=1) 
-        # )
-
         self.patch_embed = nn.Sequential(
-            nn.Conv2d(in_channels, d_model // 2, kernel_size=3, stride=1, padding=1),
-            nn.GroupNorm(8, d_model // 2), FReLU(d_model // 2),
-            
-            # 32x96 -> 16x48
-            nn.Conv2d(d_model // 2, d_model, kernel_size=3, stride=2, padding=1), 
+            nn.Conv2d(in_channels, d_model, kernel_size=3, stride=1, padding=1),
             nn.GroupNorm(8, d_model), FReLU(d_model),
-            
-            # ---> THE FIX: Changed to stride=1 to preserve the 16x48 grid!
+            nn.Conv2d(d_model, d_model, kernel_size=3, stride=2, padding=1), 
+            nn.GroupNorm(8, d_model), FReLU(d_model),
             nn.Conv2d(d_model, d_model, kernel_size=3, stride=1, padding=1) 
         )
+
+        # self.patch_embed = nn.Sequential(
+        #     nn.Conv2d(in_channels, d_model // 2, kernel_size=3, stride=1, padding=1),
+        #     nn.GroupNorm(8, d_model // 2), FReLU(d_model // 2),
+            
+        #     # 32x96 -> 16x48
+        #     nn.Conv2d(d_model // 2, d_model, kernel_size=3, stride=2, padding=1), 
+        #     nn.GroupNorm(8, d_model), FReLU(d_model),
+            
+        #     # ---> THE FIX: Changed to stride=1 to preserve the 16x48 grid!
+        #     nn.Conv2d(d_model, d_model, kernel_size=3, stride=1, padding=1) 
+        # )
 
         self.input_norm = nn.LayerNorm(d_model)
 
