@@ -357,118 +357,118 @@ def ctc_greedy_decoder(batch_logits, converter, return_scores=False):
         return decoded_preds, torch.tensor(final_scores, device=batch_logits.device)
     return decoded_preds
 
-class SmoothPoly1Loss(nn.Module):
-    def __init__(self, epsilon=2.0, smoothing=0.1, ignore_index=38, lambda_sep=2.0):
-        super().__init__()
-        self.epsilon = epsilon
-        self.smoothing = smoothing
-        self.ignore_index = ignore_index
-        self.lambda_sep = lambda_sep
-        
-        # Calculate the mathematical ceiling for the gap
-        # If smoothing=0.0, target_gap = 1.0. If smoothing=0.1, target_gap = 0.90.
-        self.target_gap = 1.0 - smoothing
-
-    def forward(self, logits, targets):
-        logits_flat = logits.view(-1, logits.size(-1)) # (B*T, C)
-        targets_flat = targets.view(-1)                # (B*T,)
-
-        # ==========================================
-        # 1. Base PolyLoss (The Foundation)
-        # ==========================================
-        ce_loss = F.cross_entropy(
-            logits_flat, targets_flat, 
-            label_smoothing=self.smoothing, reduction='none', ignore_index=self.ignore_index
-        )
-
-        with torch.no_grad():
-            clean_ce = F.cross_entropy(
-                logits_flat, targets_flat, 
-                reduction='none', ignore_index=self.ignore_index
-            )
-            pt = torch.exp(-clean_ce)
-
-        poly1_seq = ce_loss + self.epsilon * (1.0 - pt)
-
-        # ==========================================
-        # 2. Max Separation Penalty (The Aggressor)
-        # ==========================================
-        probs = F.softmax(logits_flat, dim=-1)
-        
-        # A. Get probability of the true class
-        p_true = probs.gather(1, targets_flat.unsqueeze(1)).squeeze(1)
-
-        # B. Find the highest probability among all WRONG classes
-        mask = torch.zeros_like(probs).scatter_(1, targets_flat.unsqueeze(1), 1.0)
-        probs_wrong = probs.masked_fill(mask.bool(), -1.0) # Hide the true class
-        p_max_wrong, _ = probs_wrong.max(dim=1)
-
-        # C. Calculate the actual gap and penalize distance from the perfect gap
-        current_gap = p_true - p_max_wrong
-        
-        # We use ReLU so we don't accidentally reward the network for exceeding the target gap
-        # (which shouldn't happen under CE, but acts as a mathematical safety net)
-        gap_deficit = F.relu(self.target_gap - current_gap)
-        
-        # Square it to heavily punish small gaps, but smooth out as it nears perfection
-        separation_penalty = gap_deficit ** 2
-
-        # ==========================================
-        # 3. Fusion & Masking
-        # ==========================================
-        total_loss = poly1_seq + (self.lambda_sep * separation_penalty)
-
-        # Spatial weighting (Index 2 and 3 are penalized heavily)
-        total_loss = total_loss.view(-1, 7)
-        spatial_weights = torch.tensor([1.0, 1.0, 1.5, 1.5, 1.0, 1.0, 1.0], device=logits.device)
-        total_weighted = total_loss * spatial_weights
-        
-        # Apply padding mask and average
-        total_flat = total_weighted.view(-1)
-        valid_mask = (targets_flat != self.ignore_index).float()
-        
-        return (total_flat * valid_mask).sum() / torch.clamp(valid_mask.sum(), min=1e-4)
-
 # class SmoothPoly1Loss(nn.Module):
-#     def __init__(self, epsilon=2.0, smoothing=0.1, ignore_index=38):
+#     def __init__(self, epsilon=2.0, smoothing=0.1, ignore_index=38, lambda_sep=2.0):
 #         super().__init__()
 #         self.epsilon = epsilon
 #         self.smoothing = smoothing
-#         self.ignore_index = ignore_index # ADD THIS
+#         self.ignore_index = ignore_index
+#         self.lambda_sep = lambda_sep
+        
+#         # Calculate the mathematical ceiling for the gap
+#         # If smoothing=0.0, target_gap = 1.0. If smoothing=0.1, target_gap = 0.90.
+#         self.target_gap = 1.0 - smoothing
 
 #     def forward(self, logits, targets):
-#         logits_flat = logits.view(-1, logits.size(-1))
-#         targets_flat = targets.view(-1)
+#         logits_flat = logits.view(-1, logits.size(-1)) # (B*T, C)
+#         targets_flat = targets.view(-1)                # (B*T,)
 
-#         # ADD ignore_index here!
+#         # ==========================================
+#         # 1. Base PolyLoss (The Foundation)
+#         # ==========================================
 #         ce_loss = F.cross_entropy(
 #             logits_flat, targets_flat, 
 #             label_smoothing=self.smoothing, reduction='none', ignore_index=self.ignore_index
 #         )
 
 #         with torch.no_grad():
-#             # AND ADD ignore_index here!
 #             clean_ce = F.cross_entropy(
 #                 logits_flat, targets_flat, 
 #                 reduction='none', ignore_index=self.ignore_index
 #             )
 #             pt = torch.exp(-clean_ce)
 
-#         poly1_loss = ce_loss + self.epsilon * (1.0 - pt)
+#         poly1_seq = ce_loss + self.epsilon * (1.0 - pt)
+
+#         # ==========================================
+#         # 2. Max Separation Penalty (The Aggressor)
+#         # ==========================================
+#         probs = F.softmax(logits_flat, dim=-1)
         
-#         # Reshape to apply spatial weights: (B, 7)
-#         poly1_seq = poly1_loss.view(-1, 7)
+#         # A. Get probability of the true class
+#         p_true = probs.gather(1, targets_flat.unsqueeze(1)).squeeze(1)
+
+#         # B. Find the highest probability among all WRONG classes
+#         mask = torch.zeros_like(probs).scatter_(1, targets_flat.unsqueeze(1), 1.0)
+#         probs_wrong = probs.masked_fill(mask.bool(), -1.0) # Hide the true class
+#         p_max_wrong, _ = probs_wrong.max(dim=1)
+
+#         # C. Calculate the actual gap and penalize distance from the perfect gap
+#         current_gap = p_true - p_max_wrong
         
-#         # Create a weight mask that penalizes Index 2 and Index 3 heavily
-#         # Normal weights = 1.0, Gap weights = 1.5
+#         # We use ReLU so we don't accidentally reward the network for exceeding the target gap
+#         # (which shouldn't happen under CE, but acts as a mathematical safety net)
+#         gap_deficit = F.relu(self.target_gap - current_gap)
+        
+#         # Square it to heavily punish small gaps, but smooth out as it nears perfection
+#         separation_penalty = gap_deficit ** 2
+
+#         # ==========================================
+#         # 3. Fusion & Masking
+#         # ==========================================
+#         total_loss = poly1_seq + (self.lambda_sep * separation_penalty)
+
+#         # Spatial weighting (Index 2 and 3 are penalized heavily)
+#         total_loss = total_loss.view(-1, 7)
 #         spatial_weights = torch.tensor([1.0, 1.0, 1.5, 1.5, 1.0, 1.0, 1.0], device=logits.device)
-#         poly1_weighted = poly1_seq * spatial_weights
+#         total_weighted = total_loss * spatial_weights
         
-#         # Flatten back and mask out the padding tokens
-#         poly1_flat = poly1_weighted.view(-1)
+#         # Apply padding mask and average
+#         total_flat = total_weighted.view(-1)
 #         valid_mask = (targets_flat != self.ignore_index).float()
         
-#         return (poly1_flat * valid_mask).sum() / valid_mask.sum()
+#         return (total_flat * valid_mask).sum() / torch.clamp(valid_mask.sum(), min=1e-4)
+
+class SmoothPoly1Loss(nn.Module):
+    def __init__(self, epsilon=2.0, smoothing=0.1, ignore_index=38):
+        super().__init__()
+        self.epsilon = epsilon
+        self.smoothing = smoothing
+        self.ignore_index = ignore_index # ADD THIS
+
+    def forward(self, logits, targets):
+        logits_flat = logits.view(-1, logits.size(-1))
+        targets_flat = targets.view(-1)
+
+        # ADD ignore_index here!
+        ce_loss = F.cross_entropy(
+            logits_flat, targets_flat, 
+            label_smoothing=self.smoothing, reduction='none', ignore_index=self.ignore_index
+        )
+
+        with torch.no_grad():
+            # AND ADD ignore_index here!
+            clean_ce = F.cross_entropy(
+                logits_flat, targets_flat, 
+                reduction='none', ignore_index=self.ignore_index
+            )
+            pt = torch.exp(-clean_ce)
+
+        poly1_loss = ce_loss + self.epsilon * (1.0 - pt)
+        
+        # Reshape to apply spatial weights: (B, 7)
+        poly1_seq = poly1_loss.view(-1, 7)
+        
+        # Create a weight mask that penalizes Index 2 and Index 3 heavily
+        # Normal weights = 1.0, Gap weights = 1.5
+        spatial_weights = torch.tensor([1.0, 1.0, 1.5, 1.5, 1.0, 1.0, 1.0], device=logits.device)
+        poly1_weighted = poly1_seq * spatial_weights
+        
+        # Flatten back and mask out the padding tokens
+        poly1_flat = poly1_weighted.view(-1)
+        valid_mask = (targets_flat != self.ignore_index).float()
+        
+        return (poly1_flat * valid_mask).sum() / valid_mask.sum()
     
 class ShiftInvariantL1Loss(nn.Module):
     """
