@@ -24,52 +24,6 @@ class FReLU(nn.Module):
         spatial_context = self.norm(self.spatial_condition(x))
         return torch.max(x, spatial_context)
 
-# class HighContrastGate(nn.Module):
-#     def __init__(self, num_channels, reduction=16):
-#         super().__init__()
-#         # We multiply by 2 because we are concatenating Max and Avg for each axis
-#         mip = max(8, (num_channels * 2) // reduction)
-        
-#         # MLPs process the axes independently to prevent memory explosion
-#         self.mlp_h = nn.Sequential(
-#             nn.Conv2d(num_channels * 2, mip, kernel_size=1),
-#             nn.GroupNorm(4, mip),
-#             nn.ReLU(inplace=True),
-#             nn.Conv2d(mip, num_channels, kernel_size=1) 
-#         )
-        
-#         self.mlp_w = nn.Sequential(
-#             nn.Conv2d(num_channels * 2, mip, kernel_size=1),
-#             nn.GroupNorm(4, mip),
-#             nn.ReLU(inplace=True),
-#             nn.Conv2d(mip, num_channels, kernel_size=1) 
-#         )
-
-#     def forward(self, x):
-#         # 1. Height Profile (Squash Width)
-#         avg_h = x.mean(dim=3, keepdim=True)       # (B, C, H, 1)
-#         max_h = x.max(dim=3, keepdim=True)[0]     # (B, C, H, 1)
-#         pool_h = torch.cat([avg_h, max_h], dim=1) # (B, 2C, H, 1)
-        
-#         # 2. Width Profile (Squash Height)
-#         avg_w = x.mean(dim=2, keepdim=True)       # (B, C, 1, W)
-#         max_w = x.max(dim=2, keepdim=True)[0]     # (B, C, 1, W)
-#         pool_w = torch.cat([avg_w, max_w], dim=1) # (B, 2C, 1, W)
-
-#         # 3. Calculate Gate Parameters for each axis
-#         params_h = self.mlp_h(pool_h)             # (B, 2C, H, 1)
-#         params_w = self.mlp_w(pool_w)             # (B, 2C, 1, W)
-
-#         # 4. THE MAGIC: Coordinate Broadcast Addition
-#         # (B, 2C, H, 1) + (B, 2C, 1, W) automatically outputs a full (B, 2C, H, W) tensor!
-#         params = params_h + params_w              # (B, 2C, H, W)
-
-#         # 5. Split into tau and beta
-#         tau, beta = torch.split(params, params.size(1) // 2, dim=1)
-
-#         # 6. Apply pixel-perfect 2D affine transformation
-#         return x * torch.sigmoid(params hcb* tau ) + beta
-
 class HighContrastGate(nn.Module):
     def __init__(self, num_channels, reduction=16):
         super().__init__()
@@ -417,15 +371,6 @@ class ViT_CrossAttn_OCR(nn.Module):
         super().__init__()
         self.d_model = d_model
         self.num_heads = num_heads
-        
-        # ---> UPGRADE: Unrestricted feature mapping (No d_model // 2 compression)
-        # self.patch_embed = nn.Sequential(
-        #     nn.Conv2d(in_channels, d_model, kernel_size=3, stride=1, padding=1),
-        #     nn.GroupNorm(8, d_model), FReLU(d_model),
-        #     nn.Conv2d(d_model, d_model, kernel_size=3, stride=2, padding=1), 
-        #     nn.GroupNorm(8, d_model), FReLU(d_model),
-        #     nn.Conv2d(d_model, d_model, kernel_size=3, stride=1, padding=1) 
-        # )
 
         self.patch_embed = nn.Sequential(
             nn.Conv2d(in_channels, d_model // 2, kernel_size=3, stride=1, padding=1),
