@@ -1,0 +1,72 @@
+name: MDIFF_BASELINE_Curriculum
+alphabet: 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ
+
+# --- THE ROUTING FLAG ---
+cls_loss: MDIFF_INTERNAL              
+
+epoch_max: 500
+force_lr: true
+func_train: SROCR_TRAIN
+func_val: SROCR_VAL
+use_fp16: true
+resume: null
+
+model_g:
+  name: MDIFF_BASELINE
+  args:
+    in_channels: 3
+    max_len: 7
+    num_classes: 38 # train_utils base classes
+
+optimizer_sr:
+  name: adamW
+  args:
+    lr: 1e-4
+    weight_decay: 0.05
+
+warmup_epochs: 5 # Mandatory to prevent gradients shattering in ViT/MDiff
+
+LRScheduler:
+  name: OneCycleLR
+  warmup_epoch: 1.5 # pct_start 0.075*20 = 1.5ep
+  cycle_momentum: False
+
+# ==========================================================
+# DATALOADERS
+# ==========================================================
+train_dataset:
+  batch: 64
+  dataset:
+    name: lmdb_dataset
+    args:
+      in_memory: true
+      path_split: ./competition_dataset_lmdb
+      phase: training
+  wrapper:
+    name: VSR_collate_fn
+    args:
+      aug: true
+      imgH: 32
+      imgW: 96
+      in_images: 1
+      image_aspect_ratio: 3.0       # <--- THE FIX
+      background: (127, 127, 127)   # <--- THE FIX
+
+val_dataset:
+  batch: 64
+  dataset:
+    name: lmdb_dataset
+    args:
+      in_memory: true
+      path_split: ./competition_dataset_lmdb
+      phase: validation
+  wrapper:
+    name: VSR_Sequence_collate_fn
+    args:
+      aug: false
+      imgH: 32
+      imgW: 96
+      in_images: 5
+      test: true
+      image_aspect_ratio: 3.0       # <--- THE FIX
+      background: (127, 127, 127)   # <--- THE FIX

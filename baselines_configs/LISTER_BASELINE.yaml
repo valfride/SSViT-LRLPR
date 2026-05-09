@@ -1,0 +1,79 @@
+name: LISTER_BASELINE_Curriculum
+alphabet: 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ
+
+# --- THE ROUTING FLAG ---
+# This tells train_utils.py to use LISTER's internal Neighbor Reconstruction Loss
+cls_loss: LISTER_INTERNAL              
+
+epoch_max: 500
+force_lr: false
+func_train: SROCR_TRAIN
+func_val: SROCR_VAL
+use_fp16: true
+resume: null
+# ==========================================================
+# MODEL ARCHITECTURE
+# ==========================================================
+model_g:
+  name: LISTER_BASELINE
+  args:
+    in_channels: 3
+    max_len: 7
+    num_classes: 37
+
+# ==========================================================
+# OPTIMIZERS & LOSS INSTANTIATION
+# ==========================================================
+optimizer_sr:
+  name: adamW
+  args:
+    lr: 1e-4
+
+LRScheduler:
+  name: OneCycleLR
+  warmup_epoch: 1.5 # pct_start 0.075*20 = 1.5ep
+  cycle_momentum: False
+# ==========================================================
+# DATALOADERS
+# ==========================================================
+train_dataset:
+  batch: 64
+  dataset:
+    name: lmdb_dataset
+    args:
+      in_memory: true
+      path_split: ./competition_dataset_lmdb
+      phase: training
+  wrapper:
+    name: VSR_collate_fn
+    args:
+      anagram_prob: 0.0
+      aug: true
+      background: (127, 127, 127)
+      fully_synthetic_prob: 0.0
+      image_aspect_ratio: 3.0
+      imgH: 32  # Matched to lister_bridge.py expected input
+      imgW: 96  # Matched to lister_bridge.py expected input
+      in_images: 1
+      synthetic_prob: 0.0
+
+val_dataset:
+  batch: 64  # Kept lower (64) because in_images: 5 uses 5x the VRAM!
+  dataset:
+    name: lmdb_dataset
+    args:
+      in_memory: true
+      path_split: ./competition_dataset_lmdb
+      phase: validation
+  wrapper:
+    name: VSR_Sequence_collate_fn
+    args:
+      aug: false
+      background: (127, 127, 127)
+      fully_synthetic_prob: 0.0
+      image_aspect_ratio: 3.0
+      imgH: 32  # Matched to lister_bridge.py expected input
+      imgW: 96  # Matched to lister_bridge.py expected input
+      in_images: 5
+      synthetic_prob: 0.0
+      test: true

@@ -42,7 +42,7 @@ analyze_ratios.py
 convert_dataset.py
 dataset_statistics.py
 create_lmdb.py
-*.yaml
+*.yml
 generate_test_txt.py
 inference.py
 monitor_confusion.pyt

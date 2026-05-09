@@ -1,0 +1,68 @@
+name: IGTR_BASELINE
+alphabet: 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ
+
+# Routing Flag
+cls_loss: IGTR_INTERNAL              
+
+epoch_max: 500
+force_lr: true
+func_train: SROCR_TRAIN
+func_val: SROCR_VAL
+use_fp16: true
+
+model_g:
+  name: IGTR_BASELINE
+  args:
+    in_channels: 3
+    max_len: 25
+    num_classes: 39 
+
+LRScheduler:
+  name: OneCycleLR
+  warmup_epoch: 1.5         # How many epochs to spend warming up the LR
+  cycle_momentum: False     # Keep False for Adam/AdamW
+
+optimizer_sr:
+  name: adamW
+  args:
+    lr: 1e-4
+    weight_decay: 0.05
+
+warmup_epochs: 5 
+
+train_dataset:
+  batch: 64
+  dataset:
+    name: lmdb_dataset
+    args:
+      in_memory: true
+      path_split: ./competition_dataset_lmdb
+      phase: training
+  wrapper:
+    name: VSR_collate_fn
+    args:
+      aug: true
+      imgH: 32
+      imgW: 96   # IGTR prefers a slightly wider aspect ratio (32x128)
+      in_images: 1
+      image_aspect_ratio: 3.0
+      background: (127, 127, 127)
+
+val_dataset:
+  batch: 64
+  dataset:
+    name: lmdb_dataset
+    args:
+      in_memory: true
+      path_split: ./competition_dataset_lmdb
+      phase: validation
+  wrapper:
+    name: VSR_Sequence_collate_fn
+    args:
+      aug: false
+      imgH: 32
+      imgW: 96
+      in_images: 5
+      test: true
+      image_aspect_ratio: 3.0
+      background: (127, 127, 127)
