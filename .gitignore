@@ -32,6 +32,7 @@ train_features/
 train/
 experiments/
 samples2infer/
+vpeg_debug_maps/
 
 # files
 *.json
