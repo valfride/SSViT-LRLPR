@@ -18,6 +18,7 @@ test/
 404-backup_new_code/
 .stffolder/
 __pycache__/
+./LMDB-Datasets/
 
 # Checkpoints and Logs
 *.pth

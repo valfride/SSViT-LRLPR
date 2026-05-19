@@ -32,7 +32,7 @@ train_dataset:
   dataset:
     args:
       in_memory: true
-      path_split: ./competition_dataset_lmdb
+      path_split: ./LMDB-Datasets/competition_dataset_lmdb
       phase: training
     name: lmdb_dataset
   wrapper:
@@ -55,7 +55,7 @@ val_dataset:
   dataset:
     args:
       in_memory: true
-      path_split: ./competition_dataset_lmdb
+      path_split: ./LMDB-Datasets/competition_dataset_lmdb
       phase: validation
     name: lmdb_dataset
   wrapper:
