@@ -12,6 +12,8 @@ import re
 import pickle
 import numpy as np
 import torchvision.transforms.functional as TF
+import math
+from collections import defaultdict
 
 # ==============================================================================
 # 1. THE IMPORT FIX (Single Source of Truth)
@@ -32,6 +34,9 @@ if __name__ == "__main__":
     parser.add_argument("--tta", action="store_true", help="Enable Test-Time Augmentation")
     parser.add_argument("--output", default="submission.txt")
     parser.add_argument("--in_images", type=int, default=None, help="Override the number of temporal frames")
+    parser.add_argument("--fusion", type=str, default="logit_average", 
+                        choices=["bayes", "average", "majority", "logit_average"], 
+                        help="Temporal fusion strategy")
     args = parser.parse_args()
 
     utils.setup_seed(42)
@@ -56,7 +61,7 @@ if __name__ == "__main__":
 
     if args.swa:
         print(f"\n⚖️   SWA ENABLED: Targeting Top {args.num_swa} Models...")
-        pth_files = list(ckpt_dir.glob("model_acc_*.pth"))
+        pth_files = list(ckpt_dir.glob("*acc_*.pth"))
         if not pth_files: 
             print("⚠️  No top models found for SWA. Falling back to last.pth")
             pth_files = [ckpt_dir / 'last.pth']
@@ -81,7 +86,6 @@ if __name__ == "__main__":
             
         print(f"  ✅ [REF]     {pth_files[0].name}")
 
-        # ---> THE FIX: Dynamically slice based on the user's argument
         for pth in pth_files[1:args.num_swa]: 
             try:
                 full_ckpt = torch.load(pth, map_location=device, weights_only=False)
@@ -123,7 +127,7 @@ if __name__ == "__main__":
 
     else:
         # SINGLE CHECKPOINT LOADING
-        pth_files = list(ckpt_dir.glob("model_acc_*.pth"))
+        pth_files = list(ckpt_dir.glob("*acc_*.pth"))
         if pth_files:
             pth_files.sort(key=extract_acc, reverse=True)
             best_ckpt = pth_files[0]
@@ -150,7 +154,6 @@ if __name__ == "__main__":
     # --- DATASET ---
     print(f"\nPreparing Data from {args.split}...")
     
-    # ---> THE FIX: TEMPORAL ABLATION INJECTION MUST HAPPEN FIRST <---
     if args.in_images is not None:
         config['val_dataset']['wrapper']['args']['in_images'] = args.in_images
         print(f"🔄 TEMPORAL OVERRIDE: Forced val_dataset in_images to {args.in_images}")
@@ -196,14 +199,15 @@ if __name__ == "__main__":
     
     failures = []
     submission_lines = []
-    correct_plates = 0 # (7/7)
-    correct_6plus = 0  # (>= 6/7)
-    correct_5plus = 0  # (>= 5/7)
+    correct_plates = 0 
+    correct_6plus = 0  
+    correct_5plus = 0  
     total_plates = 0
     confidence_tracking = []
+    
     # --- INFERENCE LOOP ---
     with torch.no_grad():
-        pbar = tqdm(val_loader, desc=f"Evaluating ({args.mode.upper()} Mode)")
+        pbar = tqdm(val_loader, desc=f"Evaluating ({args.mode.upper()} Mode | Fusion: {args.fusion.upper()})")
         for batch in pbar:
             lr_seqs = batch['lr_seq'].to(device)
             gt_text = batch['gt'][0] if 'gt' in batch and batch['gt'][0] else ""
@@ -224,175 +228,159 @@ if __name__ == "__main__":
             
             B, Seq_Len, C, H, W = lr_seqs.shape
             flat_imgs = lr_seqs.view(B * Seq_Len, C, H, W)
-            
-            # Match the training script's memory format for exact reproducibility
             flat_imgs = flat_imgs.contiguous().to(memory_format=torch.channels_last)
 
-            pred_tracker = {}
-
-            # Helper function to decode and accumulate votes
-            def accumulate_votes(logits_tensor):
-                if cls_loss_type == 'CTC':
-                    preds, scores = ctc_greedy_decoder(logits_tensor, true_converter, return_scores=True)
-                else:
-                    preds = decode_batch_logits(logits_tensor, true_converter)
-                    scores = F.log_softmax(logits_tensor, dim=-1).max(dim=-1)[0].sum(dim=1)
-                    
-                for pred_str, conf_score in zip(preds, scores):
-                    if pred_str not in pred_tracker:
-                        pred_tracker[pred_str] = {'votes': 0, 'confidence': 0.0}
-                    pred_tracker[pred_str]['votes'] += 1
-                    pred_tracker[pred_str]['confidence'] += conf_score.item()
-
-            # --- START OF REPLACEMENT BLOCK ---
-            
-            # We will store the raw logits from all views (base + TTA) in a list
+            # Raw logits from all views (base + TTA)
             view_logits = []
 
-            with torch.amp.autocast('cuda', enabled=config.get('use_fp16', True)):
-                # ==========================================
-                # PASS 1: Base Resolution
-                # CRITICAL: Removed temporal_pool=True to prevent latent spatial smearing
-                # ==========================================
-                output_base = model(flat_imgs, epoch=100)
-                if isinstance(output_base, tuple): 
-                    output_base = output_base[0]
-    
-                view_logits.append(output_base['logits'])
-                # print(f"Base View Logits Shape: {output_base['logits'].shape}")
-                # print(f"Sample Logits (Base View): {output_base['logits']}")
+            def get_logits(out_dict):
+                if cls_loss_type == 'EVIDENTIAL':
+                    return torch.log(out_dict['expected_prob'] + 1e-8)
+                return out_dict['logits']
 
-                # ==========================================
+            with torch.amp.autocast('cuda', enabled=config.get('use_fp16', True)):
+                # PASS 1: Base Resolution
+                output_base = model(flat_imgs, epoch=100)
+                if isinstance(output_base, tuple): output_base = output_base[0]
+                view_logits.append(get_logits(output_base))
+
                 # TTA: HONEST AUGMENTATION ENSEMBLE
-                # ==========================================
                 if args.tta:
                     # Positive Sweep (+2.5)
                     flat_p2_5 = TF.rotate(flat_imgs, angle=2.5, interpolation=TF.InterpolationMode.BILINEAR)
                     out_p2_5 = model(flat_p2_5, epoch=100)
                     if isinstance(out_p2_5, tuple): out_p2_5 = out_p2_5[0]
-                    view_logits.append(out_p2_5['logits'])
-
-                    # # Positive Sweep (+5.0)
-                    # flat_p5_0 = TF.rotate(flat_imgs, angle=5.0, interpolation=TF.InterpolationMode.BILINEAR)
-                    # out_p5_0 = model(flat_p5_0, epoch=100)
-                    # if isinstance(out_p5_0, tuple): out_p5_0 = out_p5_0[0]
-                    # view_logits.append(out_p5_0['logits'])
+                    view_logits.append(get_logits(out_p2_5))
 
                     # Negative Sweep (-2.5)
                     flat_m2_5 = TF.rotate(flat_imgs, angle=-2.5, interpolation=TF.InterpolationMode.BILINEAR)
                     out_m2_5 = model(flat_m2_5, epoch=100)
                     if isinstance(out_m2_5, tuple): out_m2_5 = out_m2_5[0]
-                    view_logits.append(out_m2_5['logits'])
-
-                    # # Negative Sweep (-5.0)
-                    # flat_m5_0 = TF.rotate(flat_imgs, angle=-5.0, interpolation=TF.InterpolationMode.BILINEAR)
-                    # out_m5_0 = model(flat_m5_0, epoch=100)
-                    # if isinstance(out_m5_0, tuple): out_m5_0 = out_m5_0[0]
-                    # view_logits.append(out_m5_0['logits'])
+                    view_logits.append(get_logits(out_m2_5))
 
             # ==========================================================
-            # LATE-STAGE SOFT ENSEMBLING (The 80% Push)
+            # TEMPORAL & TTA FUSION (BASED ON FLAG)
             # ==========================================================
-            # ==========================================================
-            # DECOUPLED FUSION (Bayesian Accuracy + Honest Calibration)
-            # ==========================================================
-            # ==========================================================
-            # DECOUPLED FUSION (Bayesian Accuracy + Honest Calibration)
-            # ==========================================================
-            accumulated_log_probs = 0.0 
-            accumulated_raw_probs = 0.0 
+            if args.fusion in ['bayes', 'average', 'logit_average']:
+                accumulated_log_probs = 0.0 
+                accumulated_raw_probs = 0.0 
+                accumulated_logits = 0.0
 
-            for logits_tensor in view_logits:
-                _, num_chars, num_classes = logits_tensor.shape
-                logits_seq = logits_tensor.view(B, Seq_Len, num_chars, num_classes)
-                
-                # ---------------------------------------------------------
-                # 1. THE SAFETY CHECK (Prevent Double-Softmax)
-                # ---------------------------------------------------------
-                if torch.allclose(logits_seq.sum(dim=-1), torch.ones_like(logits_seq.sum(dim=-1)), atol=1e-2):
-                    # The 'logits' are actually probabilities (e.g., CPPD, IGTR).
-                    probs_seq = logits_seq
+                for logits_tensor in view_logits:
+                    _, num_chars, num_classes = logits_tensor.shape
+                    logits_seq = logits_tensor.view(B, Seq_Len, num_chars, num_classes)
                     
-                    # Use standard log (with epsilon) since they are already probabilities
-                    log_probs = torch.log(probs_seq + 1e-8) 
+                    if torch.allclose(logits_seq.sum(dim=-1), torch.ones_like(logits_seq.sum(dim=-1)), atol=1e-2):
+                        probs_seq = logits_seq
+                        log_probs = torch.log(probs_seq + 1e-8) 
+                    else:
+                        probs_seq = torch.softmax(logits_seq, dim=-1)
+                        log_probs = F.log_softmax(logits_seq, dim=-1)
+
+                    if args.fusion == 'bayes':
+                        # Summing Log-Probs (Sharpens confidence, ruins gap)
+                        temporal_fused = log_probs.sum(dim=1) 
+                        accumulated_log_probs = accumulated_log_probs + temporal_fused
+                    elif args.fusion == 'average':
+                        # Averaging Probs (Changes argmax, drops accuracy)
+                        temporal_fused = probs_seq.mean(dim=1)
+                        accumulated_raw_probs = accumulated_raw_probs + temporal_fused
+                    elif args.fusion == 'logit_average':
+                        # THE ORIGINAL MAGIC: Averaging raw logits (Log-Linear Pooling)
+                        # Retains Bayes accuracy, retains original confidence gap!
+                        temporal_fused = logits_seq.mean(dim=1)
+                        accumulated_logits = accumulated_logits + temporal_fused
+
+                # TTA FUSION
+                if args.fusion == 'bayes':
+                    fused_pseudo_logits = accumulated_log_probs / len(view_logits)
+                elif args.fusion == 'average':
+                    fused_pseudo_logits = torch.log((accumulated_raw_probs / len(view_logits)) + 1e-8)
+                elif args.fusion == 'logit_average':
+                    fused_pseudo_logits = accumulated_logits / len(view_logits)
+
+                # DECODE (LATE FUSION)
+                if cls_loss_type == 'CTC':
+                    preds, scores = ctc_greedy_decoder(fused_pseudo_logits, true_converter, return_scores=True)
                 else:
-                    # The model output raw logits (e.g., VSR_CURVATURE). Safe to Softmax!
-                    probs_seq = torch.softmax(logits_seq, dim=-1)
-                    # Use PyTorch's built-in log_softmax for numerical stability
-                    log_probs = F.log_softmax(logits_seq, dim=-1)
-
-                # ---------------------------------------------------------
-                # 2. THE ORACLE (Log-Space for Bayesian Product)
-                # ---------------------------------------------------------
-                temporal_log_probs = log_probs.sum(dim=1) 
-                accumulated_log_probs = accumulated_log_probs + temporal_log_probs
+                    preds = decode_batch_logits(fused_pseudo_logits, true_converter)
+                    scores = F.log_softmax(fused_pseudo_logits, dim=-1).max(dim=-1)[0].sum(dim=1)
                 
-                # ---------------------------------------------------------
-                # 3. THE AUDITOR (Linear-Space for Arithmetic Mean)
-                # ---------------------------------------------------------
-                # Notice we use the safe `probs_seq` here, NOT a new softmax!
-                temporal_raw_probs = probs_seq.mean(dim=1)
-                accumulated_raw_probs = accumulated_raw_probs + temporal_raw_probs
+                final_pred_str = preds[0]
+                avg_conf = scores[0].item() if isinstance(scores[0], torch.Tensor) else scores[0]
 
-            # --- THE DECISION (Oracle) ---
-            fused_pseudo_logits = accumulated_log_probs
-            
-            # --- THE CONFIDENCE (Auditor) ---
-            # Average the raw probabilities across TTA views (if any)
-            honest_probs = accumulated_raw_probs / len(view_logits)
-            # Convert honest probabilities to pseudo-logits just so the decoder can calculate the score!
-            honest_pseudo_logits = torch.log(honest_probs + 1e-8)
+            elif args.fusion == 'majority':
+                # ==========================================================
+                # DISCRETE EARLY DECODING (HARD VOTING)
+                # ==========================================================
+                all_decoded_strings = []
+                all_decoded_confs = []
+                
+                for logits_tensor in view_logits:
+                    if cls_loss_type == 'CTC':
+                        frame_preds, frame_scores = ctc_greedy_decoder(logits_tensor, true_converter, return_scores=True)
+                    else:
+                        frame_preds = decode_batch_logits(logits_tensor, true_converter)
+                        frame_scores = F.log_softmax(logits_tensor, dim=-1).max(dim=-1)[0].sum(dim=1)
+                    
+                    all_decoded_strings.extend(frame_preds)
+                    
+                    if isinstance(frame_scores, torch.Tensor):
+                        all_decoded_confs.extend(frame_scores.tolist())
+                    else:
+                        all_decoded_confs.extend(frame_scores)
+                        
+                vote_counts = defaultdict(int)
+                vote_confs = defaultdict(list)
+                
+                for s, c in zip(all_decoded_strings, all_decoded_confs):
+                    vote_counts[s] += 1
+                    vote_confs[s].append(c)
+                    
+                max_votes = max(vote_counts.values())
+                tied_candidates = [s for s, count in vote_counts.items() if count == max_votes]
+                
+                best_candidate = None
+                best_conf = -float('inf')
+                
+                for s in tied_candidates:
+                    avg_c = sum(vote_confs[s]) / len(vote_confs[s])
+                    if avg_c > best_conf:
+                        best_conf = avg_c
+                        best_candidate = s
+                        
+                final_pred_str = best_candidate
+                avg_conf = best_conf
 
-            # ==========================================================
-            # PURE VISUAL DECODING (Unbiased / SROCR_VAL Equivalent)
-            # ==========================================================
-            if cls_loss_type == 'CTC':
-                # Use Bayesian for the text, Auditor for the score
-                preds, _ = ctc_greedy_decoder(fused_pseudo_logits, true_converter, return_scores=True)
-                _, scores = ctc_greedy_decoder(honest_pseudo_logits, true_converter, return_scores=True)
-            else:
-                # Use Bayesian for the text
-                preds = decode_batch_logits(fused_pseudo_logits, true_converter)
-                # Use Auditor for the score
-                scores = F.log_softmax(honest_pseudo_logits, dim=-1).max(dim=-1)[0].sum(dim=1)
-            
-            final_pred_str = preds[0]
-            avg_conf = scores[0].item() if isinstance(scores[0], torch.Tensor) else scores[0]
-            
             # --- METRICS & LOGGING ---
             if args.mode == 'val':
-                # 1. Calculate how many characters match exactly in their correct positions
                 match_count = sum(1 for p, g in zip(final_pred_str, gt_text) if p == g)
                 
-                # 2. Update the Partial Match Trackers
                 if match_count >= 5: correct_5plus += 1
                 if match_count >= 6: correct_6plus += 1
                 
-                # 3. Full Sequence (7/7)
                 is_correct = (final_pred_str == gt_text)
                 if is_correct:
                     correct_plates += 1
                 else:
                     failures.append(f"{track_name} | Pred: {final_pred_str} | GT: {gt_text} | Conf: {avg_conf:.4f} | Matches: {match_count}")
                 
-                import math
                 if cls_loss_type == 'CTC':
-                    # CTC already returns a normalized 0.0 to 1.0 probability. Do not exponentiate!
                     normalized_conf = avg_conf
                 else:
-                    # Attention returns the sum of log-probs. We must exponentiate to get the geometric mean.
                     normalized_conf = math.exp(avg_conf / max(1, len(final_pred_str)))
                     
                 confidence_tracking.append({'correct': is_correct, 'conf': normalized_conf})
-                # <--- END ADD
-                # <--- END ADD
+
                 pbar.set_postfix({'SeqAcc': f"{correct_plates/(total_plates+1):.1%}"})
             else:
                 submission_lines.append(f"{track_name},{final_pred_str};{avg_conf:.4f}")
             
             total_plates += 1
             
-    # 5. FINAL RESULTS
+    # ==========================================================
+    # FINAL RESULTS
+    # ==========================================================
     if args.mode == 'val':
         acc = (correct_plates / total_plates) * 100.0 if total_plates > 0 else 0
         acc_6plus = (correct_6plus / total_plates) * 100.0 if total_plates > 0 else 0
@@ -401,7 +389,7 @@ if __name__ == "__main__":
         acc_merc = (correct_mercosur / total_mercosur) * 100.0 if total_mercosur > 0 else 0
         acc_braz = (correct_brazil / total_brazil) * 100.0 if total_brazil > 0 else 0
         
-        print(f"\n🏆 FINAL EVALUATION METRICS")
+        print(f"\n🏆 FINAL EVALUATION METRICS ({args.fusion.upper()} FUSION)")
         print(f"   Full Sequence (7/7):  {acc:.2f}% ({correct_plates}/{total_plates})")
         print(f"   Partial Match (≥6/7): {acc_6plus:.2f}% ({correct_6plus}/{total_plates})")
         print(f"   Partial Match (≥5/7): {acc_5plus:.2f}% ({correct_5plus}/{total_plates})")
@@ -409,13 +397,11 @@ if __name__ == "__main__":
         print(f"   🇧🇷 Old Brazilian (LLL-NNNN): {acc_braz:.2f}% ({correct_brazil}/{total_brazil})")
         print(f"   🌎 Mercosur Layout (LLL-NLNN): {acc_merc:.2f}% ({correct_mercosur}/{total_mercosur})")
         
-        # ---> ADD THIS: Print the Recognition Rate vs Confidence Table
         print(f"\n📈 RECOGNITION RATE VS. CONFIDENCE THRESHOLD")
         print(f"{'-'*65}")
         print(f"| {'Minimum Confidence':<20} | {'Retained (Coverage)':<22} | {'Accuracy':<12} |")
         print(f"|{'-'*22}|{'-'*24}|{'-'*14}|")
         
-        # We evaluate accuracy if we only trust predictions above these thresholds
         thresholds = [0.0, 0.50, 0.70, 0.80, 0.90, 0.95, 0.98, 0.99]
         for thresh in thresholds:
             retained = [x for x in confidence_tracking if x['conf'] >= thresh]
@@ -427,13 +413,7 @@ if __name__ == "__main__":
             
             print(f"| ≥ {thresh:<18.2f} | {len(retained):<6} ({coverage:>6.2f}%)         | {thresh_acc:>7.2f}%    |")
         print(f"{'-'*65}")
-        # <--- END ADD
 
-        print(f"{'-'*65}")
-
-        # =========================================================
-        # ---> ADD THIS: Calculate and Print the Confidence Gap
-        # =========================================================
         correct_confs = [x['conf'] for x in confidence_tracking if x['correct']]
         incorrect_confs = [x['conf'] for x in confidence_tracking if not x['correct']]
 
@@ -446,9 +426,16 @@ if __name__ == "__main__":
         print(f"{'-'*45}")
         print(f"   Mean Conf (Correct):   {mean_correct:.4f}")
         print(f"   Mean Conf (Incorrect): {mean_incorrect:.4f}")
-        print(f"   Confidence Gap:        {confidence_gap:.4f}") # <-- This is what run_all_evals is looking for!
+        print(f"   Confidence Gap:        {confidence_gap:.4f}") 
         print(f"{'-'*45}")
-        # =========================================================
 
         if failures:
             fail_path = "validation_failures_sequence.txt"
+            with open(fail_path, 'w', encoding='utf-8') as f:
+                f.write("\n".join(failures))
+            print(f"\nSaved {len(failures)} failures to {fail_path}")
+
+    elif args.mode == 'test':
+        with open(args.output, 'w', encoding='utf-8') as f:
+            f.write("\n".join(submission_lines))
+        print(f"✅ Submission saved to {args.output}")

@@ -1,6 +1,7 @@
 alphabet: 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ
 cls_loss: POLY
 ema_warmup_epochs: 5
+early_stop_patience: 30
 epoch_max: 1000
 epoch_max_ema: 50
 finetune: true
@@ -8,12 +9,12 @@ force_lr: true
 func_train: SROCR_TRAIN
 func_val: SROCR_VAL
 model_g:
-  name: VSR_CURVATURE
   args:
-    in_channels: 3
-    feature_dim: 256
     cnn_heads: 8
     d_model: 384
+    feature_dim: 256
+    in_channels: 3
+    num_chars: 7
     vit_heads: 12
     use_hcg: true
     use_sfb: true
@@ -27,7 +28,7 @@ optimizer_sr:
   name: adamW
 resume: null
 train_dataset:
-  batch: 64
+  batch: 32
   dataset:
     args:
       in_memory: true

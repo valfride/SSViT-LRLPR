@@ -15,6 +15,7 @@ from torch.utils.data import DataLoader
 from torch.nn.parallel import DistributedDataParallel as DDP
 import shutil
 import math
+import copy
 
 DEBUG = os.getenv("DEBUG", "True").lower() == "true"
 if DEBUG:
@@ -95,6 +96,10 @@ def main(config, save_path):
     model_g = models.make(config['model_g']).to(local_rank)
     model_g = model_g.to(memory_format=torch.channels_last)
     
+    # ---> ADD THIS: Actually wrap the model in DDP if not debugging!
+    if not DEBUG:
+        model_g = DDP(model_g, device_ids=[local_rank], output_device=local_rank)
+    
     base_lr = float(config['optimizer_sr']['args'].get('lr', 1e-4))
     
     deform_offset_params, base_params = [], []
@@ -125,22 +130,19 @@ def main(config, save_path):
     model_ghost = None
 
     if use_ema_ghost:
-        if is_main_process(): print("👻 Ghost EMA Tracker Mode ON: Creating secondary model...")
-        model_ghost = models.make(config['model_g']).to(local_rank)
-        model_ghost = model_ghost.to(memory_format=torch.channels_last)
-
-        # Brain Transplant: Initialize Ghost with exact Student weights
-        model_ghost.load_state_dict(model_g.state_dict())
+        print("👻 Ghost EMA Tracker Mode ON...")
+        # Deepcopy creates the Ghost WITHOUT consuming new random numbers!
+        model_ghost = copy.deepcopy(model_g) 
         
-        # Freeze the Ghost completely (Learns via EMA, not Backprop)
+        # Freeze the Ghost
         for param in model_ghost.parameters():
             param.requires_grad = False
-	
+
     scheduler_g = create_scheduler(config, optimizer_g, epoch_max)
     
     start_epoch = 1; best_accuracy = 0.0
     best_models = [] 
-    early_stop_patience = config.get('early_stop_patience', 100)
+    early_stop_patience = config.get('early_stop_patience', 25)
     epochs_without_improvement = 0
     
     resume_path = config.get('resume')
@@ -149,13 +151,26 @@ def main(config, save_path):
     if resume_path and os.path.isfile(resume_path):
         checkpoint = torch.load(resume_path, map_location=f'cuda:{local_rank}', weights_only=False)
         
-        # 1. ALWAYS load the Model Weights
+        # 1. ALWAYS load the Student Model Weights
         state_dict = {k.replace('module.', ''): v for k, v in checkpoint['model_g_sd'].items()}
         model_g.load_state_dict(state_dict, strict=False)
         
-        # Safely load Ghost weights if they exist
-        if use_ema_ghost and 'model_ghost_sd' in checkpoint:
-            model_ghost.load_state_dict({k.replace('module.', ''): v for k, v in checkpoint['model_ghost_sd'].items()}, strict=False)
+        # 2. THE FIX: Smart Ghost Loading
+        if use_ema_ghost:
+            if 'model_ghost_sd' in checkpoint:
+                # Fallback if they were ever saved together
+                model_ghost.load_state_dict({k.replace('module.', ''): v for k, v in checkpoint['model_ghost_sd'].items()}, strict=False)
+            else:
+                # Automatically hunt down the sister directory
+                resume_file = Path(resume_path)
+                ghost_path = resume_file.parent.parent / 'ghost_weights' / resume_file.name
+                
+                if ghost_path.exists():
+                    if is_main_process(): print(f"👻 Successfully located and loaded sister Ghost checkpoint: {ghost_path.name}")
+                    ghost_ckpt = torch.load(ghost_path, map_location=f'cuda:{local_rank}', weights_only=False)
+                    model_ghost.load_state_dict({k.replace('module.', ''): v for k, v in ghost_ckpt['model_ghost_sd'].items()}, strict=False)
+                else:
+                    if is_main_process(): print("⚠️ Warning: Could not find corresponding Ghost checkpoint. Ghost is starting from scratch!")
         
         # 2. THE SPLIT: Fine-tune vs. True Resume
         if is_finetune:
@@ -196,13 +211,19 @@ def main(config, save_path):
     try:
         for epoch in range(start_epoch, epoch_max + 1):
             if hasattr(train_sampler, 'set_epoch'): train_sampler.set_epoch(epoch)
-            if is_main_process(): print(f"🔄 Starting Epoch {epoch}...")
             
-            # ---> THE CURRICULUM RAMP
-            # Scales from 0.0 to 0.5 over the first 40 epochs
-            # new_p = min(0.5, (epoch / 40.0) * 0.5)
-            # train_loader.dataset.eraser_prob = new_p
-            # print(f"📈 Epoch {epoch}: RandomErasing Probability set to {new_p:.2f}")
+            if is_main_process(): 
+                print(f"🔄 Starting Epoch {epoch}...")
+                # Assuming your config specifies ema_warmup_epochs or similar for the schedule
+                warmup = config.get('ema_warmup_epochs', 5)
+                max_eps = 2.0 # Or whatever your config/loss defines
+                if epoch <= warmup:
+                    progress = (epoch - 1) / max(1, warmup - 1)
+                    current_eps = max_eps * 0.5 * (1.0 - math.cos(math.pi * progress))
+                else:
+                    current_eps = max_eps
+                
+                print(f"📉 PolyLoss Schedule | Epoch {epoch} | Epsilon: {current_eps:.3f}")
 
             model_g.train()
             if use_ema_ghost: model_ghost.train() # Keep dropout identical
@@ -235,44 +256,102 @@ def main(config, save_path):
                 # Pass the ghost_val_acc to the upgraded CSV logger
                 log_to_csv(save_path, epoch, train_loss, val_loss, accuracy, ghost_val_acc, current_lr)
                 
-                checkpoint = {
+                # ==========================================================
+                # DUAL TOP-5 CHECKPOINTING LOGIC (SEPARATE FOLDERS)
+                # ==========================================================
+                
+                # 1. Create subdirectories if they don't exist
+                student_dir = save_path / 'student_weights'
+                if not student_dir.exists(): student_dir.mkdir(parents=True)
+                
+                if use_ema_ghost:
+                    ghost_dir = save_path / 'ghost_weights'
+                    if not ghost_dir.exists(): ghost_dir.mkdir(parents=True)
+
+                # Initialize Top-5 trackers
+                if not hasattr(model_g, 'top_students'): model_g.top_students = []
+                if use_ema_ghost and not hasattr(model_ghost, 'top_ghosts'): model_ghost.top_ghosts = []
+
+                student_ckpt = {
                     'epoch': epoch, 
                     'model_g_sd': model_g.module.state_dict() if hasattr(model_g, 'module') else model_g.state_dict(),
                     'optimizer_g': optimizer_g.state_dict(), 
                     'scheduler_g': scheduler_g.state_dict(),
-                    'best_acc': best_accuracy,
-                    'best_models': best_models,
+                    # ---> ADD THESE 3 LINES:
+                    'best_acc': model_g.top_students[0]['acc'] if len(model_g.top_students) > 0 else accuracy,
+                    'best_models': model_g.top_students,
                     'epochs_without_improvement': epochs_without_improvement
                 }
                 
+                # --- 2. SAVE LAST ---
+                torch.save(student_ckpt, student_dir / 'last.pth')
+                
                 if use_ema_ghost:
-                    checkpoint['model_ghost_sd'] = model_ghost.module.state_dict() if hasattr(model_ghost, 'module') else model_ghost.state_dict()
-				
-                torch.save(checkpoint, save_path / 'last.pth')
+                    ghost_ckpt = {
+                        'epoch': epoch,
+                        'model_ghost_sd': model_ghost.module.state_dict() if hasattr(model_ghost, 'module') else model_ghost.state_dict(),
+                        # ---> ADD THESE 2 LINES:
+                        'best_acc': model_ghost.top_ghosts[0]['acc'] if len(model_ghost.top_ghosts) > 0 else ghost_val_acc,
+                        'best_models': getattr(model_ghost, 'top_ghosts', [])
+                    }
+                    torch.save(ghost_ckpt, ghost_dir / 'last.pth')
+
+                # --- 3. TRACK & SAVE TOP 5 STUDENT ---
+                student_filepath = student_dir / f"student_acc_{accuracy:.4f}_ep_{epoch}.pth"
+                model_g.top_students.append({'acc': accuracy, 'epoch': epoch, 'path': student_filepath})
+                model_g.top_students = sorted(model_g.top_students, key=lambda x: x['acc'], reverse=True)
                 
-                # Check early stopping against either the Student OR the Ghost
-                tracking_acc = max(accuracy, ghost_val_acc) if use_ema_ghost else accuracy
+                # Prune if > 5
+                if len(model_g.top_students) > 5:
+                    to_remove = model_g.top_students.pop()
+                    if os.path.exists(to_remove['path']): os.remove(to_remove['path'])
                 
-                if len(best_models) < 5 or tracking_acc > best_models[-1]['acc']:
-                    ckpt_name = f"model_acc_{tracking_acc:.4f}_ep_{epoch}.pth"
-                    torch.save(checkpoint, save_path / ckpt_name)
-                    print(f"⭐ Saving Top-5 Model: {ckpt_name}")
-                    best_models.append({'acc': tracking_acc, 'path': save_path / ckpt_name})
-                    best_models.sort(key=lambda x: x['acc'], reverse=True)
-                    if len(best_models) > 5:
-                        to_remove = best_models.pop()
-                        if os.path.exists(to_remove['path']): os.remove(to_remove['path'])
+                # Save if in Top 5
+                if any(x['epoch'] == epoch for x in model_g.top_students):
+                    torch.save(student_ckpt, student_filepath)
+                    print(f"⭐ Saved to Student Top 5 -> {accuracy:.4f}")
+
+                # --- 4. TRACK & SAVE TOP 5 GHOST ---
+                if use_ema_ghost:
+                    ghost_filepath = ghost_dir / f"ghost_acc_{ghost_val_acc:.4f}_ep_{epoch}.pth"
+                    model_ghost.top_ghosts.append({'acc': ghost_val_acc, 'epoch': epoch, 'path': ghost_filepath})
+                    model_ghost.top_ghosts = sorted(model_ghost.top_ghosts, key=lambda x: x['acc'], reverse=True)
+                    
+                    # Prune if > 5
+                    if len(model_ghost.top_ghosts) > 5:
+                        to_remove_g = model_ghost.top_ghosts.pop()
+                        if os.path.exists(to_remove_g['path']): os.remove(to_remove_g['path'])
+                    
+                    # Save if in Top 5
+                    if any(x['epoch'] == epoch for x in model_ghost.top_ghosts):
+                        torch.save(ghost_ckpt, ghost_filepath)
+                        print(f"👻 Saved to Ghost Top 5 -> {ghost_val_acc:.4f}")
+                    
+
+                # --- 5. EARLY STOPPING TRIGGER (COMBINED) ---
+                student_improved = False
+                ghost_improved = False
                 
-                if tracking_acc > best_accuracy: 
-                    best_accuracy = tracking_acc
-                    epochs_without_improvement = 0  
+                # Check if Student hit a new all-time high
+                if len(model_g.top_students) > 0 and accuracy >= model_g.top_students[0]['acc']:
+                    student_improved = True
+                    
+                # Check if Ghost hit a new all-time high
+                if use_ema_ghost and hasattr(model_ghost, 'top_ghosts') and len(model_ghost.top_ghosts) > 0:
+                    if ghost_val_acc >= model_ghost.top_ghosts[0]['acc']:
+                        ghost_improved = True
+
+                # If EITHER model improved, reset the patience counter!
+                if student_improved or ghost_improved:
+                    epochs_without_improvement = 0
                 else:
                     epochs_without_improvement += 1
-                    
+
                 if epochs_without_improvement >= early_stop_patience:
-                    print(f"🛑 Early stopping triggered! No improvement for {early_stop_patience} epochs.")
+                    print(f"🛑 Early stopping triggered! No improvement in Student or Ghost for {early_stop_patience} epochs.")
                     break 
 
+                
     except KeyboardInterrupt:
         if is_main_process():
             print("\n🛑 KeyboardInterrupt! Saving emergency checkpoint...")

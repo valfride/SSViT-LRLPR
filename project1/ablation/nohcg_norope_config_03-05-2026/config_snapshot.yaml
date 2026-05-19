@@ -1,34 +1,30 @@
-name: VSR_Poly_HCG
 alphabet: 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ
 cls_loss: POLY
 ema_warmup_epochs: 5
 epoch_max: 1000
 epoch_max_ema: 50
-finetune: true
-force_lr: true
+finetune: false
+force_lr: false
 func_train: SROCR_TRAIN
 func_val: SROCR_VAL
-
 model_g:
-  name: VSR_CURVATURE
   args:
-    in_channels: 3
-    feature_dim: 256
     cnn_heads: 8
     d_model: 384
-    vit_heads: 12
-    use_hcg: true
-    use_sfb: false
+    feature_dim: 256
+    in_channels: 3
+    use_hcg: false
     use_rope: false
-
+    use_sfb: true
+    vit_heads: 12
+  name: VSR_CURVATURE
+name: VSR_DenseRoPE_Poly
 optimizer_sr:
   args:
     lr: 1e-4
     weight_decay: 0.001
   name: adamW
-
-resume: null
-
+resume: experiments/ablation/nohcg_norope_config_03-05-2026/last.pth
 train_dataset:
   batch: 64
   dataset:
@@ -49,11 +45,9 @@ train_dataset:
       use_fda_hr: false
       use_fda_lr: true
     name: VSR_collate_fn
-
 use_distillation: false
-use_ema_ghost: false
+use_ema_ghost: true
 use_fp16: true
-
 val_dataset:
   batch: 32
   dataset:

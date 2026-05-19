@@ -429,47 +429,78 @@ def ctc_greedy_decoder(batch_logits, converter, return_scores=False):
         
 #         return (total_flat * valid_mask).sum() / torch.clamp(valid_mask.sum(), min=1e-4)
 
+# class SmoothPoly1Loss(nn.Module):
+#     def __init__(self, epsilon=2.0, smoothing=0.1, ignore_index=38):
+#         super().__init__()
+#         self.epsilon = epsilon
+#         self.smoothing = smoothing
+#         self.ignore_index = ignore_index # ADD THIS
+
+#     def forward(self, logits, targets):
+#         logits_flat = logits.view(-1, logits.size(-1))
+#         targets_flat = targets.view(-1)
+
+#         # ADD ignore_index here!
+#         ce_loss = F.cross_entropy(
+#             logits_flat, targets_flat, 
+#             label_smoothing=self.smoothing, reduction='none', ignore_index=self.ignore_index
+#         )
+
+#         with torch.no_grad():
+#             # AND ADD ignore_index here!
+#             clean_ce = F.cross_entropy(
+#                 logits_flat, targets_flat, 
+#                 reduction='none', ignore_index=self.ignore_index
+#             )
+#             pt = torch.exp(-clean_ce)
+
+#         poly1_loss = ce_loss + self.epsilon * (1.0 - pt)
+        
+#         # Reshape to apply spatial weights: (B, 7)
+#         poly1_seq = poly1_loss.view(-1, 7)
+        
+#         # Create a weight mask that penalizes Index 2 and Index 3 heavily
+#         # Normal weights = 1.0, Gap weights = 1.5
+#         spatial_weights = torch.tensor([1.0, 1.0, 1.5, 1.5, 1.0, 1.0, 1.0], device=logits.device)
+#         poly1_weighted = poly1_seq * spatial_weights
+        
+#         # Flatten back and mask out the padding tokens
+#         poly1_flat = poly1_weighted.view(-1)
+#         valid_mask = (targets_flat != self.ignore_index).float()
+        
+#         return (poly1_flat * valid_mask).sum() / valid_mask.sum()
+    
 class SmoothPoly1Loss(nn.Module):
     def __init__(self, epsilon=2.0, smoothing=0.1, ignore_index=38):
         super().__init__()
         self.epsilon = epsilon
         self.smoothing = smoothing
-        self.ignore_index = ignore_index # ADD THIS
+        self.ignore_index = ignore_index
 
     def forward(self, logits, targets):
         logits_flat = logits.view(-1, logits.size(-1))
         targets_flat = targets.view(-1)
 
-        # ADD ignore_index here!
         ce_loss = F.cross_entropy(
             logits_flat, targets_flat, 
             label_smoothing=self.smoothing, reduction='none', ignore_index=self.ignore_index
         )
 
         with torch.no_grad():
-            # AND ADD ignore_index here!
             clean_ce = F.cross_entropy(
                 logits_flat, targets_flat, 
                 reduction='none', ignore_index=self.ignore_index
             )
             pt = torch.exp(-clean_ce)
 
+        # Standard PolyLoss (No spatial weighting)
         poly1_loss = ce_loss + self.epsilon * (1.0 - pt)
         
-        # Reshape to apply spatial weights: (B, 7)
-        poly1_seq = poly1_loss.view(-1, 7)
-        
-        # Create a weight mask that penalizes Index 2 and Index 3 heavily
-        # Normal weights = 1.0, Gap weights = 1.5
-        spatial_weights = torch.tensor([1.0, 1.0, 1.5, 1.5, 1.0, 1.0, 1.0], device=logits.device)
-        poly1_weighted = poly1_seq * spatial_weights
-        
-        # Flatten back and mask out the padding tokens
-        poly1_flat = poly1_weighted.view(-1)
+        # Mask out the padding tokens (EOS/PAD)
         valid_mask = (targets_flat != self.ignore_index).float()
         
-        return (poly1_flat * valid_mask).sum() / valid_mask.sum()
-    
+        return (poly1_loss * valid_mask).sum() / valid_mask.sum()
+
 class ShiftInvariantL1Loss(nn.Module):
     """
     A spatially-relaxed L1 loss that forgives YOLO bounding box misalignment.
@@ -805,6 +836,16 @@ def box_size_penalties(corners, max_area=0.20, std_tolerance=2.0):
     
     return consensus_loss + cap_penalty
 
+class StandardCELoss(nn.Module):
+    def __init__(self, ignore_index=38):
+        super().__init__()
+        self.loss_fn = nn.CrossEntropyLoss(ignore_index=ignore_index)
+
+    def forward(self, logits, targets):
+        logits_flat = logits.view(-1, logits.size(-1))
+        targets_flat = targets.view(-1)
+        return self.loss_fn(logits_flat, targets_flat)
+
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2.0, alpha=1.0, ignore_index=38):
         super().__init__()
@@ -839,6 +880,60 @@ class FocalLoss(nn.Module):
         
         # ---> ANOTHER FP16 FIX: Clamp the denominator to prevent division by absolute zero
         return (focal_loss * valid_mask).sum() / torch.clamp(valid_mask.sum(), min=1e-4)
+    
+class EvidentialLoss(nn.Module):
+    def __init__(self, num_classes=38, ignore_index=38, annealing_epochs=10):
+        super().__init__()
+        self.num_classes = num_classes
+        self.ignore_index = ignore_index
+        self.annealing_epochs = annealing_epochs
+
+    def kl_divergence(self, alpha):
+        # Calculates KL( D(alpha) || D(1) ) using log-gamma for numerical stability
+        K = self.num_classes
+        S = torch.sum(alpha, dim=-1, keepdim=True)
+        
+        term1 = torch.lgamma(S) - torch.lgamma(torch.tensor(K, dtype=torch.float32, device=alpha.device)) - torch.sum(torch.lgamma(alpha), dim=-1, keepdim=True)
+        term2 = torch.sum((alpha - 1.0) * (torch.digamma(alpha) - torch.digamma(S)), dim=-1, keepdim=True)
+        return (term1 + term2).squeeze(-1)
+
+    def forward(self, preds_dict, targets, current_epoch=0):
+        alpha = preds_dict['alpha']               # (B, T, C)
+        expected_prob = preds_dict['expected_prob'] # (B, T, C)
+        S = torch.sum(alpha, dim=-1, keepdim=True)
+
+        # Flatten sequences
+        alpha_flat = alpha.view(-1, self.num_classes)
+        S_flat = S.view(-1, 1)
+        prob_flat = expected_prob.view(-1, self.num_classes)
+        targets_flat = targets.view(-1)
+
+        # Mask out padding (EOS/PAD)
+        valid_mask = (targets_flat != self.ignore_index)
+        if not valid_mask.any(): return alpha.sum() * 0.0 # Failsafe
+
+        alpha_v = alpha_flat[valid_mask]
+        S_v = S_flat[valid_mask]
+        prob_v = prob_flat[valid_mask]
+        targets_v = targets_flat[valid_mask]
+
+        # Convert targets to One-Hot
+        y = F.one_hot(targets_v, num_classes=self.num_classes).float()
+
+        # Equation 5: Data fit + Dirichlet Variance
+        error = (y - prob_v) ** 2
+        variance = (prob_v * (1.0 - prob_v)) / (S_v + 1.0)
+        loss_mse = torch.sum(error + variance, dim=-1)
+
+        # KL Divergence Penalty (shrink evidence to zero for misclassifications)
+        alpha_tilde = y + (1.0 - y) * alpha_v
+        kl_div = self.kl_divergence(alpha_tilde)
+
+        # Annealing Schedule
+        anneal = min(1.0, current_epoch / self.annealing_epochs)
+
+        total_loss = loss_mse + (anneal * kl_div)
+        return total_loss.mean()
 
 def build_loss_function(cls_loss_type, converter, device, current_epoch=None):
     """Factory to instantiate the correct spatial OCR loss based on the baseline."""
@@ -866,8 +961,10 @@ def build_loss_function(cls_loss_type, converter, device, current_epoch=None):
             else:
                 current_eps = max_epsilon
                 
-            if is_main_process():
-                print(f"📉 PolyLoss Schedule | Epoch {current_epoch} | Epsilon: {current_eps:.3f}")
+            # if is_main_process():
+            #     # \r moves to the start of the line
+            #     # \033[K clears the line so the progress bar is erased before printing
+            #     print(f"\r\033[K📉 PolyLoss Schedule | Epoch {current_epoch} | Epsilon: {current_eps:.3f}")
         else:
             # We are Validating. Lock epsilon to max_epsilon so the validation 
             # loss metric remains consistent and comparable across all epochs.
@@ -877,8 +974,12 @@ def build_loss_function(cls_loss_type, converter, device, current_epoch=None):
     
     elif cls_loss_type == 'FL':
         return FocalLoss(gamma=2.0, alpha=1.0, ignore_index=38).to(device)
+    elif cls_loss_type == 'CE':  # <--- ADD THIS BLOCK
+        return StandardCELoss(ignore_index=38).to(device)
     elif cls_loss_type in ['LISTER_INTERNAL', 'MDIFF_INTERNAL', 'IGTR_INTERNAL']:
         return None
+    elif cls_loss_type == 'EVIDENTIAL':
+        return EvidentialLoss(ignore_index=38).to(device)
     else:
         raise ValueError(f"Unknown baseline loss type: {cls_loss_type}")
 
@@ -889,9 +990,15 @@ def prepare_targets(cls_loss_type, text_label, converter, device, is_training=Tr
     if cls_loss_type == 'CPPD':
         t1, t2 = converter.encode_cppd(text_label, max_len=7)
         return (t1.to(device), t2.to(device))
-    # ---> THE FIX: Route LISTER_INTERNAL to the variable encoder! <---
-    elif cls_loss_type in ['OTE', 'POLY', 'FL', 'CTC', 'LISTER_INTERNAL']:
-        encode_func = getattr(converter, f'encode_{"variable" if cls_loss_type in ["POLY", "CTC", "FL", "LISTER_INTERNAL"] else "ote"}')
+    # ---> THE FIX: Add 'CE' to both of these lists! <---
+    elif cls_loss_type in ['OTE', 'POLY', 'FL', 'CTC', 'LISTER_INTERNAL', 'CE', 'EVIDENTIAL']:
+        
+        # Explicitly route to encode_variable for our new loss
+        if cls_loss_type in ["POLY", "CTC", "FL", "LISTER_INTERNAL", "CE", "EVIDENTIAL"]:
+            encode_func = getattr(converter, 'encode_variable')
+        else:
+            encode_func = getattr(converter, 'encode_ote')
+            
         return encode_func(text_label, max_len=7).to(device)
     elif cls_loss_type == 'MDIFF_INTERNAL':
         targets = converter.encode_mdiff(text_label, max_len=7)
@@ -974,17 +1081,79 @@ def prepare_targets(cls_loss_type, text_label, converter, device, is_training=Tr
         else:
             return converter.encode_list(text_label).to(device)
         
-def compute_task_loss(preds, true_targets, loss_fn_spatial, cls_loss_type):
-    """Intelligently calculates the primary OCR loss regardless of architecture."""
+def compute_task_loss(preds, true_targets, loss_fn_spatial, cls_loss_type, current_epoch=0):
     if 'loss_internal' in preds and preds['loss_internal'] is not None:
         return preds['loss_internal']
+    elif cls_loss_type == 'EVIDENTIAL':
+        # Pass the whole dict and the epoch for annealing!
+        return loss_fn_spatial(preds, true_targets, current_epoch=current_epoch)
     elif cls_loss_type in ['CPPD', 'OTE']:
         return loss_fn_spatial(preds, true_targets)
     else:
         return loss_fn_spatial(preds['logits'], true_targets)
 
-def decode_predictions(logits, cls_loss_type, converter, return_scores=False):
+def visualize_trust_masks(image_tensor, trust_masks, epoch, save_dir='./trust_maps'):
+    os.makedirs(save_dir, exist_ok=True)
+    import torch.nn.functional as F
+    
+    # Take the first image in the batch
+    img = image_tensor[0].detach().cpu()
+    if img.min() < 0: img = (img * 0.5) + 0.5
+    img = torch.clamp(img, 0, 1)
+    
+    grid_items = [img]
+    
+    # trust_masks is a list of tensors from each stage (e.g., Stage 1, Stage 2)
+    for i, mask in enumerate(trust_masks):
+        m = mask[0].detach().cpu() # Shape (1, H, W)
+        
+        # Upsample the mask to match the original image resolution
+        m_resized = F.interpolate(m.unsqueeze(0), size=(img.shape[1], img.shape[2]), mode='bilinear', align_corners=False).squeeze(0)
+        
+        # Create a heatmap overlay (Mask applied to the image)
+        # Low trust becomes dark, High trust remains visible
+        heatmap_overlay = img * m_resized
+        grid_items.append(heatmap_overlay)
+        
+    grid_tensor = torch.stack(grid_items)
+    vutils.save_image(
+        grid_tensor, os.path.join(save_dir, f'trust_epoch_{epoch:03d}.png'),
+        nrow=len(grid_items), padding=2, normalize=False
+    )
+
+def decode_predictions(preds, cls_loss_type, converter, return_scores=False):
     """Unified API for text decoding."""
+    
+    if cls_loss_type == 'EVIDENTIAL':
+        # Safely extract expected_prob whether a dict or raw tensor was passed
+        expected_prob = preds['expected_prob'] if isinstance(preds, dict) else preds
+        
+        indices = expected_prob.argmax(dim=-1).cpu().numpy()
+        decoded_preds = []
+        for b in range(len(indices)):
+            chars = []
+            for t in range(indices.shape[1]):
+                idx = indices[b, t]
+                if idx >= len(converter.alphabet): continue
+                char = converter.alphabet[idx]
+                if char == '#': continue
+                if char == '$': break
+                chars.append(char)
+            decoded_preds.append("".join(chars))
+            
+        if return_scores:
+            # Generate pseudo-scores from the expected probabilities
+            scores = torch.log(expected_prob.max(dim=-1)[0] + 1e-8).sum(dim=1)
+            return decoded_preds, scores
+            
+        return decoded_preds
+    
+    # ==========================================
+    # FALLBACK FOR STANDARD LOGIT DECODERS (CTC, CPPD, POLY)
+    # ==========================================
+    # Extract logits if a dictionary was passed, otherwise assume it's already the tensor
+    logits = preds['logits'] if isinstance(preds, dict) else preds
+    
     if cls_loss_type == 'CTC':
         return ctc_greedy_decoder(logits, converter, return_scores=return_scores)
     else:
@@ -1012,6 +1181,10 @@ def update_ema_ghost(model_g, model_ghost, epochs_since_reset, cycle_length, war
     with torch.no_grad():
         for param_s, param_t in zip(model_g.parameters(), model_ghost.parameters()):
             param_t.data.mul_(current_decay).add_(param_s.data, alpha=1.0 - current_decay)
+            
+        # ---> ADD THIS: Sync the BatchNorm buffers!
+        for buf_s, buf_t in zip(model_g.buffers(), model_ghost.buffers()):
+            buf_t.data.copy_(buf_s.data)
             
     return current_decay
 
@@ -1168,7 +1341,9 @@ def SROCR_TRAIN(train_loader, val_loader, model_g, model_ghost, optimizer_g, con
             loss_stats['task_s'].append(total_loss.item()) 
                 
             if batch_idx % 5 == 0:
-                decoded_s = decode_predictions(preds_lr['logits'], cls_loss_type, true_converter)
+                visualize_trust_masks(lr_batch, preds_lr['trust_masks'], batch_idx, save_dir=save_root / 'trust_maps')
+
+                decoded_s = decode_predictions(preds_lr, cls_loss_type, true_converter)
                 
                 acc_s_seq = sum([1 for p, t in zip(decoded_s, text_label) if p == t]) / len(text_label)
                 running_acc_seq_s = (running_acc_seq_s * 0.9) + (acc_s_seq * 0.1) if running_acc_seq_s > 0 else acc_s_seq
@@ -1244,7 +1419,12 @@ def SROCR_VAL(val_loader, model_g, model_ghost, config, **kwargs):
             with torch.amp.autocast('cuda', enabled=config.get('use_fp16', False)):
                 output_s = model_g(flat_imgs, temporal_pool=True) 
                 if isinstance(output_s, (tuple, list)): output_s = output_s[0]
-                logits_s = output_s['logits']
+                
+                # Convert expected_prob to log-space for ensembling
+                if cls_loss_type == 'EVIDENTIAL':
+                    logits_s = torch.log(output_s['expected_prob'] + 1e-8)
+                else:
+                    logits_s = output_s['logits']
                 
                 # Calculate Validation Loss
                 if loss_fn_spatial is not None:
@@ -1261,7 +1441,11 @@ def SROCR_VAL(val_loader, model_g, model_ghost, config, **kwargs):
                 with torch.amp.autocast('cuda', enabled=config.get('use_fp16', False)):
                     output_t = model_ghost(flat_imgs, temporal_pool=True)
                     if isinstance(output_t, (tuple, list)): output_t = output_t[0]
-                    logits_t = output_t['logits']
+                    
+                    if cls_loss_type == 'EVIDENTIAL':
+                        logits_t = torch.log(output_t['expected_prob'] + 1e-8)
+                    else:
+                        logits_t = output_t['logits']
 
             # ==========================================
             # 3. TEMPORAL SOFT ENSEMBLING (Zero-Cost Upgrade)

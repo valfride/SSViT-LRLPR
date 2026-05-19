@@ -1,0 +1,70 @@
+alphabet: 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ
+cls_loss: POLY
+ema_warmup_epochs: 5
+epoch_max: 1000
+epoch_max_ema: 50
+early_stop_patience: 25
+finetune: true
+force_lr: true
+func_train: SROCR_TRAIN
+func_val: SROCR_VAL
+model_g:
+  name: VSR_CURVATURE
+  args:
+    in_channels: 3
+    feature_dim: 256
+    cnn_heads: 8
+    d_model: 384
+    vit_heads: 12
+    use_hcg: false
+    use_sfb: true
+    use_rope: false
+  name: VSR_CURVATURE
+name: VSR_Proposed_POLY
+optimizer_sr:
+  args:
+    lr: 1e-4
+    weight_decay: 0.001
+  name: adamW
+resume: null
+train_dataset:
+  batch: 64
+  dataset:
+    args:
+      in_memory: true
+      path_split: ./competition_dataset_lmdb
+      phase: training
+    name: lmdb_dataset
+  wrapper:
+    args:
+      aug: true
+      background: (127, 127, 127)
+      image_aspect_ratio: 3.0
+      imgH: 32
+      imgW: 96
+      in_images: 1
+      return_hr: false
+      use_fda_hr: false
+      use_fda_lr: true
+    name: VSR_collate_fn
+use_distillation: false
+use_ema_ghost: true
+use_fp16: true
+val_dataset:
+  batch: 32
+  dataset:
+    args:
+      in_memory: true
+      path_split: ./competition_dataset_lmdb
+      phase: validation
+    name: lmdb_dataset
+  wrapper:
+    args:
+      aug: false
+      background: (127, 127, 127)
+      image_aspect_ratio: 3.0
+      imgH: 32
+      imgW: 96
+      in_images: 5
+      test: true
+    name: VSR_Sequence_collate_fn

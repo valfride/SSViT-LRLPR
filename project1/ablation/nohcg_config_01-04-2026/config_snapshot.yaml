@@ -13,11 +13,10 @@ model_g:
     d_model: 384
     feature_dim: 256
     in_channels: 3
-    num_chars: 7
-    vit_heads: 12
-    use_hcg: true
+    use_hcg: false
+    use_rope: true
     use_sfb: true
-    use_rope: false
+    vit_heads: 12
   name: VSR_CURVATURE
 name: VSR_DenseRoPE_Poly
 optimizer_sr:
@@ -27,7 +26,7 @@ optimizer_sr:
   name: adamW
 resume: null
 train_dataset:
-  batch: 32
+  batch: 64
   dataset:
     args:
       in_memory: true

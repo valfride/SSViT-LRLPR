@@ -1,9 +1,10 @@
-name: VSR_Poly_HCG
+name: VSR_CE_HCG
 alphabet: 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ
-cls_loss: POLY
+cls_loss: CE
 ema_warmup_epochs: 5
 epoch_max: 1000
 epoch_max_ema: 50
+early_stop_patience: 25
 finetune: true
 force_lr: true
 func_train: SROCR_TRAIN
@@ -18,7 +19,7 @@ model_g:
     d_model: 384
     vit_heads: 12
     use_hcg: true
-    use_sfb: true
+    use_sfb: false
     use_rope: false
 
 optimizer_sr:
@@ -30,7 +31,7 @@ optimizer_sr:
 resume: null
 
 train_dataset:
-  batch: 64
+  batch: 48
   dataset:
     args:
       in_memory: true
@@ -51,7 +52,7 @@ train_dataset:
     name: VSR_collate_fn
 
 use_distillation: false
-use_ema_ghost: false
+use_ema_ghost: true
 use_fp16: true
 
 val_dataset:
