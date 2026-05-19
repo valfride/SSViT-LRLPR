@@ -52,4 +52,4 @@ process_rodosol.py
 visualize_energy.py
 run_all_ablations.py
 run_all_evals.py
-.gtignore
+.gitignore
