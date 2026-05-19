@@ -20,6 +20,8 @@ test/
 __pycache__/
 ./LMDB-Datasets/
 
+#a comment 
+
 # Checkpoints and Logs
 *.pth
 *.pt
