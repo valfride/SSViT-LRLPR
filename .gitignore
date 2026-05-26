@@ -19,6 +19,7 @@ test/
 .stffolder/
 __pycache__/
 ./LMDB-Datasets
+MaybeTrash/
 
 # Checkpoints and Logs
 *.pth

@@ -402,10 +402,13 @@ class CustomRoPELayer(nn.Module):
         return query
 
 class ViT_CrossAttn_OCR(nn.Module):
-    def __init__(self, in_channels=256, d_model=256, num_chars=7, num_classes=37, num_layers=3, num_heads=8, dropout=0.1, drop_path_rate=0.2, use_rope=True):
+    def __init__(self, in_channels=256, d_model=256, num_chars=7, num_classes=37,
+                num_layers=3, num_heads=8, dropout=0.1, drop_path_rate=0.2,
+                use_rope=True, use_cosine_classifier=True, use_token_masking=True):
         super().__init__()
         self.d_model = d_model
         self.num_heads = num_heads
+        self.use_token_masking = use_token_masking
 
         self.patch_embed = nn.Sequential(
             nn.Conv2d(in_channels, d_model // 2, kernel_size=3, stride=1, padding=1),
@@ -448,7 +451,11 @@ class ViT_CrossAttn_OCR(nn.Module):
             for i in range(num_layers)
         ])
         
-        self.head = CosineClassifierHead(d_model, num_classes)
+        if use_cosine_classifier:
+            self.head = CosineClassifierHead(d_model, num_classes)
+        else:
+            self.head = nn.Linear(d_model, num_classes)
+
 
     def random_masking(self, x, mask_ratio):
         B, L, D = x.shape
@@ -470,7 +477,8 @@ class ViT_CrossAttn_OCR(nn.Module):
         vis_tokens = features.flatten(2).transpose(1, 2) 
         vis_tokens = self.input_norm(vis_tokens) 
 
-        if self.training:
+        # ---> THE SWAP: Check the flag before applying random masking
+        if self.training and self.use_token_masking:
             vis_tokens = self.random_masking(vis_tokens, mask_ratio=0.1)
 
         current_queries = self.char_queries.expand(B, -1, -1)
@@ -494,7 +502,9 @@ class ViT_CrossAttn_OCR(nn.Module):
 # 4. WRAPPER CLASSES
 # ==============================================================================
 class CustomOCR(nn.Module):
-    def __init__(self, input_shape=(128, 32, 96), num_classes=37, num_chars=7, d_model=256, num_heads=8, use_hcg=True, use_sfb=True, use_rope=True):
+    def __init__(self, input_shape=(128, 32, 96), num_classes=37, num_chars=7, 
+                d_model=256, num_heads=8, use_hcg=True, use_sfb=True, use_rope=True,
+                use_cosine_classifier=True, use_token_masking=True):
         super().__init__()
         in_channels = input_shape[0] 
         self.use_hcg = use_hcg
@@ -528,7 +538,9 @@ class CustomOCR(nn.Module):
             num_layers=3, num_classes=num_classes, num_heads=num_heads,
             dropout=0.1,           
             drop_path_rate=0.2,
-            use_rope=use_rope   
+            use_rope=use_rope,
+            use_cosine_classifier=use_cosine_classifier, # <--- PASS DOWN
+            use_token_masking=use_token_masking          # <--- PASS DOWN
         )
 
     # def forward(self, x, tgt=None, epoch=0, **kwargs):
@@ -600,6 +612,10 @@ class Cgnet(nn.Module):
         use_sfb = kwargs.get('use_sfb', True)
         use_rope = kwargs.get('use_rope', True)
 
+        # ---> EXTRACT FLAGS FROM YAML KWARGS (Default to True for safety)
+        use_cosine_classifier = kwargs.get('use_cosine_classifier', True)
+        use_token_masking = kwargs.get('use_token_masking', True)
+
         self.mode = mode.lower()
         self.feature_dim = feature_dim
         
@@ -614,7 +630,9 @@ class Cgnet(nn.Module):
                 num_heads=vit_heads,
                 use_hcg=use_hcg,    # <--- ADD THIS
                 use_sfb=use_sfb,    # <--- ADD THIS
-                use_rope=use_rope   # <--- ADD THIS
+                use_rope=use_rope,  # <--- ADD THIS
+                use_cosine_classifier=use_cosine_classifier,  # <--- ADD THIS
+                use_token_masking=use_token_masking            # <--- ADD THIS
             )
 
     def forward(self, x, temporal_pool=False, return_latent=True, **kwargs): 

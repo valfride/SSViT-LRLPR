@@ -115,6 +115,8 @@ class SurgicalFocusBlock(nn.Module):
         a_w = self.conv_w(x_w).sigmoid()
         return identity * a_w * a_h
 
+        #return identity + (identity * a_w * a_h)
+
 # ==============================================================================
 # 2. RESTORMER BACKBONE
 # ==============================================================================
@@ -199,20 +201,33 @@ class LatentUpsampler(nn.Module):
         return self.act(self.norm(x))
 
 class SpatialFeatureExtractor(nn.Module):
-    def __init__(self, in_channels=3, feature_dim=128, cnn_heads=4, use_hcg=True):
+    # ---> UPDATE 1: Add use_sfb to the initialization arguments
+    def __init__(self, in_channels=3, feature_dim=128, cnn_heads=4, use_hcg=True, use_sfb=True):
         super().__init__()
-        self.stem = nn.Sequential(
-            # 1. The Front Door: Safely extend the raw image border!
+        
+        self.use_hcg = use_hcg
+        self.use_sfb = use_sfb
+        
+        # 1. The Front Door: Safely extend the raw image border!
+        self.stem_in = nn.Sequential(
             nn.Conv2d(
                 in_channels, feature_dim, 3, stride=1, padding=1, 
-                padding_mode='replicate'  # <--- ADDED
+                padding_mode='replicate'
             ),
-            nn.GroupNorm(8, feature_dim),
-            HighContrastGate(feature_dim) if use_hcg else nn.Identity(),            
-            # 2. The Squeeze Layer: Safely compress without edge artifacts
+            nn.GroupNorm(8, feature_dim)
+        )
+        
+        # ---> UPDATE 2: Pull the modules OUT of the Sequential block
+        self.hcg = HighContrastGate(feature_dim) if use_hcg else nn.Identity()
+        # Note: Replace `SurgicalFocusBlock` with the actual class name of your SFB module 
+        # (e.g., `DualAxisMultiplicativeAttention`) if it differs.
+        self.sfb = SurgicalFocusBlock(feature_dim) if use_sfb else nn.Identity() 
+        
+        # 2. The Squeeze Layer: Safely compress without edge artifacts
+        self.stem_out = nn.Sequential(
             nn.Conv2d(
                 feature_dim, feature_dim, 3, stride=2, padding=1, 
-                padding_mode='replicate'  # <--- ADDED
+                padding_mode='replicate'
             ),
             nn.GroupNorm(8, feature_dim),
             FReLU(feature_dim)
@@ -232,12 +247,32 @@ class SpatialFeatureExtractor(nn.Module):
         )
 
     def forward(self, x):
-        feat_shallow = self.stem(x) 
+        # 1. Extract raw features
+        feat = self.stem_in(x)
+        
+        # ---> UPDATE 3: The Parallel Residual Fusion!
+        if self.use_hcg and self.use_sfb:
+            # Both modules look at the EXACT same raw sensor data independently
+            feat_amplitude = self.hcg(feat)  # Extracts high-energy edges
+            feat_geometry  = self.sfb(feat)  # Extracts orthogonal strokes
+            
+            # Fuse them! Addition distributes gradients evenly during backprop.
+            feat = feat_amplitude + feat_geometry
+            
+        elif self.use_hcg:
+            feat = self.hcg(feat)
+            
+        elif self.use_sfb:
+            feat = self.sfb(feat)
+            
+        # 2. Downsample and continue the pipeline
+        feat_shallow = self.stem_out(feat) 
+        
         feat_deep = self.body(feat_shallow)
         texture = self.conv_after_body(feat_deep) + feat_shallow 
         feat_sr = self.latent_sr(texture)
         
-        # ---> THE UPGRADE: Local Skip Connection
+        # Local Skip Connection
         return self.refine_conv(feat_sr) + feat_sr
 # ==============================================================================
 # 3. 2D RoPE ViT DECODER
@@ -462,15 +497,21 @@ class CustomOCR(nn.Module):
     def __init__(self, input_shape=(128, 32, 96), num_classes=37, num_chars=7, d_model=256, num_heads=8, use_hcg=True, use_sfb=True, use_rope=True):
         super().__init__()
         in_channels = input_shape[0] 
+        self.use_hcg = use_hcg
+        self.use_sfb = use_sfb
         
         # ---> DYNAMIC SCALING: Smooth hourglass bottleneck
         mid_channels = in_channels // 2 
         
-        self.stem = nn.Sequential(
+        # Pathway A: The Amplitude / Alignment Bottleneck
+        self.stem_down = nn.Sequential(
             nn.Conv2d(in_channels, mid_channels, 3, 1, 1),
             nn.GroupNorm(8, mid_channels),
-            HighContrastGate(mid_channels) if use_hcg else nn.Identity(),
-            # Scale the Deformable groups safely to match the width
+        )
+        
+        self.hcg = HighContrastGate(mid_channels) if use_hcg else nn.Identity()
+        
+        self.stem_align = nn.Sequential(
             DeformableProj(mid_channels, mid_channels, kernel_size=3, offset_groups=max(4, mid_channels // 16)),
             nn.GroupNorm(8, mid_channels),
             FReLU(mid_channels), 
@@ -479,6 +520,7 @@ class CustomOCR(nn.Module):
             FReLU(in_channels)
         )
         
+        # Pathway B: The Geometric Guardian
         self.surgical_focus = SurgicalFocusBlock(in_channels=in_channels, reduction=8) if use_sfb else nn.Identity()
         
         self.vit_expert = ViT_CrossAttn_OCR(
@@ -486,12 +528,60 @@ class CustomOCR(nn.Module):
             num_layers=3, num_classes=num_classes, num_heads=num_heads,
             dropout=0.1,           
             drop_path_rate=0.2,
-            use_rope=use_rope # Pass RoPE toggle down   
+            use_rope=use_rope   
         )
 
+    # def forward(self, x, tgt=None, epoch=0, **kwargs):
+        
+    #     # ==========================================================
+    #     # THE PARALLEL BOTTLENECK (CORRECTED)
+    #     # ==========================================================
+    #     # 1. Base Pathway: Downsample and Gate
+    #     feat_base = self.stem_down(x)
+    #     if self.use_hcg:
+    #         feat_base = self.hcg(feat_base)
+            
+    #     # 2. Alignment: Warping happens here
+    #     feat_aligned = self.stem_align(feat_base)
+        
+    #     # 3. Pathway B: Preserve Geometry (Spatially Safe!)
+    #     if self.use_sfb:
+    #         feat_geo = self.surgical_focus(feat_aligned) # <--- FIXED: Operates on ALIGNED features
+    #         # Fuse Amplitude and Geometry
+    #         feat = feat_aligned + feat_geo 
+    #     else:
+    #         feat = feat_aligned
+    #     # ==========================================================
+        
+    #     forcing_prob = max(0.05, 0.5 - (epoch * 0.01)) if self.training else 0.0
+        
+    #     logits, char_tokens = self.vit_expert(feat, tgt=tgt, forcing_prob=forcing_prob)
+        
+    #     return {
+    #         'logits': logits,            
+    #         'features': char_tokens,                    
+    #     }
+    
+
     def forward(self, x, tgt=None, epoch=0, **kwargs):
-        feat = self.stem(x) 
-        feat = self.surgical_focus(feat)
+        
+        # ==========================================================
+        # THE PARALLEL BOTTLENECK
+        # ==========================================================
+        # Pathway A: Downsample -> Gate Noise -> Align -> Upsample
+        feat_amp = self.stem_down(x)
+        if self.use_hcg:
+            feat_amp = self.hcg(feat_amp)
+        feat_amp = self.stem_align(feat_amp)
+        
+        # Pathway B: Preserve Geometry
+        if self.use_sfb:
+            feat_geo = self.surgical_focus(x)
+            # Fuse Amplitude and Geometry
+            feat = feat_amp + feat_geo
+        else:
+            feat = feat_amp
+        # ==========================================================
         
         forcing_prob = max(0.05, 0.5 - (epoch * 0.01)) if self.training else 0.0
         
@@ -513,7 +603,7 @@ class Cgnet(nn.Module):
         self.mode = mode.lower()
         self.feature_dim = feature_dim
         
-        self.student_extractor = SpatialFeatureExtractor(in_channels, feature_dim, cnn_heads=cnn_heads, use_hcg=use_hcg)
+        self.student_extractor = SpatialFeatureExtractor(in_channels, feature_dim, cnn_heads=cnn_heads, use_hcg=use_hcg, use_sfb=use_sfb)
         
         if self.mode in ['ocr', 'hybrid']:
             self.student_ocr = CustomOCR(
