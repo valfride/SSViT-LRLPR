@@ -23,6 +23,8 @@ model_g:
     use_hcg: false
     use_sfb: true
     use_rope: false
+    use_cosine_classifier: true  # <--- Keeps Cosine Head ON  # <--- Turns off Cosine Head
+    use_token_masking: true
 
 optimizer_sr:
   args:

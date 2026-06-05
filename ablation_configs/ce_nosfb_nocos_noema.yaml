@@ -1,11 +1,13 @@
-name: VSR_Baseline_CE
+name: VSR_Ablation_ce_nosfb_nocos_noema
 alphabet: 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ
 cls_loss: CE
-ema_warmup_epochs: 5
+ema_warmup_epochs: 15
 epoch_max: 1000
+early_stop_patience: 60
+resume: null
 epoch_max_ema: 50
-finetune: true
-force_lr: true
+finetune: false
+force_lr: false
 
 func_train: SROCR_TRAIN
 func_val: SROCR_VAL
@@ -21,7 +23,7 @@ model_g:
     use_hcg: false
     use_sfb: false
     use_rope: false
-    use_cosine_classifier: true  # <--- Keeps Cosine Head ON  # <--- Turns off Cosine Head
+    use_cosine_classifier: false  # <--- Turns off Cosine Head
     use_token_masking: true
 
 optimizer_sr:
@@ -30,14 +32,12 @@ optimizer_sr:
     weight_decay: 0.001
   name: adamW
 
-resume: null
-
 train_dataset:
   batch: 64
   dataset:
     args:
       in_memory: true
-      path_split: ./competition_dataset_lmdb
+      path_split: ./LMDB-Datasets/competition_dataset_lmdb
       phase: training
     name: lmdb_dataset
   wrapper:
@@ -62,7 +62,7 @@ val_dataset:
   dataset:
     args:
       in_memory: true
-      path_split: ./competition_dataset_lmdb
+      path_split: ./LMDB-Datasets/competition_dataset_lmdb
       phase: validation
     name: lmdb_dataset
   wrapper:
