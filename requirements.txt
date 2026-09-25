@@ -1,0 +1,24 @@
+# Core scientific stack
+numpy>=1.21
+Pillow>=9.0
+PyYAML>=6.0
+tqdm>=4.64
+opencv-python>=4.6
+lmdb>=1.4
+
+# Image processing / augmentation
+albumentations>=1.3,<2.0
+kornia>=0.6.8
+matplotlib>=3.5
+scikit-image>=0.19
+scipy>=1.8
+
+# Model utilities
+einops>=0.6
+timm>=0.9
+higher>=0.2.1
+tensorboardX>=2.5
+
+# PyTorch is intentionally not pinned here.
+# Install torch/torchvision/torchaudio separately using the build that matches
+# the CUDA version available on your workstation or cluster.
