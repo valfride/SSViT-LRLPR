@@ -1,8 +1,41 @@
-# SSViT-LRLPR Experiment Guide
+# SSViT-LRLPR
 
-This repository contains the code used to train and evaluate the CNN--ViT framework and the Scene Text Recognition (STR) baselines for Low-Resolution License Plate Recognition (LRLPR).
+Companion code and reproducibility guide for the manuscript **“A CNN-ViT Framework for Recognizing Low-Resolution License Plates”**, currently **under review**.
 
-The paper evaluates recognition on license-plate tracklets where each sample may contain multiple low-resolution observations of the same plate. Single-frame evaluation uses the first frame only, while multi-frame evaluation uses the first `F` frames and combines frame-level outputs with late-stage temporal fusion.
+This work addresses **Low-Resolution License Plate Recognition (LRLPR)** directly from degraded low-resolution images, without first reconstructing an intermediate high-resolution image. The proposed CNN–ViT framework is designed to preserve fine-grained character structure under real-world degradations such as motion blur, sensor noise, limited resolution, and compression artifacts.
+
+The architecture combines:
+
+- **Restormer-based feature extraction** for dense low-resolution feature refinement;
+- the **Surgical Focus Block (SFB)**, a Coordinate Attention adaptation for direction-aware spatial refinement;
+- a **ViT decoder** for character-sequence prediction;
+- a **normalized cosine classifier** for character classification;
+- a **validation-aware Exponential Moving Average (EMA) shadow model** for final inference; and
+- **late-stage temporal fusion** when multiple observations of the same license plate are available.
+
+The manuscript evaluates the method on **LRLPR-26**, using license-plate tracklets containing sequential low-resolution observations of the same vehicle. Multi-frame inference combines frame-level evidence using **Bayes Joint Probability (BJP) fusion**.
+
+## Main reported results
+
+Recognition Rate (RR) uses a strict **7/7 exact-match** criterion: a plate is counted as correct only when all seven characters are predicted correctly.
+
+| Input frames | Recognition Rate |
+|---:|---:|
+| 1 | **60.6%** |
+| 3 | **74.2%** |
+| 5 | **78.5%** |
+
+At five input frames, the proposed method reaches **78.5% RR**, compared with **73.8%** for the strongest evaluated STR baseline under the same protocol.
+
+The evaluated STR baselines include **SVTRv2, OTE, LISTER, IGTR, CPPD, and MDiff4STR**.
+
+> **Manuscript status:** Under review. Repository documentation and reported results may be updated during the revision process.
+
+## Citation
+
+A formal citation and BibTeX entry will be added after publication. Until then, please refer to the manuscript by its title:
+
+**A CNN-ViT Framework for Recognizing Low-Resolution License Plates**
 
 ## Repository layout
 
