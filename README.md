@@ -31,6 +31,8 @@ The evaluated STR baselines include **SVTRv2, OTE, LISTER, IGTR, CPPD, and MDiff
 
 > **Manuscript status:** Under review. Repository documentation and reported results may be updated during the revision process.
 
+A pretrained EMA checkpoint is available from the repository's [GitHub Releases](https://github.com/valfride/SSViT-LRLPR/releases/tag/weights).
+
 ## Citation
 
 A formal citation and BibTeX entry will be added after publication. Until then, please refer to the manuscript by its title:
@@ -67,17 +69,17 @@ The main training script receives `--config`, `--save`, and an optional `--tag`.
 
 ## 1. Environment setup
 
-Create and activate a Python environment, then install the packages used by the training and dataset pipeline.
+Python 3.10 is recommended. Create and activate an environment, install a PyTorch build compatible with your CUDA setup, and then install the remaining repository dependencies.
 
 ```bash
 conda create -n ssvit-lrlpr python=3.10 -y
 conda activate ssvit-lrlpr
 
-# Install the PyTorch build that matches your CUDA version.
-# Example for recent CUDA builds; adjust according to your machine/cluster.
+# Install the PyTorch build appropriate for your system/CUDA version.
 pip install torch torchvision torchaudio
 
-pip install numpy opencv-python lmdb tqdm pyyaml pillow scikit-image scipy einops
+# Install the remaining dependencies used by the repository.
+pip install -r requirements.txt
 ```
 
 For CUDA memory fragmentation issues, the following environment variable is useful:
