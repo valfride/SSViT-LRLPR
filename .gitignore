@@ -1,57 +1,48 @@
-# Datasets
-*.txt
-*flattened_*.txt
-tst/
-UFPR-ALPR-Dataset/
-datasets/synEngine/
-outputs_*/
-competition*/
-*.txt
+# Python caches / environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
 
-# folders
+# Editors / local sync metadata
+.vscode/
+.stfolder/
+.stffolder/
+
+# Local datasets and dataset links
+LMDB-Datasets
 *LMDB*/
 *lmdb*/
 *RodoSol*/
 Competition*/
-.vscode*/
-test/
-404-backup_new_code/
-.stffolder/
-__pycache__/
-./LMDB-Datasets
-MaybeTrash/
+UFPR-ALPR-Dataset/
+datasets/synEngine/
+tst/
 
-# Checkpoints and Logs
+# Local scratch / legacy folders
+MaybeTrash/
+404-backup_new_code/
+
+# Checkpoints and training outputs
 *.pth
 *.pt
-*.jpg
-*.png
-*.ttf
-*.pdf
-*.zip
-outputs/
-train_features/
-train/
+*.ckpt
 experiments/
+outputs/
+outputs_*/
+train/
+train_features/
 samples2infer/
 vpeg_debug_maps/
-
-# files
-*.json
-*.sh
-*.csv
-analyze_ratios.py
-convert_dataset.py
-dataset_statistics.py
-create_lmdb.py
-*.yml
-generate_test_txt.py
-inference.py
-monitor_confusion.pyt
-process_rodosol.py
-*.html
-visualize_energy.py
-run_all_ablations.py
-run_all_evals.py
-.gitignore
 nohup.out
+*.log
+
+# Generated evaluation artifacts
+submission*.txt
+validation_failures*.txt
+config_snapshot.yaml
+loss_log.csv
+
+# OS metadata
+.DS_Store
