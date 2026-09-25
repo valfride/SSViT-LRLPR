@@ -176,7 +176,7 @@ python3 test.py \
 
 The baseline implementations in this repository are evaluated under the same LRLPR data and temporal-fusion protocol used for the proposed model. The links below point to the original publications and, when provided by the authors, the official implementation.
 
-| Baseline | Venue | Paper | Official code | Config | `model_g.name` | `cls_loss` |
+| Baseline | Venue | Paper | Code | Config | `model_g.name` | `cls_loss` |
 |---|---|---|---|---|---:|---:|
 | SVTRv2 | ICCV 2025 | [Paper](https://openaccess.thecvf.com/content/ICCV2025/html/Du_SVTRv2_CTC_Beats_Encoder-Decoder_Models_in_Scene_Text_Recognition_ICCV_2025_paper.html) | [OpenOCR](https://github.com/Topdu/OpenOCR) | `baselines_configs/SVTRV2_BASELINE.yaml` | `SVTRV2_BASELINE` | `CTC` |
 | OTE | CVPR 2024 | [Paper](https://openaccess.thecvf.com/content/CVPR2024/html/Xu_OTE_Exploring_Accurate_Scene_Text_Recognition_Using_One_Token_CVPR_2024_paper.html) | [OpenOCR](https://github.com/Topdu/OpenOCR) | `baselines_configs/OTE_BASELINE.yaml` | `OTE_BASELINE` | `OTE` |
