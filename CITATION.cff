@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the accompanying manuscript when bibliographic details become available."
+title: "SSViT-LRLPR: CNN-ViT Recognition for Low-Resolution License Plates"
+type: software
+authors:
+  - family-names: Nascimento
+    given-names: Valfride W.
+    orcid: "https://orcid.org/0000-0002-7416-613X"
+  - family-names: Lima
+    given-names: Gabriel E.
+  - family-names: Wojcik
+    given-names: Lucas
+  - family-names: Laroca
+    given-names: Rayson
+  - family-names: Menotti
+    given-names: David
+repository-code: "https://github.com/valfride/SSViT-LRLPR"
+abstract: "Companion implementation for the manuscript 'A CNN-ViT Framework for Recognizing Low-Resolution License Plates', currently under review."
