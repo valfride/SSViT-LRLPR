@@ -69,10 +69,12 @@ The main training script receives `--config`, `--save`, and an optional `--tag`.
 
 ## 1. Environment setup
 
-Python 3.10 is recommended. Create and activate an environment, install a PyTorch build compatible with your CUDA setup, and then install the remaining repository dependencies.
+The authors' current tested environment uses Python 3.9.21. Create and activate an environment, install a PyTorch build compatible with your CUDA setup, and then install the remaining repository dependencies.
+
+> **Tested environment:** Python 3.9.21, PyTorch 2.6.0+cu124, torchvision 0.21.0+cu124, NumPy 2.0.2, Albumentations 2.0.8, and Kornia 0.8.2.
 
 ```bash
-conda create -n ssvit-lrlpr python=3.10 -y
+conda create -n ssvit-lrlpr python=3.9 -y
 conda activate ssvit-lrlpr
 
 # Install the PyTorch build appropriate for your system/CUDA version.
