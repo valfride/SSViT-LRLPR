@@ -19,7 +19,9 @@ Competition*/
 UFPR-ALPR-Dataset/
 datasets/synEngine/
 tst/
-
+ablation/
+*.txt
+*.sh
 # Local scratch / legacy folders
 MaybeTrash/
 404-backup_new_code/
@@ -46,3 +48,17 @@ loss_log.csv
 
 # OS metadata
 .DS_Store
+
+# ============================================================
+# OJ-ITS major-revision workspace
+# Track revision artifacts while keeping model weights local.
+# ============================================================
+!experiments/
+experiments/*
+!experiments/revision_eval/
+!experiments/revision_eval/**
+
+# Never commit checkpoints from the revision workspace
+experiments/revision_eval/**/*.pth
+experiments/revision_eval/**/*.pt
+experiments/revision_eval/**/*.ckpt
