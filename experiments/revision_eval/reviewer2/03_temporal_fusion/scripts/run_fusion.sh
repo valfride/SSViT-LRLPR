@@ -7,25 +7,11 @@ REV="$ROOT/experiments/revision_eval"
 CFG="$REV/submitted_model/config_snapshot.yaml"
 CKPT="$REV/submitted_model"
 OUT="$REV/reviewer2/03_temporal_fusion/results"
+RUNNER="$REV/shared/scripts/run_eval_matrix.py"
+COLLECTOR="$REV/shared/scripts/collect_eval_results.py"
 
-DATA="${DATA:-/home/vwnascimento/doc2025/project1/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k}"
+DATA="${DATA:-/home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k}"
 
-mkdir -p "$OUT"
+python3 "$RUNNER"     --config "$CFG"     --checkpoints "$CKPT"     --split "$DATA"     --output-dir "$OUT"     --frames 3 5     --fusions bayes average logit_average majority     --skip-existing
 
-for F in 3 5; do
-    for FUSION in bayes average logit_average majority; do
-        echo
-        echo "============================================================"
-        echo "Submitted model | F=$F | Fusion=$FUSION"
-        echo "============================================================"
-
-        python3 "$ROOT/test.py" \
-            --config "$CFG" \
-            --checkpoints "$CKPT" \
-            --split "$DATA" \
-            --mode val \
-            --in_images "$F" \
-            --fusion "$FUSION" \
-            | tee "$OUT/F${F}_${FUSION}.txt"
-    done
-done
+python3 "$COLLECTOR"     --input-dir "$OUT"     --output-csv "$OUT/fusion_summary.csv"     --output-md "$OUT/fusion_summary.md"
