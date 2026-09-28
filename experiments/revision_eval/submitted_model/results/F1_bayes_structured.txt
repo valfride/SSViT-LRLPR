@@ -1,0 +1,44 @@
+Building Architecture...
+
+Loading Fallback Checkpoint: experiments/revision_eval/submitted_model/last.pth
+👻 Found Ghost EMA weights! Promoting Ghost to Primary Inference Model.
+
+Preparing Data from /home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k...
+🔄 TEMPORAL OVERRIDE: Forced val_dataset in_images to 1
+🔥 CACHING TEST DB TO RAM: Loading 15000 images...
+✅ Caching complete!
+
+🏆 FINAL EVALUATION METRICS (BAYES FUSION)
+   Full Sequence (7/7):       60.60% (1818/3000)
+   Character Accuracy (slots): 88.89% (18667/21000)
+   Character Error Rate (CER): 11.09% (2329/21000)
+   Partial Match (≥6/7):      81.53% (2446/3000)
+   Partial Match (≥5/7):      89.43% (2683/3000)
+------------------------------------------------
+   🇧🇷 Old Brazilian (LLL-NNNN): 41.33% (248/600)
+   🌎 Mercosur Layout (LLL-NLNN): 65.42% (1570/2400)
+
+📈 RECOGNITION RATE VS. CONFIDENCE THRESHOLD
+----------------------------------------------------------------------------------
+| Minimum Confidence   | Retained (Coverage)    | Plate Acc  | Char Acc   |
+|----------------------|------------------------|------------|------------|
+| ≥ 0.00               | 3000   (100.00%)         |   60.60%   |   88.89%   |
+| ≥ 0.50               | 2962   ( 98.73%)         |   61.38%   |   89.68%   |
+| ≥ 0.70               | 2820   ( 94.00%)         |   64.43%   |   91.87%   |
+| ≥ 0.80               | 2623   ( 87.43%)         |   69.00%   |   93.75%   |
+| ≥ 0.90               | 2180   ( 72.67%)         |   78.99%   |   96.55%   |
+| ≥ 0.95               | 1683   ( 56.10%)         |   88.53%   |   98.23%   |
+| ≥ 0.98               | 1267   ( 42.23%)         |   94.79%   |   99.22%   |
+| ≥ 0.99               | 1023   ( 34.10%)         |   98.14%   |   99.72%   |
+----------------------------------------------------------------------------------
+
+🧠 MODEL CALIBRATION (CONFIDENCE GAP)
+---------------------------------------------
+   Mean Conf (Correct):   0.9751
+   Mean Conf (Incorrect): 0.8315
+   Confidence Gap:        0.1436
+---------------------------------------------
+
+Saved 1182 failures to validation_failures_sequence.txt
+✅ Metrics JSON saved to experiments/revision_eval/submitted_model/results/F1_bayes.json
+✅ Predictions CSV saved to experiments/revision_eval/submitted_model/results/F1_bayes_predictions.csv
