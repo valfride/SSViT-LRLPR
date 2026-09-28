@@ -1,4 +1,6 @@
 import argparse
+import csv
+import json
 import math
 import pickle
 import re
@@ -158,6 +160,16 @@ def main():
     parser.add_argument("--num_swa", type=int, default=5, help="Number of top checkpoints to average")
     parser.add_argument("--tta", action="store_true", help="Enable Test-Time Augmentation")
     parser.add_argument("--output", default="submission.txt")
+    parser.add_argument(
+        "--metrics-json",
+        default=None,
+        help="Optional path for machine-readable validation metrics",
+    )
+    parser.add_argument(
+        "--predictions-csv",
+        default=None,
+        help="Optional path for per-track predictions used by statistical analysis",
+    )
     parser.add_argument("--in_images", type=int, default=None, help="Override the number of temporal frames")
     parser.add_argument(
         "--fusion",
@@ -319,6 +331,7 @@ def main():
     failures = []
     submission_lines = []
     confidence_tracking = []
+    prediction_records = []
     warned_bad_gt = False
 
     use_fp16 = bool(config.get("use_fp16", True)) and device.type == "cuda"
@@ -558,6 +571,21 @@ def main():
                     }
                 )
 
+                if args.predictions_csv:
+                    prediction_records.append(
+                        {
+                            "index": total_plates,
+                            "track": track_name,
+                            "prediction": final_prediction,
+                            "ground_truth": gt_text,
+                            "confidence": normalized_confidence,
+                            "correct": is_correct,
+                            "positional_matches": match_count,
+                            "edit_distance": distance,
+                            "layout": layout or "",
+                        }
+                    )
+
                 processed = total_plates + 1
                 progress.set_postfix(
                     {
@@ -567,6 +595,21 @@ def main():
                 )
             else:
                 submission_lines.append(f"{track_name},{final_prediction};{raw_confidence:.4f}")
+
+                if args.predictions_csv:
+                    prediction_records.append(
+                        {
+                            "index": total_plates,
+                            "track": track_name,
+                            "prediction": final_prediction,
+                            "ground_truth": "",
+                            "confidence": normalized_confidence,
+                            "correct": "",
+                            "positional_matches": "",
+                            "edit_distance": "",
+                            "layout": "",
+                        }
+                    )
 
             total_plates += 1
 
@@ -655,11 +698,92 @@ def main():
             failure_path = Path("validation_failures_sequence.txt")
             failure_path.write_text("\n".join(failures), encoding="utf-8")
             print(f"\nSaved {len(failures)} failures to {failure_path}")
+
+        if args.metrics_json:
+            effective_frames = int(
+                config["val_dataset"]["wrapper"]["args"].get("in_images", args.in_images or 1)
+            )
+
+            selected_checkpoints = (
+                [str(path) for path in checkpoint_paths]
+                if args.swa
+                else [str(best_checkpoint)]
+            )
+
+            metrics_payload = {
+                "schema_version": 1,
+                "mode": args.mode,
+                "fusion": args.fusion,
+                "frames": effective_frames,
+                "tta": bool(args.tta),
+                "swa": bool(args.swa),
+                "num_swa": int(args.num_swa) if args.swa else 1,
+                "cls_loss": cls_loss_type,
+                "config": str(Path(args.config)),
+                "checkpoint_directory": str(ckpt_dir),
+                "checkpoint_files": selected_checkpoints,
+                "dataset": str(Path(args.split)),
+                "metrics": {
+                    "sequence_accuracy_percent": sequence_accuracy,
+                    "sequence_correct": correct_plates,
+                    "sequence_total": total_plates,
+                    "character_accuracy_percent": character_accuracy,
+                    "character_correct": correct_char_positions,
+                    "character_total": total_char_positions,
+                    "cer_percent": character_error_rate,
+                    "edit_errors": total_edit_errors,
+                    "ground_truth_characters": total_gt_characters,
+                    "partial_6_percent": partial_6_accuracy,
+                    "partial_6_correct": correct_6plus,
+                    "partial_5_percent": partial_5_accuracy,
+                    "partial_5_correct": correct_5plus,
+                    "old_brazilian_accuracy_percent": brazil_accuracy,
+                    "old_brazilian_correct": correct_brazil,
+                    "old_brazilian_total": total_brazil,
+                    "mercosur_accuracy_percent": mercosur_accuracy,
+                    "mercosur_correct": correct_mercosur,
+                    "mercosur_total": total_mercosur,
+                    "mean_confidence_correct": mean_correct,
+                    "mean_confidence_incorrect": mean_incorrect,
+                    "confidence_gap": confidence_gap,
+                },
+            }
+
+            metrics_path = Path(args.metrics_json)
+            metrics_path.parent.mkdir(parents=True, exist_ok=True)
+            metrics_path.write_text(
+                json.dumps(metrics_payload, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            print(f"✅ Metrics JSON saved to {metrics_path}")
     else:
         output_path = Path(args.output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text("\n".join(submission_lines), encoding="utf-8")
         print(f"✅ Submission saved to {output_path}")
+
+    if args.predictions_csv:
+        predictions_path = Path(args.predictions_csv)
+        predictions_path.parent.mkdir(parents=True, exist_ok=True)
+
+        fieldnames = [
+            "index",
+            "track",
+            "prediction",
+            "ground_truth",
+            "confidence",
+            "correct",
+            "positional_matches",
+            "edit_distance",
+            "layout",
+        ]
+
+        with predictions_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(prediction_records)
+
+        print(f"✅ Predictions CSV saved to {predictions_path}")
 
 
 if __name__ == "__main__":
