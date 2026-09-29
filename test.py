@@ -175,7 +175,7 @@ def main():
         "--fusion",
         type=str,
         default="logit_average",
-        choices=["bayes", "average", "majority", "logit_average"],
+        choices=["bayes", "average", "majority", "char_majority", "logit_average"],
         help="Temporal fusion strategy",
     )
     args = parser.parse_args()
@@ -482,7 +482,7 @@ def main():
                 final_prediction = normalize_plate(predictions[0])
                 raw_confidence = scores[0].item() if torch.is_tensor(scores[0]) else float(scores[0])
 
-            else:  # majority
+            else:  # post-decoding fusion
                 decoded_strings = []
                 decoded_confidences = []
 
@@ -504,25 +504,66 @@ def main():
                         decoded_confidences.extend(float(value) for value in frame_scores)
 
                 if not decoded_strings:
-                    raise RuntimeError("Majority fusion produced no decoded frame predictions.")
+                    raise RuntimeError("Post-decoding fusion produced no decoded frame predictions.")
 
-                vote_counts = defaultdict(int)
-                vote_confidences = defaultdict(list)
-                for decoded, confidence in zip(decoded_strings, decoded_confidences):
-                    vote_counts[decoded] += 1
-                    vote_confidences[decoded].append(confidence)
+                if args.fusion == "majority":
+                    vote_counts = defaultdict(int)
+                    vote_confidences = defaultdict(list)
+                    for decoded, confidence in zip(decoded_strings, decoded_confidences):
+                        vote_counts[decoded] += 1
+                        vote_confidences[decoded].append(confidence)
 
-                maximum_votes = max(vote_counts.values())
-                tied_candidates = [
-                    decoded for decoded, count in vote_counts.items() if count == maximum_votes
-                ]
-                final_prediction = max(
-                    tied_candidates,
-                    key=lambda decoded: sum(vote_confidences[decoded]) / len(vote_confidences[decoded]),
-                )
-                raw_confidence = sum(vote_confidences[final_prediction]) / len(
-                    vote_confidences[final_prediction]
-                )
+                    maximum_votes = max(vote_counts.values())
+                    tied_candidates = [
+                        decoded for decoded, count in vote_counts.items() if count == maximum_votes
+                    ]
+                    final_prediction = max(
+                        tied_candidates,
+                        key=lambda decoded: sum(vote_confidences[decoded]) / len(vote_confidences[decoded]),
+                    )
+                    raw_confidence = sum(vote_confidences[final_prediction]) / len(
+                        vote_confidences[final_prediction]
+                    )
+                else:  # char_majority
+                    fused_characters = []
+                    winning_confidences = []
+
+                    for position in range(PLATE_LENGTH):
+                        char_counts = defaultdict(int)
+                        char_confidences = defaultdict(list)
+
+                        for decoded, confidence in zip(decoded_strings, decoded_confidences):
+                            if position >= len(decoded):
+                                continue
+                            character = decoded[position]
+                            char_counts[character] += 1
+                            char_confidences[character].append(confidence)
+
+                        if not char_counts:
+                            break
+
+                        maximum_votes = max(char_counts.values())
+                        tied_characters = [
+                            character
+                            for character, count in char_counts.items()
+                            if count == maximum_votes
+                        ]
+                        winning_character = max(
+                            tied_characters,
+                            key=lambda character: (
+                                sum(char_confidences[character])
+                                / len(char_confidences[character])
+                            ),
+                        )
+                        fused_characters.append(winning_character)
+                        winning_confidences.extend(char_confidences[winning_character])
+
+                    final_prediction = "".join(fused_characters)
+                    raw_confidence = (
+                        sum(winning_confidences) / len(winning_confidences)
+                        if winning_confidences
+                        else 0.0
+                    )
 
             normalized_confidence = normalized_sequence_confidence(
                 raw_confidence,
