@@ -16,6 +16,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import shutil
 import math
 import copy
+import random
+import numpy as np
 
 DEBUG = os.getenv("DEBUG", "True").lower() == "true"
 if DEBUG:
@@ -42,7 +44,7 @@ def log_to_csv(save_path, epoch, train_loss, val_loss, accuracy, ghost_acc, lr):
             writer.writerow(['Epoch', 'Train_Loss', 'Val_Loss', 'Student_Acc', 'Ghost_Acc', 'LR'])
         writer.writerow([epoch, train_loss, val_loss, accuracy, ghost_acc, lr])
 
-def make_dataloader(spec, tag='', save_path=None, seed=42):
+def make_dataloader(spec, tag='', save_path=None, seed=42, generator_state=None):
     dataset = datasets.make(spec['dataset'])
     wrapper_args = {'dataset': dataset, 'corners_only': False} 
     dataset = datasets.make(spec['wrapper'], args=wrapper_args)
@@ -57,6 +59,8 @@ def make_dataloader(spec, tag='', save_path=None, seed=42):
 
     generator = torch.Generator()
     generator.manual_seed(int(seed))
+    if generator_state is not None:
+        generator.set_state(generator_state)
 
     loader = DataLoader(
         dataset, batch_size=spec['batch'], shuffle=shuffle, sampler=sampler,
@@ -64,7 +68,40 @@ def make_dataloader(spec, tag='', save_path=None, seed=42):
         collate_fn=dataset.collate_fn, drop_last=(tag == 'train'), prefetch_factor=4,
         generator=generator,
     )
-    return loader, sampler
+    return loader, sampler, generator
+
+
+def capture_rng_state(train_generator=None):
+    state = {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        state["cuda"] = torch.cuda.get_rng_state_all()
+    if train_generator is not None:
+        state["train_loader_generator"] = train_generator.get_state()
+    return state
+
+
+def restore_rng_state(state):
+    if not state:
+        return
+
+    if "python" in state:
+        random.setstate(state["python"])
+    if "numpy" in state:
+        np.random.set_state(state["numpy"])
+    if "torch" in state:
+        torch.set_rng_state(state["torch"])
+
+    if torch.cuda.is_available() and "cuda" in state:
+        try:
+            torch.cuda.set_rng_state_all(state["cuda"])
+        except Exception as exc:
+            if is_main_process():
+                print(f"⚠️ Could not restore CUDA RNG state exactly: {exc}")
+
 
 def create_scheduler(config, optimizer, epoch_max):
     sched_config = config.get('LRScheduler', {})
@@ -95,7 +132,7 @@ def main(config, save_path):
     epoch_max = config['epoch_max']
     seed = int(config.get('seed', 42))
 
-    val_loader, _ = make_dataloader(
+    val_loader, _, _ = make_dataloader(
         config.get('val_dataset', config['train_dataset']),
         tag='val',
         save_path=save_path,
@@ -156,8 +193,10 @@ def main(config, save_path):
     epochs_without_improvement = 0
     
     resume_path = config.get('resume')
-    is_finetune = config.get('finetune', False) # <--- ADDED FLAG
-    
+    is_finetune = config.get('finetune', False)
+    resume_rng_state = None
+    resume_train_generator_state = None
+
     if resume_path and os.path.isfile(resume_path):
         checkpoint = torch.load(resume_path, map_location=f'cuda:{local_rank}', weights_only=False)
         
@@ -200,10 +239,20 @@ def main(config, save_path):
             epochs_without_improvement = checkpoint.get('epochs_without_improvement', 0)
             
             # Only load optimizer/scheduler if it's a true resume
-            if 'optimizer_g' in checkpoint: 
+            if 'optimizer_g' in checkpoint:
                 optimizer_g.load_state_dict(checkpoint['optimizer_g'])
                 if 'scheduler_g' in checkpoint:
                     scheduler_g.load_state_dict(checkpoint['scheduler_g'])
+
+            # New revision checkpoints preserve stochastic state as well. Older
+            # checkpoints simply fall back to the configured seed.
+            resume_rng_state = checkpoint.get("rng_state")
+            if resume_rng_state is not None:
+                resume_train_generator_state = resume_rng_state.get(
+                    "train_loader_generator"
+                )
+                if is_main_process():
+                    print("🎲 Restoring RNG state from checkpoint.")
         
     train_step = train_funcs.make(config['func_train']) 
     val_step = train_funcs.make(config['func_val'])
@@ -216,12 +265,18 @@ def main(config, save_path):
                 writer.writerow(['Epoch', 'Train_Loss', 'Val_Loss', 'Accuracy', 'LR'])
                 writer.writerow([0, 0.0, 0.0, 0.0, base_lr]) 
     
-    train_loader, train_sampler = make_dataloader(
+    train_loader, train_sampler, train_generator = make_dataloader(
         config['train_dataset'],
         tag='train',
         save_path=save_path,
         seed=seed,
+        generator_state=resume_train_generator_state,
     )
+
+    # Restore global RNG only after datasets/loaders have been constructed so
+    # their construction cannot perturb the resumed stochastic sequence.
+    if resume_rng_state is not None:
+        restore_rng_state(resume_rng_state)
     
     try:
         for epoch in range(start_epoch, epoch_max + 1):
@@ -295,7 +350,9 @@ def main(config, save_path):
                     # ---> ADD THESE 3 LINES:
                     'best_acc': model_g.top_students[0]['acc'] if len(model_g.top_students) > 0 else accuracy,
                     'best_models': model_g.top_students,
-                    'epochs_without_improvement': epochs_without_improvement
+                    'epochs_without_improvement': epochs_without_improvement,
+                    'seed': seed,
+                    'rng_state': capture_rng_state(train_generator),
                 }
                 
                 # --- 2. SAVE LAST ---
