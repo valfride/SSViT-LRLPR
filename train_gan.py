@@ -42,7 +42,7 @@ def log_to_csv(save_path, epoch, train_loss, val_loss, accuracy, ghost_acc, lr):
             writer.writerow(['Epoch', 'Train_Loss', 'Val_Loss', 'Student_Acc', 'Ghost_Acc', 'LR'])
         writer.writerow([epoch, train_loss, val_loss, accuracy, ghost_acc, lr])
 
-def make_dataloader(spec, tag='', save_path=None):
+def make_dataloader(spec, tag='', save_path=None, seed=42):
     dataset = datasets.make(spec['dataset'])
     wrapper_args = {'dataset': dataset, 'corners_only': False} 
     dataset = datasets.make(spec['wrapper'], args=wrapper_args)
@@ -52,13 +52,17 @@ def make_dataloader(spec, tag='', save_path=None):
     
     if not DEBUG and tag == 'train':
         from torch.utils.data.distributed import DistributedSampler
-        sampler = DistributedSampler(dataset, shuffle=True)
+        sampler = DistributedSampler(dataset, shuffle=True, seed=int(seed))
         shuffle = False
+
+    generator = torch.Generator()
+    generator.manual_seed(int(seed))
 
     loader = DataLoader(
         dataset, batch_size=spec['batch'], shuffle=shuffle, sampler=sampler,
-        num_workers=16, pin_memory=True, 
-        collate_fn=dataset.collate_fn, drop_last=(tag == 'train'), prefetch_factor=4
+        num_workers=16, pin_memory=True,
+        collate_fn=dataset.collate_fn, drop_last=(tag == 'train'), prefetch_factor=4,
+        generator=generator,
     )
     return loader, sampler
 
@@ -89,8 +93,14 @@ def create_scheduler(config, optimizer, epoch_max):
 def main(config, save_path):
     local_rank = int(os.environ["LOCAL_RANK"])
     epoch_max = config['epoch_max']
-    
-    val_loader, _ = make_dataloader(config.get('val_dataset', config['train_dataset']), tag='val', save_path=save_path)
+    seed = int(config.get('seed', 42))
+
+    val_loader, _ = make_dataloader(
+        config.get('val_dataset', config['train_dataset']),
+        tag='val',
+        save_path=save_path,
+        seed=seed + 1,
+    )
 
     if is_main_process(): print("Creating Student VSR Model...")
     model_g = models.make(config['model_g']).to(local_rank)
@@ -206,7 +216,12 @@ def main(config, save_path):
                 writer.writerow(['Epoch', 'Train_Loss', 'Val_Loss', 'Accuracy', 'LR'])
                 writer.writerow([0, 0.0, 0.0, 0.0, base_lr]) 
     
-    train_loader, train_sampler = make_dataloader(config['train_dataset'], tag='train', save_path=save_path)
+    train_loader, train_sampler = make_dataloader(
+        config['train_dataset'],
+        tag='train',
+        save_path=save_path,
+        seed=seed,
+    )
     
     try:
         for epoch in range(start_epoch, epoch_max + 1):
@@ -362,10 +377,24 @@ def main(config, save_path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True); parser.add_argument("--save", required=True); parser.add_argument("--tag", default=None)
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--save", required=True)
+    parser.add_argument("--tag", default=None)
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Training seed. Overrides config['seed']; defaults to 42.",
+    )
     args = parser.parse_args()
-    utils.setup_seed(42)
-    with open(args.config, "r") as f: config = yaml.load(f, Loader=yaml.FullLoader)
+
+    with open(args.config, "r") as f:
+        config = yaml.load(f, Loader=yaml.FullLoader)
+
+    effective_seed = int(args.seed if args.seed is not None else config.get("seed", 42))
+    config["seed"] = effective_seed
+    utils.setup_seed(effective_seed)
+
     save_path = Path(args.save) / Path(args.config).stem
     if args.tag: save_path = Path(str(save_path) + "_" + args.tag)
     if not os.path.exists(save_path): os.makedirs(save_path)
