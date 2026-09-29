@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 
-VALID_FUSIONS = ("bayes", "average", "logit_average", "majority")
+VALID_FUSIONS = ("bayes", "average", "logit_average", "majority", "char_majority")
 
 
 def repo_root() -> Path:
