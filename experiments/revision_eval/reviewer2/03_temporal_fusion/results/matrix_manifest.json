@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "config": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/submitted_model/config_snapshot.yaml",
+  "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/submitted_model",
+  "dataset": "/home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k",
+  "frames": [
+    3,
+    5
+  ],
+  "fusions": [
+    "bayes",
+    "average",
+    "logit_average",
+    "majority"
+  ],
+  "tta": false,
+  "swa": false,
+  "num_swa": 1,
+  "runs": [
+    {
+      "frames": 3,
+      "fusion": "bayes",
+      "metrics_json": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F3_bayes.json",
+      "predictions_csv": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F3_bayes_predictions.csv",
+      "log": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F3_bayes.txt",
+      "return_code": 0,
+      "status": "ok"
+    },
+    {
+      "frames": 3,
+      "fusion": "average",
+      "metrics_json": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F3_average.json",
+      "predictions_csv": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F3_average_predictions.csv",
+      "log": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F3_average.txt",
+      "return_code": 0,
+      "status": "ok"
+    },
+    {
+      "frames": 3,
+      "fusion": "logit_average",
+      "metrics_json": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F3_logit_average.json",
+      "predictions_csv": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F3_logit_average_predictions.csv",
+      "log": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F3_logit_average.txt",
+      "return_code": 0,
+      "status": "ok"
+    },
+    {
+      "frames": 3,
+      "fusion": "majority",
+      "metrics_json": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F3_majority.json",
+      "predictions_csv": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F3_majority_predictions.csv",
+      "log": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F3_majority.txt",
+      "return_code": 0,
+      "status": "ok"
+    },
+    {
+      "frames": 5,
+      "fusion": "bayes",
+      "metrics_json": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F5_bayes.json",
+      "predictions_csv": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F5_bayes_predictions.csv",
+      "log": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F5_bayes.txt",
+      "return_code": 0,
+      "status": "ok"
+    },
+    {
+      "frames": 5,
+      "fusion": "average",
+      "metrics_json": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F5_average.json",
+      "predictions_csv": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F5_average_predictions.csv",
+      "log": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F5_average.txt",
+      "return_code": 0,
+      "status": "ok"
+    },
+    {
+      "frames": 5,
+      "fusion": "logit_average",
+      "metrics_json": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F5_logit_average.json",
+      "predictions_csv": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F5_logit_average_predictions.csv",
+      "log": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F5_logit_average.txt",
+      "return_code": 0,
+      "status": "ok"
+    },
+    {
+      "frames": 5,
+      "fusion": "majority",
+      "metrics_json": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F5_majority.json",
+      "predictions_csv": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F5_majority_predictions.csv",
+      "log": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/03_temporal_fusion/results/F5_majority.txt",
+      "return_code": 0,
+      "status": "ok"
+    }
+  ]
+}
