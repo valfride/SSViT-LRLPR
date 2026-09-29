@@ -26,12 +26,25 @@ fi
 
 mkdir -p "$OUT"
 
+# F=1 is a checkpoint/protocol sanity check; temporal fusion is not meaningful
+# with a single frame, so evaluate it only once.
 python3 "$RUNNER" \
     --config "$CFG" \
     --checkpoints "$SVTRV2_CKPT_DIR" \
     --split "$DATA" \
     --output-dir "$OUT" \
-    --frames 1 3 5 \
+    --frames 1 \
+    --fusions bayes \
+    --keep-going
+
+# Reviewer 2.3 comparison: pre-collapse CTC pooling versus post-decoding
+# sequence-level and character-position-level fusion.
+python3 "$RUNNER" \
+    --config "$CFG" \
+    --checkpoints "$SVTRV2_CKPT_DIR" \
+    --split "$DATA" \
+    --output-dir "$OUT" \
+    --frames 3 5 \
     --fusions bayes average logit_average majority char_majority \
     --keep-going
 
