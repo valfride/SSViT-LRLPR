@@ -197,16 +197,50 @@ class LatentUpsampler(nn.Module):
 
     def forward(self, x):
         x = self.upsample(self.conv1(x))
-        x = self.conv2(x) 
+        x = self.conv2(x)
         return self.act(self.norm(x))
 
+
+class InterpolationUpsampler(nn.Module):
+    """Shape-matched control that replaces sub-pixel upsampling with bilinear resize."""
+
+    def __init__(self, dim, upscale_factor=2):
+        super().__init__()
+        self.upscale_factor = upscale_factor
+        self.conv1 = nn.Conv2d(dim, dim, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(dim, dim, kernel_size=3, padding=1)
+        self.norm = nn.GroupNorm(8, dim)
+        self.act = FReLU(dim)
+
+    def forward(self, x):
+        x = F.interpolate(
+            x,
+            scale_factor=self.upscale_factor,
+            mode="bilinear",
+            align_corners=False,
+        )
+        x = self.conv1(x)
+        x = self.conv2(x)
+        return self.act(self.norm(x))
+
+
 class SpatialFeatureExtractor(nn.Module):
-    # ---> UPDATE 1: Add use_sfb to the initialization arguments
-    def __init__(self, in_channels=3, feature_dim=128, cnn_heads=4, use_hcg=True, use_sfb=True):
+    def __init__(
+        self,
+        in_channels=3,
+        feature_dim=128,
+        cnn_heads=4,
+        use_hcg=True,
+        use_sfb=True,
+        use_restormer=True,
+        use_pixelshuffle=True,
+    ):
         super().__init__()
         
         self.use_hcg = use_hcg
         self.use_sfb = use_sfb
+        self.use_restormer = use_restormer
+        self.use_pixelshuffle = use_pixelshuffle
         
         # 1. The Front Door: Safely extend the raw image border!
         self.stem_in = nn.Sequential(
@@ -233,12 +267,31 @@ class SpatialFeatureExtractor(nn.Module):
             FReLU(feature_dim)
         )
         
-        # Operates purely at 16x48 (Ultra-fast, deep semantics)
-        self.body = nn.Sequential(*[RestormerBlock(feature_dim, num_heads=cnn_heads, drop_path=0.2) for _ in range(2)])
+        # Operates purely at 16x48. Identity is used for the controlled
+        # "-Restormer" reviewer ablation while preserving tensor dimensions.
+        self.body = (
+            nn.Sequential(
+                *[
+                    RestormerBlock(
+                        feature_dim,
+                        num_heads=cnn_heads,
+                        drop_path=0.2,
+                    )
+                    for _ in range(2)
+                ]
+            )
+            if use_restormer
+            else nn.Identity()
+        )
         self.conv_after_body = nn.Conv2d(feature_dim, feature_dim, 3, 1, 1)
-        
-        # Restores the feature map back to 32x96
-        self.latent_sr = LatentUpsampler(feature_dim, upscale_factor=2)
+
+        # Restores the feature map back to 32x96. The interpolation branch is
+        # a shape-matched control for the "-PixelShuffle" reviewer ablation.
+        self.latent_sr = (
+            LatentUpsampler(feature_dim, upscale_factor=2)
+            if use_pixelshuffle
+            else InterpolationUpsampler(feature_dim, upscale_factor=2)
+        )
         
         self.refine_conv = nn.Sequential(
             nn.Conv2d(feature_dim, feature_dim, 1, 1, 0), 
@@ -611,15 +664,25 @@ class Cgnet(nn.Module):
         use_hcg = kwargs.get('use_hcg', True)
         use_sfb = kwargs.get('use_sfb', True)
         use_rope = kwargs.get('use_rope', True)
+        use_restormer = kwargs.get('use_restormer', True)
+        use_pixelshuffle = kwargs.get('use_pixelshuffle', True)
 
-        # ---> EXTRACT FLAGS FROM YAML KWARGS (Default to True for safety)
+        # Defaults preserve the submitted architecture for old configs/checkpoints.
         use_cosine_classifier = kwargs.get('use_cosine_classifier', True)
         use_token_masking = kwargs.get('use_token_masking', True)
 
         self.mode = mode.lower()
         self.feature_dim = feature_dim
         
-        self.student_extractor = SpatialFeatureExtractor(in_channels, feature_dim, cnn_heads=cnn_heads, use_hcg=use_hcg, use_sfb=use_sfb)
+        self.student_extractor = SpatialFeatureExtractor(
+            in_channels,
+            feature_dim,
+            cnn_heads=cnn_heads,
+            use_hcg=use_hcg,
+            use_sfb=use_sfb,
+            use_restormer=use_restormer,
+            use_pixelshuffle=use_pixelshuffle,
+        )
         
         if self.mode in ['ocr', 'hybrid']:
             self.student_ocr = CustomOCR(
