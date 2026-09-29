@@ -70,7 +70,7 @@
 - [ ] Rewrite BJP independence/alignment claims
 
 ### R2.4 — Statistical validation
-- [ ] Make training seed configurable
+- [x] Make training seed configurable
 - [ ] Run at least 3 independent seeds
 - [ ] Report mean +/- standard deviation
 - [ ] Paired bootstrap 95% CI
