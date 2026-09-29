@@ -62,7 +62,7 @@
 
 ### R2.3 — Temporal fusion
 - [x] BJP/product-rule F=3/F=5
-- [ ] Probability-average F=3
+- [x] Probability-average F=3
 - [x] Probability-average F=5
 - [x] Logit-average F=3/F=5
 - [x] Sequence-majority F=3/F=5
