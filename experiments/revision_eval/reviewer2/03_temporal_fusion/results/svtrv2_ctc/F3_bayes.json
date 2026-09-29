@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "mode": "val",
+  "fusion": "bayes",
+  "frames": 3,
+  "tta": false,
+  "swa": false,
+  "num_swa": 1,
+  "cls_loss": "CTC",
+  "config": "/home/vwnascimento/doc2025/project1/baselines_configs/SVTRV2_BASELINE.yaml",
+  "checkpoint_directory": "experiments/revision_eval/reviewer2/03_temporal_fusion/svtrv2_submitted",
+  "checkpoint_files": [
+    "experiments/revision_eval/reviewer2/03_temporal_fusion/svtrv2_submitted/last.pth"
+  ],
+  "dataset": "/home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k",
+  "metrics": {
+    "sequence_accuracy_percent": 68.56666666666666,
+    "sequence_correct": 2057,
+    "sequence_total": 3000,
+    "character_accuracy_percent": 91.01904761904763,
+    "character_correct": 19114,
+    "character_total": 21000,
+    "cer_percent": 8.395238095238096,
+    "edit_errors": 1763,
+    "ground_truth_characters": 21000,
+    "partial_6_percent": 85.6,
+    "partial_6_correct": 2568,
+    "partial_5_percent": 92.43333333333334,
+    "partial_5_correct": 2773,
+    "old_brazilian_accuracy_percent": 43.333333333333336,
+    "old_brazilian_correct": 260,
+    "old_brazilian_total": 600,
+    "mercosur_accuracy_percent": 74.875,
+    "mercosur_correct": 1797,
+    "mercosur_total": 2400,
+    "mean_confidence_correct": 0.9945338875504449,
+    "mean_confidence_incorrect": 0.9282990110957104,
+    "confidence_gap": 0.06623487645473447
+  }
+}

@@ -1,0 +1,44 @@
+Building Architecture...
+
+Loading Fallback Checkpoint: experiments/revision_eval/reviewer2/03_temporal_fusion/results/svtrv2_checkpoint_audit/ep146/last.pth
+👤 No Ghost weights found. Loading standard Student model.
+
+Preparing Data from /home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k...
+🔄 TEMPORAL OVERRIDE: Forced val_dataset in_images to 1
+🔥 CACHING TEST DB TO RAM: Loading 15000 images...
+✅ Caching complete!
+
+🏆 FINAL EVALUATION METRICS (BAYES FUSION)
+   Full Sequence (7/7):       55.67% (1670/3000)
+   Character Accuracy (slots): 86.75% (18218/21000)
+   Character Error Rate (CER): 12.65% (2656/21000)
+   Partial Match (≥6/7):      78.10% (2343/3000)
+   Partial Match (≥5/7):      87.67% (2630/3000)
+------------------------------------------------
+   🇧🇷 Old Brazilian (LLL-NNNN): 34.17% (205/600)
+   🌎 Mercosur Layout (LLL-NLNN): 61.04% (1465/2400)
+
+📈 RECOGNITION RATE VS. CONFIDENCE THRESHOLD
+----------------------------------------------------------------------------------
+| Minimum Confidence   | Retained (Coverage)    | Plate Acc  | Char Acc   |
+|----------------------|------------------------|------------|------------|
+| ≥ 0.00               | 3000   (100.00%)         |   55.67%   |   86.75%   |
+| ≥ 0.50               | 2941   ( 98.03%)         |   56.78%   |   87.99%   |
+| ≥ 0.70               | 2791   ( 93.03%)         |   59.80%   |   90.28%   |
+| ≥ 0.80               | 2613   ( 87.10%)         |   63.57%   |   92.04%   |
+| ≥ 0.90               | 2157   ( 71.90%)         |   73.02%   |   94.81%   |
+| ≥ 0.95               | 1588   ( 52.93%)         |   84.26%   |   97.21%   |
+| ≥ 0.98               | 1153   ( 38.43%)         |   92.89%   |   98.62%   |
+| ≥ 0.99               | 916    ( 30.53%)         |   95.85%   |   99.11%   |
+----------------------------------------------------------------------------------
+
+🧠 MODEL CALIBRATION (CONFIDENCE GAP)
+---------------------------------------------
+   Mean Conf (Correct):   0.9734
+   Mean Conf (Incorrect): 0.8355
+   Confidence Gap:        0.1378
+---------------------------------------------
+
+Saved 1330 failures to validation_failures_sequence.txt
+✅ Metrics JSON saved to experiments/revision_eval/reviewer2/03_temporal_fusion/results/svtrv2_checkpoint_audit/ep146_F1.json
+✅ Predictions CSV saved to experiments/revision_eval/reviewer2/03_temporal_fusion/results/svtrv2_checkpoint_audit/ep146_F1_predictions.csv

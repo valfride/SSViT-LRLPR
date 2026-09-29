@@ -1,0 +1,1 @@
+6590d3da20d204c235e88a65871b8bc04b85ca3dd6d52ad81f73face8b68f231  experiments/baselines/SVTRV2_BASELINE/SVTRV2_BASELINE_14-04-2026/model_acc_0.7030_ep_156.pth
