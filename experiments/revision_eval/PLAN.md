@@ -66,7 +66,7 @@
 - [x] Probability-average F=5
 - [x] Logit-average F=3/F=5
 - [x] Sequence-majority F=3/F=5
-- [ ] Evaluate CTC baseline fusion behavior
+- [x] Evaluate CTC baseline fusion behavior
 - [ ] Rewrite BJP independence/alignment claims
 
 ### R2.4 — Statistical validation
