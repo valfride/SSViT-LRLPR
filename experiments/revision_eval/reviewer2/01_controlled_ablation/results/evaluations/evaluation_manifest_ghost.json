@@ -1,0 +1,356 @@
+{
+  "schema_version": 1,
+  "dataset": "/home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k",
+  "variants": [
+    "full",
+    "no_restormer",
+    "no_pixelshuffle",
+    "no_sfb",
+    "linear_head"
+  ],
+  "seeds": [
+    42,
+    123,
+    2026
+  ],
+  "frames": [
+    1,
+    3,
+    5
+  ],
+  "fusion": "bayes",
+  "weight_source": "ghost",
+  "gpu": null,
+  "runs": [
+    {
+      "variant": "full",
+      "seed": 42,
+      "weight_source": "ghost",
+      "provenance": "frozen_submitted_seed42",
+      "config": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/submitted_model/config_snapshot.yaml",
+      "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/submitted_model",
+      "output_dir": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/full/seed42/ghost",
+      "status": "dry_run",
+      "command": [
+        "/home/vwnascimento/miniconda3/envs/yolov11/bin/python3",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/shared/scripts/run_eval_matrix.py",
+        "--config",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/submitted_model/config_snapshot.yaml",
+        "--checkpoints",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/submitted_model",
+        "--split",
+        "/home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k",
+        "--output-dir",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/full/seed42/ghost",
+        "--frames",
+        "1",
+        "3",
+        "5",
+        "--fusions",
+        "bayes"
+      ]
+    },
+    {
+      "variant": "no_restormer",
+      "seed": 42,
+      "weight_source": "ghost",
+      "provenance": "controlled_retraining",
+      "config": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/no_restormer_seed42.yaml",
+      "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/no_restormer_seed42/ghost_weights",
+      "output_dir": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_restormer/seed42/ghost",
+      "status": "dry_run",
+      "command": [
+        "/home/vwnascimento/miniconda3/envs/yolov11/bin/python3",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/shared/scripts/run_eval_matrix.py",
+        "--config",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/no_restormer_seed42.yaml",
+        "--checkpoints",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/no_restormer_seed42/ghost_weights",
+        "--split",
+        "/home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k",
+        "--output-dir",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_restormer/seed42/ghost",
+        "--frames",
+        "1",
+        "3",
+        "5",
+        "--fusions",
+        "bayes"
+      ]
+    },
+    {
+      "variant": "no_pixelshuffle",
+      "seed": 42,
+      "weight_source": "ghost",
+      "provenance": "controlled_retraining",
+      "config": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/no_pixelshuffle_seed42.yaml",
+      "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/no_pixelshuffle_seed42/ghost_weights",
+      "output_dir": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_pixelshuffle/seed42/ghost",
+      "status": "dry_run",
+      "command": [
+        "/home/vwnascimento/miniconda3/envs/yolov11/bin/python3",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/shared/scripts/run_eval_matrix.py",
+        "--config",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/no_pixelshuffle_seed42.yaml",
+        "--checkpoints",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/no_pixelshuffle_seed42/ghost_weights",
+        "--split",
+        "/home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k",
+        "--output-dir",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_pixelshuffle/seed42/ghost",
+        "--frames",
+        "1",
+        "3",
+        "5",
+        "--fusions",
+        "bayes"
+      ]
+    },
+    {
+      "variant": "no_sfb",
+      "seed": 42,
+      "weight_source": "ghost",
+      "provenance": "controlled_retraining",
+      "config": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/no_sfb_seed42.yaml",
+      "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/no_sfb_seed42/ghost_weights",
+      "output_dir": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_sfb/seed42/ghost",
+      "status": "dry_run",
+      "command": [
+        "/home/vwnascimento/miniconda3/envs/yolov11/bin/python3",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/shared/scripts/run_eval_matrix.py",
+        "--config",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/no_sfb_seed42.yaml",
+        "--checkpoints",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/no_sfb_seed42/ghost_weights",
+        "--split",
+        "/home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k",
+        "--output-dir",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_sfb/seed42/ghost",
+        "--frames",
+        "1",
+        "3",
+        "5",
+        "--fusions",
+        "bayes"
+      ]
+    },
+    {
+      "variant": "linear_head",
+      "seed": 42,
+      "weight_source": "ghost",
+      "provenance": "controlled_retraining",
+      "config": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/linear_head_seed42.yaml",
+      "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/linear_head_seed42/ghost_weights",
+      "output_dir": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/linear_head/seed42/ghost",
+      "status": "missing",
+      "missing": [
+        "checkpoint directory: /home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/linear_head_seed42/ghost_weights"
+      ]
+    },
+    {
+      "variant": "full",
+      "seed": 123,
+      "weight_source": "ghost",
+      "provenance": "controlled_retraining",
+      "config": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/full_seed123.yaml",
+      "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/full_seed123/ghost_weights",
+      "output_dir": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/full/seed123/ghost",
+      "status": "dry_run",
+      "command": [
+        "/home/vwnascimento/miniconda3/envs/yolov11/bin/python3",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/shared/scripts/run_eval_matrix.py",
+        "--config",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/full_seed123.yaml",
+        "--checkpoints",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/full_seed123/ghost_weights",
+        "--split",
+        "/home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k",
+        "--output-dir",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/full/seed123/ghost",
+        "--frames",
+        "1",
+        "3",
+        "5",
+        "--fusions",
+        "bayes"
+      ]
+    },
+    {
+      "variant": "no_restormer",
+      "seed": 123,
+      "weight_source": "ghost",
+      "provenance": "controlled_retraining",
+      "config": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/no_restormer_seed123.yaml",
+      "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/no_restormer_seed123/ghost_weights",
+      "output_dir": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_restormer/seed123/ghost",
+      "status": "dry_run",
+      "command": [
+        "/home/vwnascimento/miniconda3/envs/yolov11/bin/python3",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/shared/scripts/run_eval_matrix.py",
+        "--config",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/no_restormer_seed123.yaml",
+        "--checkpoints",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/no_restormer_seed123/ghost_weights",
+        "--split",
+        "/home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k",
+        "--output-dir",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_restormer/seed123/ghost",
+        "--frames",
+        "1",
+        "3",
+        "5",
+        "--fusions",
+        "bayes"
+      ]
+    },
+    {
+      "variant": "no_pixelshuffle",
+      "seed": 123,
+      "weight_source": "ghost",
+      "provenance": "controlled_retraining",
+      "config": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/no_pixelshuffle_seed123.yaml",
+      "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/no_pixelshuffle_seed123/ghost_weights",
+      "output_dir": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_pixelshuffle/seed123/ghost",
+      "status": "missing",
+      "missing": [
+        "checkpoint directory: /home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/no_pixelshuffle_seed123/ghost_weights"
+      ]
+    },
+    {
+      "variant": "no_sfb",
+      "seed": 123,
+      "weight_source": "ghost",
+      "provenance": "controlled_retraining",
+      "config": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/no_sfb_seed123.yaml",
+      "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/no_sfb_seed123/ghost_weights",
+      "output_dir": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_sfb/seed123/ghost",
+      "status": "missing",
+      "missing": [
+        "checkpoint directory: /home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/no_sfb_seed123/ghost_weights"
+      ]
+    },
+    {
+      "variant": "linear_head",
+      "seed": 123,
+      "weight_source": "ghost",
+      "provenance": "controlled_retraining",
+      "config": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/linear_head_seed123.yaml",
+      "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/linear_head_seed123/ghost_weights",
+      "output_dir": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/linear_head/seed123/ghost",
+      "status": "missing",
+      "missing": [
+        "checkpoint directory: /home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/linear_head_seed123/ghost_weights"
+      ]
+    },
+    {
+      "variant": "full",
+      "seed": 2026,
+      "weight_source": "ghost",
+      "provenance": "controlled_retraining",
+      "config": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/full_seed2026.yaml",
+      "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/full_seed2026/ghost_weights",
+      "output_dir": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/full/seed2026/ghost",
+      "status": "dry_run",
+      "command": [
+        "/home/vwnascimento/miniconda3/envs/yolov11/bin/python3",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/shared/scripts/run_eval_matrix.py",
+        "--config",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/full_seed2026.yaml",
+        "--checkpoints",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/full_seed2026/ghost_weights",
+        "--split",
+        "/home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k",
+        "--output-dir",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/full/seed2026/ghost",
+        "--frames",
+        "1",
+        "3",
+        "5",
+        "--fusions",
+        "bayes"
+      ]
+    },
+    {
+      "variant": "no_restormer",
+      "seed": 2026,
+      "weight_source": "ghost",
+      "provenance": "controlled_retraining",
+      "config": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/no_restormer_seed2026.yaml",
+      "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/no_restormer_seed2026/ghost_weights",
+      "output_dir": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_restormer/seed2026/ghost",
+      "status": "dry_run",
+      "command": [
+        "/home/vwnascimento/miniconda3/envs/yolov11/bin/python3",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/shared/scripts/run_eval_matrix.py",
+        "--config",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/no_restormer_seed2026.yaml",
+        "--checkpoints",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/no_restormer_seed2026/ghost_weights",
+        "--split",
+        "/home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k",
+        "--output-dir",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_restormer/seed2026/ghost",
+        "--frames",
+        "1",
+        "3",
+        "5",
+        "--fusions",
+        "bayes"
+      ]
+    },
+    {
+      "variant": "no_pixelshuffle",
+      "seed": 2026,
+      "weight_source": "ghost",
+      "provenance": "controlled_retraining",
+      "config": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/no_pixelshuffle_seed2026.yaml",
+      "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/no_pixelshuffle_seed2026/ghost_weights",
+      "output_dir": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_pixelshuffle/seed2026/ghost",
+      "status": "dry_run",
+      "command": [
+        "/home/vwnascimento/miniconda3/envs/yolov11/bin/python3",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/shared/scripts/run_eval_matrix.py",
+        "--config",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/no_pixelshuffle_seed2026.yaml",
+        "--checkpoints",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/no_pixelshuffle_seed2026/ghost_weights",
+        "--split",
+        "/home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k",
+        "--output-dir",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_pixelshuffle/seed2026/ghost",
+        "--frames",
+        "1",
+        "3",
+        "5",
+        "--fusions",
+        "bayes"
+      ]
+    },
+    {
+      "variant": "no_sfb",
+      "seed": 2026,
+      "weight_source": "ghost",
+      "provenance": "controlled_retraining",
+      "config": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/no_sfb_seed2026.yaml",
+      "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/no_sfb_seed2026/ghost_weights",
+      "output_dir": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_sfb/seed2026/ghost",
+      "status": "missing",
+      "missing": [
+        "checkpoint directory: /home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/no_sfb_seed2026/ghost_weights"
+      ]
+    },
+    {
+      "variant": "linear_head",
+      "seed": 2026,
+      "weight_source": "ghost",
+      "provenance": "controlled_retraining",
+      "config": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/linear_head_seed2026.yaml",
+      "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/linear_head_seed2026/ghost_weights",
+      "output_dir": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/linear_head/seed2026/ghost",
+      "status": "missing",
+      "missing": [
+        "checkpoint directory: /home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/linear_head_seed2026/ghost_weights"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,76 @@
+/home/vwnascimento/miniconda3/envs/yolov11/lib/python3.9/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+🔥 CACHING VALIDATION DB TO RAM: Loading 10000 images...
+
+Loading validation bytes:   0%|          | 0/10000 [00:00<?, ?it/s]
+Loading validation bytes: 100%|██████████| 10000/10000 [00:00<00:00, 340535.20it/s]
+✅ Caching complete!
+Creating Student VSR Model...
+👻 Ghost EMA Tracker Mode ON...
+🔥 CACHING TRAINING DB TO RAM: Loading 190000 images...
+
+Loading training bytes:   0%|          | 0/190000 [00:00<?, ?it/s]
+Loading training bytes:  13%|█▎        | 25271/190000 [00:00<00:00, 252669.28it/s]
+Loading training bytes:  27%|██▋       | 50538/190000 [00:00<00:00, 179450.35it/s]
+Loading training bytes:  39%|███▉      | 73654/190000 [00:00<00:00, 198768.07it/s]
+Loading training bytes:  50%|████▉     | 94630/190000 [00:00<00:00, 182339.69it/s]
+Loading training bytes:  65%|██████▌   | 123831/190000 [00:00<00:00, 216219.81it/s]
+Loading training bytes:  82%|████████▏ | 155223/190000 [00:00<00:00, 246141.69it/s]
+Loading training bytes:  99%|█████████▊| 187306/190000 [00:00<00:00, 268870.91it/s]
+Loading training bytes: 100%|██████████| 190000/190000 [00:00<00:00, 234662.34it/s]
+/home/vwnascimento/miniconda3/envs/yolov11/lib/python3.9/site-packages/albumentations/core/validation.py:114: UserWarning: ShiftScaleRotate is a special case of Affine transform. Please use Affine transform instead.
+  original_init(self, **validated_kwargs)
+✅ Caching complete!
+📦 Grouped dataset into 19000 unique tracks for 5x faster epochs.
+📊 FDA Style Pool Size: 50000
+🔄 Starting Epoch 1...
+📉 PolyLoss Schedule | Epoch 1 | Epsilon: 0.000
+
+  0%|          | 0/296 [00:00<?, ?it/s]
+                                       
+Traceback (most recent call last):
+  File "/home/vwnascimento/doc2025/project1/train_gan.py", line 459, in <module>
+    main(config, save_path)
+  File "/home/vwnascimento/doc2025/project1/train_gan.py", line 301, in main
+    train_loss = train_step(
+  File "/home/vwnascimento/doc2025/project1/train_funcs/train_utils.py", line 1066, in SROCR_TRAIN
+    preds_lr = model_g(lr_batch, temporal_pool=True, tgt=true_targets, epoch=current_epoch)
+  File "/home/vwnascimento/miniconda3/envs/yolov11/lib/python3.9/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/vwnascimento/miniconda3/envs/yolov11/lib/python3.9/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/vwnascimento/doc2025/project1/models/custom/VSR_curvature_att.py", line 722, in forward
+    return self.cgnet(x, **kwargs)
+  File "/home/vwnascimento/miniconda3/envs/yolov11/lib/python3.9/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/vwnascimento/miniconda3/envs/yolov11/lib/python3.9/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/vwnascimento/doc2025/project1/models/custom/VSR_curvature_att.py", line 709, in forward
+    preds_lr = self.student_ocr(latent_lr, epoch=epoch, tgt=tgt)
+  File "/home/vwnascimento/miniconda3/envs/yolov11/lib/python3.9/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/vwnascimento/miniconda3/envs/yolov11/lib/python3.9/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/vwnascimento/doc2025/project1/models/custom/VSR_curvature_att.py", line 653, in forward
+    logits, char_tokens = self.vit_expert(feat, tgt=tgt, forcing_prob=forcing_prob)
+  File "/home/vwnascimento/miniconda3/envs/yolov11/lib/python3.9/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/vwnascimento/miniconda3/envs/yolov11/lib/python3.9/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/vwnascimento/doc2025/project1/models/custom/VSR_curvature_att.py", line 529, in forward
+    features = self.patch_embed(x)
+  File "/home/vwnascimento/miniconda3/envs/yolov11/lib/python3.9/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/vwnascimento/miniconda3/envs/yolov11/lib/python3.9/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/vwnascimento/miniconda3/envs/yolov11/lib/python3.9/site-packages/torch/nn/modules/container.py", line 250, in forward
+    input = module(input)
+  File "/home/vwnascimento/miniconda3/envs/yolov11/lib/python3.9/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/vwnascimento/miniconda3/envs/yolov11/lib/python3.9/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/vwnascimento/miniconda3/envs/yolov11/lib/python3.9/site-packages/torch/nn/modules/conv.py", line 554, in forward
+    return self._conv_forward(input, self.weight, self.bias)
+  File "/home/vwnascimento/miniconda3/envs/yolov11/lib/python3.9/site-packages/torch/nn/modules/conv.py", line 549, in _conv_forward
+    return F.conv2d(
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 96.00 MiB. GPU 0 has a total capacity of 47.27 GiB of which 44.19 MiB is free. Process 3539056 has 254.00 MiB memory in use. Process 706483 has 39.27 GiB memory in use. Including non-PyTorch memory, this process has 7.70 GiB memory in use. Of the allocated memory 7.32 GiB is allocated by PyTorch, and 188.97 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
