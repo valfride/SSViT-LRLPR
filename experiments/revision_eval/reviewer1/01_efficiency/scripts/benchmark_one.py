@@ -48,20 +48,40 @@ def select_checkpoint(path: Path) -> Path:
     if not path.is_dir():
         raise FileNotFoundError(f"Checkpoint path does not exist: {path}")
 
+    # Baseline weights are stored under a run directory such as
+    # experiments/baselines/CPPD_BASELINE/CPPD_BASELINE_<timestamp>/.
+    # Search recursively so callers can point at the stable per-model root
+    # instead of hard-coding timestamped run names.
     candidates = sorted(
-        path.glob("*acc_*.pth"),
-        key=lambda item: (checkpoint_accuracy(item), item.name),
+        path.rglob("*acc_*.pth"),
+        key=lambda item: (
+            checkpoint_accuracy(item),
+            str(item.relative_to(path)),
+        ),
         reverse=True,
     )
     if candidates:
-        return candidates[0]
+        selected = candidates[0]
+        print(
+            f"Resolved checkpoint recursively: {selected} "
+            f"(validation accuracy={checkpoint_accuracy(selected):.6f})"
+        )
+        return selected
 
-    fallback = path / "last.pth"
-    if fallback.is_file():
-        return fallback
+    last_candidates = sorted(path.rglob("last.pth"))
+    if len(last_candidates) == 1:
+        print(f"Resolved sole recursive last.pth: {last_candidates[0]}")
+        return last_candidates[0]
+    if len(last_candidates) > 1:
+        raise RuntimeError(
+            "No validation-accuracy checkpoint was found and more than one "
+            f"last.pth exists under {path}. Pass an exact run/checkpoint path "
+            "with --checkpoint-override to avoid an ambiguous selection. "
+            f"Candidates: {[str(item) for item in last_candidates]}"
+        )
 
     raise FileNotFoundError(
-        f"No *acc_*.pth or last.pth checkpoint found under {path}"
+        f"No recursive *acc_*.pth or last.pth checkpoint found under {path}"
     )
 
 
