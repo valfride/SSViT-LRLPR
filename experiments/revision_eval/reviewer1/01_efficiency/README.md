@@ -50,14 +50,20 @@ Default settings:
 
 F=1 latency is one model forward pass.
 
-Two F=5 timings are recorded. The primary deployment-oriented tracklet latency
-runs five consecutive batch-size-one forwards and then applies product-rule /
-sum-log-probability fusion. A second batched F=5 timing processes the five
-observations in one batch of five, matching the current `test.py` evaluation
-implementation. Reporting both avoids making the batched GPU result look like
-five sequential frame inferences. Both exclude disk I/O, LMDB access, image
-resize/normalization, host-to-device transfer, final Python string conversion,
-and CTC collapse/string decoding.
+Two F=5 timings are recorded. The paper-protocol tracklet latency processes the
+five observations in one batch of five and includes product-rule /
+sum-log-probability fusion, matching the current `test.py` implementation.
+
+A supplementary serial-five-frame latency runs five consecutive batch-size-one
+forwards. It intentionally does not fuse the independently decoded outputs:
+variable-length recognizers such as LISTER can emit different numbers of output
+steps per frame, and imposing padding/alignment only for timing would change the
+model protocol. Reporting this serial number still shows the cost of processing
+five frames without GPU batch parallelism.
+
+Both measurements exclude disk I/O, LMDB access, image resize/normalization,
+host-to-device transfer, final Python string conversion, and CTC collapse/string
+decoding.
 
 Peak GPU memory is the maximum PyTorch allocated memory during inference and
 includes model parameters and the active input tensor. F=1 and F=5 are measured
