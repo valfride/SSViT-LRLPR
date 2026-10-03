@@ -203,3 +203,41 @@ git status --short
 ```
 
 Do not add `benchmark_inputs.pt`.
+
+
+## If your local checkpoint folders differ
+
+The repository documentation records the historical default baseline paths, but
+model weights are intentionally not tracked by Git. On a workstation where the
+runs were stored under different names, locate the actual retained checkpoints:
+
+```bash
+find experiments -type f \( -name '*acc_*.pth' -o -name 'last.pth' \) \
+  | grep -Ei 'SVTR|OTE|LISTER|IGTR|CPPD|MDIFF' \
+  | sort
+```
+
+Do not copy checkpoints into Git just to satisfy the benchmark runner. Instead,
+override the local path explicitly. The option is repeatable:
+
+```bash
+python3 \
+  experiments/revision_eval/reviewer1/01_efficiency/scripts/benchmark_efficiency.py \
+  --gpu 0 \
+  --checkpoint-override svtrv2=/actual/path/to/student_weights \
+  --checkpoint-override ote=/actual/path/to/student_weights \
+  --checkpoint-override lister=/actual/path/to/student_weights \
+  --checkpoint-override igtr=/actual/path/to/student_weights \
+  --checkpoint-override cppd=/actual/path/to/student_weights \
+  --checkpoint-override mdiff=/actual/path/to/student_weights \
+  --dry-run \
+  --keep-going
+```
+
+Valid override keys are `ours`, `svtrv2`, `ote`, `lister`, `igtr`,
+`cppd`, and `mdiff`. The resolved paths are recorded in
+`benchmark_manifest.json`.
+
+If FLOP counting is unsupported by one operation/model, the worker now prints the
+profiler error explicitly and stores it in the per-model JSON rather than silently
+leaving the table cell blank.
