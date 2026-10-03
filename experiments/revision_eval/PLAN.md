@@ -86,8 +86,8 @@ the paper repository.
 - [x] Diagnose Table 1 / original Table 2 inconsistency
 - [x] Generate a complete controlled full-model/ablation path under one protocol
 - [x] Use identical F=1/F=3/F=5 evaluation protocol for controlled variants
-- [ ] Replace cumulative-only Table 2 in the manuscript
-- [ ] Explain explicitly how the revised ablation table relates to Table 1
+- [x] Replace cumulative-only Table 2 in the manuscript
+- [x] Explain explicitly how the revised ablation table relates to Table 1
 
 ### R2.3 — Temporal fusion
 - [x] Product-rule / sum-log-probability F=3/F=5
@@ -147,7 +147,7 @@ consistency issue appears during manuscript integration.
 ## Final revision
 - [ ] Update architecture figure where needed
 - [ ] Rewrite Methods using audited implementation details
-- [ ] Replace ablation table
+- [x] Replace ablation table
 - [ ] Add statistical reporting
 - [ ] Add temporal-fusion control table/discussion
 - [ ] Add efficiency table
