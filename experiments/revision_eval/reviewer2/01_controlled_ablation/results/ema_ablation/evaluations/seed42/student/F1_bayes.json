@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "mode": "val",
+  "fusion": "bayes",
+  "frames": 1,
+  "tta": false,
+  "swa": false,
+  "num_swa": 1,
+  "cls_loss": "CE",
+  "config": "/home/vwnascimento/doc2025/project1/experiments/ablations/ce_sfb/ce_sfb_13-05-2026-final/config_snapshot.yaml",
+  "checkpoint_directory": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/ema_ablation/staged_checkpoints/seed42/student",
+  "checkpoint_files": [
+    "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/ema_ablation/staged_checkpoints/seed42/student/student_acc_0.0000_ep_127.pth"
+  ],
+  "dataset": "/home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k",
+  "metrics": {
+    "sequence_accuracy_percent": 59.36666666666667,
+    "sequence_correct": 1781,
+    "sequence_total": 3000,
+    "character_accuracy_percent": 88.28095238095239,
+    "character_correct": 18539,
+    "character_total": 21000,
+    "cer_percent": 11.704761904761904,
+    "edit_errors": 2458,
+    "ground_truth_characters": 21000,
+    "partial_6_percent": 80.43333333333334,
+    "partial_6_correct": 2413,
+    "partial_5_percent": 89.16666666666667,
+    "partial_5_correct": 2675,
+    "old_brazilian_accuracy_percent": 40.5,
+    "old_brazilian_correct": 243,
+    "old_brazilian_total": 600,
+    "mercosur_accuracy_percent": 64.08333333333333,
+    "mercosur_correct": 1538,
+    "mercosur_total": 2400,
+    "mean_confidence_correct": 0.9860572258631299,
+    "mean_confidence_incorrect": 0.8830923590134481,
+    "confidence_gap": 0.10296486684968187
+  }
+}
