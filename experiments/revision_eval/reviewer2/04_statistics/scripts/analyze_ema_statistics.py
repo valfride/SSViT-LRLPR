@@ -131,7 +131,7 @@ def main() -> None:
     root = repo_root()
     evaluation_root_default = (
         root
-        / "experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations"
+        / "experiments/revision_eval/reviewer2/01_controlled_ablation/results/ema_ablation/evaluations"
     )
     output_default = root / "experiments/revision_eval/reviewer2/04_statistics/results/ema"
 
@@ -215,10 +215,10 @@ def main() -> None:
         for seed in args.seeds:
             stem = f"F{frames}_{args.fusion}_predictions.csv"
             ema_path = (
-                evaluation_root / "full" / f"seed{seed}" / "ghost" / stem
+                evaluation_root / f"seed{seed}" / "ghost" / stem
             )
             student_path = (
-                evaluation_root / "full" / f"seed{seed}" / "student" / stem
+                evaluation_root / f"seed{seed}" / "student" / stem
             )
 
             if not ema_path.is_file() or not student_path.is_file():
