@@ -234,17 +234,31 @@ def aggregate_results(
                 "gflops",
                 "std",
             ),
-            "f5_gflops_mean": nested(
+            "f5_batched_gflops_mean": nested(
                 payload,
                 "flops",
-                "f5_tracklet_with_product_fusion",
+                "f5_batched_tracklet_with_product_fusion",
                 "gflops",
                 "mean",
             ),
-            "f5_gflops_std": nested(
+            "f5_batched_gflops_std": nested(
                 payload,
                 "flops",
-                "f5_tracklet_with_product_fusion",
+                "f5_batched_tracklet_with_product_fusion",
+                "gflops",
+                "std",
+            ),
+            "f5_sequential_gflops_mean": nested(
+                payload,
+                "flops",
+                "f5_sequential_tracklet_with_product_fusion",
+                "gflops",
+                "mean",
+            ),
+            "f5_sequential_gflops_std": nested(
+                payload,
+                "flops",
+                "f5_sequential_tracklet_with_product_fusion",
                 "gflops",
                 "std",
             ),
@@ -272,29 +286,29 @@ def aggregate_results(
                 "f1_forward",
                 "p95",
             ),
-            "f5_latency_ms_mean": nested(
+            "f5_batched_latency_ms_mean": nested(
                 payload,
                 "latency_ms",
-                "f5_tracklet_forward_plus_product_fusion",
+                "f5_batched_tracklet_forward_plus_product_fusion",
                 "mean",
             ),
-            "f5_latency_ms_std": nested(
+            "f5_batched_latency_ms_std": nested(
                 payload,
                 "latency_ms",
-                "f5_tracklet_forward_plus_product_fusion",
+                "f5_batched_tracklet_forward_plus_product_fusion",
                 "std",
             ),
-            "f5_latency_ms_median": nested(
+            "f5_sequential_latency_ms_mean": nested(
                 payload,
                 "latency_ms",
-                "f5_tracklet_forward_plus_product_fusion",
-                "median",
+                "f5_sequential_tracklet_forward_plus_product_fusion",
+                "mean",
             ),
-            "f5_latency_ms_p95": nested(
+            "f5_sequential_latency_ms_std": nested(
                 payload,
                 "latency_ms",
-                "f5_tracklet_forward_plus_product_fusion",
-                "p95",
+                "f5_sequential_tracklet_forward_plus_product_fusion",
+                "std",
             ),
             "f1_peak_memory_mib": nested(
                 payload,
@@ -302,10 +316,16 @@ def aggregate_results(
                 "f1",
                 "peak_allocated_mib",
             ),
-            "f5_peak_memory_mib": nested(
+            "f5_batched_peak_memory_mib": nested(
                 payload,
                 "peak_memory",
-                "f5_tracklet_forward_plus_product_fusion",
+                "f5_batched_tracklet_forward_plus_product_fusion",
+                "peak_allocated_mib",
+            ),
+            "f5_sequential_peak_memory_mib": nested(
+                payload,
+                "peak_memory",
+                "f5_sequential_tracklet_forward_plus_product_fusion",
                 "peak_allocated_mib",
             ),
             "device_name": nested(payload, "environment", "device_name"),
@@ -329,18 +349,21 @@ def aggregate_results(
         "# Reviewer 1.1 — computational-efficiency summary",
         "",
         (
-            "F=1 latency is a single-frame model forward. F=5 latency processes "
-            "five observations as a batch of five and includes product-rule / "
-            "sum-log-probability tensor fusion. Disk I/O, preprocessing, "
+            "F=1 latency is a single-frame model forward. The primary F=5 "
+            "tracklet latency is deployment-oriented: five consecutive batch-size-one "
+            "forwards plus product-rule / sum-log-probability fusion. A separate "
+            "batched F=5 latency is also reported because test.py evaluates the five "
+            "observations together as a batch of five. Disk I/O, preprocessing, "
             "host-to-device transfer, and final string/CTC decoding are excluded."
         ),
         "",
         (
             "| Model | Params (M) | F1 GFLOPs | F1 latency (ms) | "
-            "F5 tracklet GFLOPs | F5 tracklet latency (ms) | "
-            "F1 peak mem (MiB) | F5 peak mem (MiB) |"
+            "F5 seq. GFLOPs | F5 seq. latency (ms) | "
+            "F5 batched latency (ms) | F1 peak mem (MiB) | "
+            "F5 seq. peak mem (MiB) |"
         ),
-        "|---|---:|---:|---:|---:|---:|---:|---:|",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
 
     for row in rows:
@@ -350,10 +373,16 @@ def aggregate_results(
             if row["f1_latency_ms_mean"] is not None
             else "N/A"
         )
-        f5_latency = (
-            f"{fmt(row['f5_latency_ms_mean'])} +/- "
-            f"{fmt(row['f5_latency_ms_std'])}"
-            if row["f5_latency_ms_mean"] is not None
+        f5_sequential_latency = (
+            f"{fmt(row['f5_sequential_latency_ms_mean'])} +/- "
+            f"{fmt(row['f5_sequential_latency_ms_std'])}"
+            if row["f5_sequential_latency_ms_mean"] is not None
+            else "N/A"
+        )
+        f5_batched_latency = (
+            f"{fmt(row['f5_batched_latency_ms_mean'])} +/- "
+            f"{fmt(row['f5_batched_latency_ms_std'])}"
+            if row["f5_batched_latency_ms_mean"] is not None
             else "N/A"
         )
         lines.append(
@@ -364,10 +393,11 @@ def aggregate_results(
                     fmt(row["params_m"]),
                     fmt(row["f1_gflops_mean"]),
                     f1_latency,
-                    fmt(row["f5_gflops_mean"]),
-                    f5_latency,
+                    fmt(row["f5_sequential_gflops_mean"]),
+                    f5_sequential_latency,
+                    f5_batched_latency,
                     fmt(row["f1_peak_memory_mib"], digits=1),
-                    fmt(row["f5_peak_memory_mib"], digits=1),
+                    fmt(row["f5_sequential_peak_memory_mib"], digits=1),
                 ]
             )
             + " |"
