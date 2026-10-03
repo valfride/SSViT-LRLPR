@@ -183,8 +183,22 @@ def main():
     if args.num_swa < 1:
         parser.error("--num_swa must be at least 1")
 
-    utils.setup_seed(42)
+    # Evaluation must be repeatable. Training intentionally keeps cuDNN
+    # benchmarking enabled in utils.setup_seed(), but benchmark-selected kernels
+    # can introduce tiny run-to-run numerical differences during inference.
+    # Override only the evaluation process here; do not change training behavior.
+    evaluation_seed = 42
+    utils.setup_seed(evaluation_seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(
+        "🔒 Deterministic evaluation: "
+        f"seed={evaluation_seed}, "
+        f"cudnn.benchmark={torch.backends.cudnn.benchmark}, "
+        f"cudnn.deterministic={torch.backends.cudnn.deterministic}"
+    )
 
     with open(args.config, "r", encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
@@ -760,6 +774,11 @@ def main():
                 "swa": bool(args.swa),
                 "num_swa": int(args.num_swa) if args.swa else 1,
                 "cls_loss": cls_loss_type,
+                "reproducibility": {
+                    "seed": evaluation_seed,
+                    "cudnn_benchmark": bool(torch.backends.cudnn.benchmark),
+                    "cudnn_deterministic": bool(torch.backends.cudnn.deterministic),
+                },
                 "config": str(Path(args.config)),
                 "checkpoint_directory": str(ckpt_dir),
                 "checkpoint_files": selected_checkpoints,
