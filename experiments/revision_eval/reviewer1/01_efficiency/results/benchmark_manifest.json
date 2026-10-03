@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "purpose": "Reviewer 1.1 computational-efficiency comparison",
+  "models": [
+    "ours",
+    "svtrv2",
+    "ote",
+    "lister",
+    "igtr",
+    "cppd",
+    "mdiff"
+  ],
+  "dataset": "/home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k",
+  "input_cache": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer1/01_efficiency/results/benchmark_inputs.pt",
+  "sample_count": 100,
+  "gpu": "0",
+  "warmup": 30,
+  "iterations": 100,
+  "flop_samples": 10,
+  "precision": "auto",
+  "deterministic": false,
+  "checkpoint_overrides": {},
+  "runs": [
+    {
+      "model_key": "ours",
+      "display_name": "Ours",
+      "config": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/submitted_model/config_snapshot.yaml",
+      "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/submitted_model",
+      "result": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer1/01_efficiency/results/ours.json",
+      "status": "skipped_existing"
+    },
+    {
+      "model_key": "svtrv2",
+      "display_name": "SVTRv2",
+      "config": "/home/vwnascimento/doc2025/project1/baselines_configs/SVTRV2_BASELINE.yaml",
+      "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/baselines/SVTRV2_BASELINE",
+      "result": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer1/01_efficiency/results/svtrv2.json",
+      "status": "skipped_existing"
+    },
+    {
+      "model_key": "ote",
+      "display_name": "OTE",
+      "config": "/home/vwnascimento/doc2025/project1/baselines_configs/OTE_BASELINE.yaml",
+      "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/baselines/OTE_BASELINE",
+      "result": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer1/01_efficiency/results/ote.json",
+      "status": "skipped_existing"
+    },
+    {
+      "model_key": "lister",
+      "display_name": "LISTER",
+      "config": "/home/vwnascimento/doc2025/project1/baselines_configs/LISTER_BASELINE.yaml",
+      "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/baselines/LISTER_BASELINE",
+      "result": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer1/01_efficiency/results/lister.json",
+      "status": "skipped_existing"
+    },
+    {
+      "model_key": "igtr",
+      "display_name": "IGTR",
+      "config": "/home/vwnascimento/doc2025/project1/baselines_configs/IGTR_BASELINE.yaml",
+      "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/baselines/IGTR_BASELINE",
+      "result": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer1/01_efficiency/results/igtr.json",
+      "status": "skipped_existing"
+    },
+    {
+      "model_key": "cppd",
+      "display_name": "CPPD",
+      "config": "/home/vwnascimento/doc2025/project1/baselines_configs/CPPD_BASELINE.yaml",
+      "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/baselines/CPPD_BASELINE",
+      "result": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer1/01_efficiency/results/cppd.json",
+      "status": "skipped_existing"
+    },
+    {
+      "model_key": "mdiff",
+      "display_name": "MDiff4STR",
+      "config": "/home/vwnascimento/doc2025/project1/baselines_configs/MDIFF_BASELINE.yaml",
+      "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/baselines/MDIFF_BASELINE",
+      "result": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer1/01_efficiency/results/mdiff.json",
+      "status": "skipped_existing"
+    }
+  ]
+}

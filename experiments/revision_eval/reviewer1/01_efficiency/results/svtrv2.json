@@ -1,0 +1,1104 @@
+{
+  "schema_version": 1,
+  "model": "SVTRv2",
+  "config": "/home/vwnascimento/doc2025/project1/baselines_configs/SVTRV2_BASELINE.yaml",
+  "model_spec_name": "SVTRV2_BASELINE",
+  "checkpoint": "/home/vwnascimento/doc2025/project1/experiments/baselines/SVTRV2_BASELINE/SVTRV2_BASELINE_14-04-2026/model_acc_0.7030_ep_156.pth",
+  "checkpoint_state_source": "model_g_sd",
+  "checkpoint_sha256": null,
+  "checkpoint_load": {
+    "missing_keys": [],
+    "unexpected_keys": []
+  },
+  "input_cache": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer1/01_efficiency/results/benchmark_inputs.pt",
+  "input_cache_metadata": {
+    "schema_version": 1,
+    "dataset": "/home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k",
+    "source_config": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/submitted_model/config_snapshot.yaml",
+    "selection": "first tracklets in deterministic dataset order",
+    "sample_count": 100,
+    "frames": 5,
+    "tensor_shape": [
+      100,
+      5,
+      3,
+      32,
+      96
+    ],
+    "labels": [
+      "AQE0422",
+      "FIU0720",
+      "BAK5495",
+      "BAX0807",
+      "MJQ4845",
+      "AUR9418",
+      "AHS0671",
+      "AXQ6143",
+      "ARV0974",
+      "FJT9813",
+      "BBZ8740",
+      "BBS2749",
+      "ATC7553",
+      "BBO2151",
+      "AWM5327",
+      "MDM1864",
+      "AZG1496",
+      "IWL0089",
+      "BBM3730",
+      "BBX0749",
+      "DFV3307",
+      "AYX1323",
+      "MTS5329",
+      "AWV8650",
+      "ASN2533",
+      "BCY4440",
+      "BBA6476",
+      "AVX5839",
+      "ASI3429",
+      "AUA6665",
+      "BBX8905",
+      "BAY5832",
+      "AYE2616",
+      "AUU2413",
+      "BAF9394",
+      "EVD7804",
+      "AZW6918",
+      "RAE2109",
+      "BBT7714",
+      "AVP7768",
+      "FVZ9257",
+      "AXO2669",
+      "AXH4826",
+      "AYM2858",
+      "AUG7418",
+      "EZA1511",
+      "AUH2091",
+      "BBI0561",
+      "AWS5061",
+      "ARO4874",
+      "AUH8516",
+      "OAL6276",
+      "AWW6294",
+      "AYO4558",
+      "BAW3894",
+      "AMJ5178",
+      "ARV7267",
+      "AVO3207",
+      "BDS2554",
+      "AWF5745",
+      "FOB0231",
+      "AXD0523",
+      "AZJ6721",
+      "ARQ7747",
+      "ASK2390",
+      "ASK4133",
+      "APP4353",
+      "BCM0667",
+      "MJM5788",
+      "BOG1587",
+      "BAK0645",
+      "BAO7669",
+      "AJM5065",
+      "ABJ1825",
+      "BCE1925",
+      "ANU4223",
+      "AQB8098",
+      "ANT8088",
+      "MKK1769",
+      "QJJ2660",
+      "AWS5194",
+      "AWC0537",
+      "GAC0073",
+      "ALJ6663",
+      "AYR0903",
+      "EUM5161",
+      "AXP1002",
+      "AWB7001",
+      "OAA9494",
+      "APM0212",
+      "AMO3583",
+      "AZX0942",
+      "BBQ6436",
+      "AMI3511",
+      "AVN0524",
+      "ARL3865",
+      "ASM5615",
+      "AYF8091",
+      "EBJ4893",
+      "ARN8419"
+    ],
+    "names": [
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ],
+      [
+        "lr-005.jpg",
+        "lr-001.jpg",
+        "lr-002.jpg",
+        "lr-003.jpg",
+        "lr-004.jpg"
+      ]
+    ]
+  },
+  "input_shape_per_frame": [
+    3,
+    32,
+    96
+  ],
+  "number_of_real_tracklets_in_pool": 100,
+  "parameters": {
+    "total": 4166918,
+    "trainable": 4166918,
+    "total_millions": 4.166918,
+    "parameter_storage_mib": 15.895530700683594
+  },
+  "precision": "fp16",
+  "output_interpretation": "probabilities",
+  "probe_output_shape_f5_flat_batch": [
+    5,
+    24,
+    38
+  ],
+  "flops": {
+    "f1": {
+      "available": true,
+      "error": null,
+      "gflops": {
+        "n": 10,
+        "mean": 1.323706368,
+        "std": 0.0,
+        "median": 1.323706368,
+        "p95": 1.323706368,
+        "min": 1.323706368,
+        "max": 1.323706368
+      },
+      "backend": "torch.profiler.profile(with_flops=True)",
+      "convention": "multiply and add are counted as two FLOPs; PyTorch profiler covers supported convolution/matrix-multiplication operators; torchvision DeformConv2d convolution arithmetic is supplemented analytically when the profiler reports zero FLOPs for that custom op",
+      "deform_conv_supplement": [
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        }
+      ]
+    },
+    "f5_batched_tracklet_with_product_fusion": {
+      "available": true,
+      "error": null,
+      "gflops": {
+        "n": 10,
+        "mean": 6.61853184,
+        "std": 0.0,
+        "median": 6.61853184,
+        "p95": 6.61853184,
+        "min": 6.61853184,
+        "max": 6.61853184
+      },
+      "backend": "torch.profiler.profile(with_flops=True)",
+      "convention": "multiply and add are counted as two FLOPs; PyTorch profiler covers supported convolution/matrix-multiplication operators; torchvision DeformConv2d convolution arithmetic is supplemented analytically when the profiler reports zero FLOPs for that custom op",
+      "deform_conv_supplement": [
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        }
+      ]
+    },
+    "f5_sequential_tracklet_with_product_fusion": {
+      "available": true,
+      "error": null,
+      "gflops": {
+        "n": 10,
+        "mean": 6.61853184,
+        "std": 0.0,
+        "median": 6.61853184,
+        "p95": 6.61853184,
+        "min": 6.61853184,
+        "max": 6.61853184
+      },
+      "backend": "torch.profiler.profile(with_flops=True)",
+      "convention": "multiply and add are counted as two FLOPs; PyTorch profiler covers supported convolution/matrix-multiplication operators; torchvision DeformConv2d convolution arithmetic is supplemented analytically when the profiler reports zero FLOPs for that custom op",
+      "deform_conv_supplement": [
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        },
+        {
+          "calls": 0,
+          "supplemental_gflops": 0.0
+        }
+      ]
+    }
+  },
+  "latency_ms": {
+    "f1_forward": {
+      "n": 100,
+      "mean": 7.9853261122480035,
+      "std": 0.8593127342312791,
+      "median": 7.796487072482705,
+      "p95": 8.759693941101432,
+      "min": 7.484806003049016,
+      "max": 15.721248928457499
+    },
+    "f5_batched_tracklet_forward_plus_product_fusion": {
+      "n": 100,
+      "mean": 8.659437452442944,
+      "std": 2.547760943580299,
+      "median": 8.137694443576038,
+      "p95": 9.230576921254396,
+      "min": 7.849999004974961,
+      "max": 29.30930000729859
+    },
+    "f5_sequential_tracklet_forward_plus_product_fusion": {
+      "n": 100,
+      "mean": 40.295885698869824,
+      "std": 5.342247628822895,
+      "median": 39.205234963446856,
+      "p95": 42.26838005706668,
+      "min": 37.90681716054678,
+      "max": 78.64503492601216
+    }
+  },
+  "peak_memory": {
+    "f1": {
+      "peak_allocated_mib": 33.88232421875,
+      "incremental_peak_mib": 9.32470703125,
+      "baseline_allocated_mib": 24.5576171875
+    },
+    "f5_batched_tracklet_forward_plus_product_fusion": {
+      "peak_allocated_mib": 36.08544921875,
+      "incremental_peak_mib": 11.38720703125,
+      "baseline_allocated_mib": 24.6982421875
+    },
+    "f5_sequential_tracklet_forward_plus_product_fusion": {
+      "peak_allocated_mib": 34.03857421875,
+      "incremental_peak_mib": 9.34033203125,
+      "baseline_allocated_mib": 24.6982421875
+    }
+  },
+  "protocol": {
+    "warmup_iterations": 30,
+    "timed_iterations": 100,
+    "flop_samples": 10,
+    "batching": "F=1 uses batch 1; F=5 flattens the five observations into a single batch of 5, matching test.py",
+    "latency_timer": "time.perf_counter with device synchronization immediately before and after each inference",
+    "latency_excludes": [
+      "disk I/O",
+      "LMDB access",
+      "image resize/normalization",
+      "host-to-device transfer",
+      "final Python string conversion",
+      "CTC collapse/string decoding"
+    ],
+    "f5_batched_includes": "one network forward on a batch of five frames plus product-rule / sum-log-probability tensor fusion; matches test.py evaluation batching",
+    "f5_sequential_includes": "five consecutive batch-size-one network forwards plus product-rule / sum-log-probability tensor fusion; deployment-oriented tracklet latency",
+    "channels_last": true,
+    "deterministic": false,
+    "cudnn_benchmark": true,
+    "cudnn_deterministic": false,
+    "matmul_allow_tf32": false,
+    "cudnn_allow_tf32": false
+  },
+  "environment": {
+    "hostname": "daugman",
+    "python": "3.9.21",
+    "torch": "2.6.0+cu124",
+    "cuda_runtime": "12.4",
+    "cudnn": 90100,
+    "device": "cuda",
+    "device_name": "Quadro RTX 8000",
+    "gpu_total_memory_gib": 47.26763916015625
+  }
+}
