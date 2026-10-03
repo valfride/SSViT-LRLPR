@@ -17,7 +17,7 @@ the paper repository.
 ## Reviewer 1
 
 ### R1.1 — Computational efficiency
-- [ ] Define one common benchmarking protocol and hardware/software conditions
+- [x] Define one common benchmarking protocol and hardware/software conditions
 - [ ] Parameter count
 - [ ] FLOPs/MACs
 - [ ] Peak inference GPU memory
