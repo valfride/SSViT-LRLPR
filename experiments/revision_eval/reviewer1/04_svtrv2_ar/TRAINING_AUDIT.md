@@ -61,6 +61,13 @@ The local encoder and decoder reused by
 `models/svtrv2/svtrv2_ar_bridge.py` match the pinned OpenOCR sources after
 normalizing the repository-local import path and whitespace.
 
+The current controlled port contains 22.722M parameters in the smoke test,
+whereas the competition report describes the team's competition model as
+approximately 22.42M parameters. Therefore the revision manuscript should
+describe this baseline as an OpenOCR-derived SVTRv2/NRTR autoregressive
+configuration adapted to the controlled LRLPR protocol, not as an exact
+reproduction of the competition team's private training artifact.
+
 Controlled adaptations are limited to the LRLPR experiment:
 
 1. input size 32x128 -> 32x96;
