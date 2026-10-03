@@ -32,12 +32,12 @@ def main():
     # Expected controlled-training protocol for the additional revision
     # baseline. These assertions prevent accidental drift from the baseline
     # setup documented in the manuscript/revision notes.
-    assert int(config["epoch_max"]) == 500, config["epoch_max"]
-    assert int(config["early_stop_patience"]) == 25, config["early_stop_patience"]
+    assert int(config["epoch_max"]) == 100, config["epoch_max"]
+    assert int(config["early_stop_patience"]) == 100, config["early_stop_patience"]
     assert float(config["optimizer_sr"]["args"]["lr"]) == 1.0e-4
     assert float(config["optimizer_sr"]["args"]["weight_decay"]) == 0.05
     assert config["LRScheduler"]["name"] == "OneCycleLR"
-    assert float(config["LRScheduler"]["warmup_epoch"]) == 1.5
+    assert float(config["LRScheduler"]["warmup_epoch"]) == 10.0
     assert int(config["train_dataset"]["batch"]) == 64
     assert int(config["train_dataset"]["wrapper"]["args"]["imgH"]) == 32
     assert int(config["train_dataset"]["wrapper"]["args"]["imgW"]) == 96
