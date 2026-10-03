@@ -7,44 +7,8 @@
   "checkpoint_state_source": "model_g_sd",
   "checkpoint_sha256": null,
   "checkpoint_load": {
-    "missing_keys": [
-      "decoder.cntx_module.attn_blocks.0.gamma_1",
-      "decoder.cntx_module.attn_blocks.0.gamma_2",
-      "decoder.cntx_module.attn_blocks.0.norm1.weight",
-      "decoder.cntx_module.attn_blocks.0.norm1.bias",
-      "decoder.cntx_module.attn_blocks.0.sa.kv_pos_bias",
-      "decoder.cntx_module.attn_blocks.0.sa.q_fc.weight",
-      "decoder.cntx_module.attn_blocks.0.sa.q_fc.bias",
-      "decoder.cntx_module.attn_blocks.0.sa.kv_fc.weight",
-      "decoder.cntx_module.attn_blocks.0.sa.kv_fc.bias",
-      "decoder.cntx_module.attn_blocks.0.sa.proj.weight",
-      "decoder.cntx_module.attn_blocks.0.sa.proj.bias",
-      "decoder.cntx_module.attn_blocks.0.norm2.weight",
-      "decoder.cntx_module.attn_blocks.0.norm2.bias",
-      "decoder.cntx_module.attn_blocks.0.mlp.0.weight",
-      "decoder.cntx_module.attn_blocks.0.mlp.0.bias",
-      "decoder.cntx_module.attn_blocks.0.mlp.3.weight",
-      "decoder.cntx_module.attn_blocks.0.mlp.3.bias"
-    ],
-    "unexpected_keys": [
-      "decoder.cntx_attn_blocks.0.gamma_1",
-      "decoder.cntx_attn_blocks.0.gamma_2",
-      "decoder.cntx_attn_blocks.0.norm1.weight",
-      "decoder.cntx_attn_blocks.0.norm1.bias",
-      "decoder.cntx_attn_blocks.0.sa.kv_pos_bias",
-      "decoder.cntx_attn_blocks.0.sa.q_fc.weight",
-      "decoder.cntx_attn_blocks.0.sa.q_fc.bias",
-      "decoder.cntx_attn_blocks.0.sa.kv_fc.weight",
-      "decoder.cntx_attn_blocks.0.sa.kv_fc.bias",
-      "decoder.cntx_attn_blocks.0.sa.proj.weight",
-      "decoder.cntx_attn_blocks.0.sa.proj.bias",
-      "decoder.cntx_attn_blocks.0.norm2.weight",
-      "decoder.cntx_attn_blocks.0.norm2.bias",
-      "decoder.cntx_attn_blocks.0.mlp.0.weight",
-      "decoder.cntx_attn_blocks.0.mlp.0.bias",
-      "decoder.cntx_attn_blocks.0.mlp.3.weight",
-      "decoder.cntx_attn_blocks.0.mlp.3.bias"
-    ]
+    "missing_keys": [],
+    "unexpected_keys": []
   },
   "input_cache": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer1/01_efficiency/results/benchmark_inputs.pt",
   "input_cache_metadata": {
@@ -1062,30 +1026,30 @@
   "latency_ms": {
     "f1_forward": {
       "n": 100,
-      "mean": 14.815354966558516,
-      "std": 0.6518028351401239,
-      "median": 14.51458444353193,
-      "p95": 16.22055913321674,
-      "min": 14.115398051217198,
-      "max": 16.351226018741727
+      "mean": 13.799972115084529,
+      "std": 0.2603294916453659,
+      "median": 13.745383941568434,
+      "p95": 14.080830151215196,
+      "min": 13.616499956697226,
+      "max": 15.662899939343333
     },
     "f5_batched_tracklet_forward_plus_product_fusion": {
       "n": 100,
-      "mean": 14.67859712196514,
-      "std": 0.7400814504016837,
-      "median": 14.414239558391273,
-      "p95": 15.972988912835717,
-      "min": 14.144974062219262,
-      "max": 19.30282195098698
+      "mean": 14.722190133761615,
+      "std": 1.4727451392075614,
+      "median": 13.939988566562533,
+      "p95": 17.787208082154393,
+      "min": 13.713594060391188,
+      "max": 17.937924014404416
     },
     "f5_sequential_tracklet_forward_plus_product_fusion": {
       "n": 100,
-      "mean": 73.71030986774713,
-      "std": 9.726613892212855,
-      "median": 71.23949145898223,
-      "p95": 80.89752495288849,
-      "min": 69.31441812776029,
-      "max": 127.00422899797559
+      "mean": 69.97023015515879,
+      "std": 1.5459733396498305,
+      "median": 69.13107191212475,
+      "p95": 73.11365893110633,
+      "min": 68.47445201128721,
+      "max": 73.74534686096013
     }
   },
   "peak_memory": {
