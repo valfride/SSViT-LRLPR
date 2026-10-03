@@ -63,7 +63,7 @@ the paper repository.
 - [x] Align the manuscript training/fusion description with the implementation
 - [x] Re-run SVTRv2-AR smoke test after final protocol/BJP lock
 - [x] Train the controlled SVTRv2-AR baseline
-- [ ] Evaluate SVTRv2-AR at F=1/F=3/F=5 using BJP only
+- [x] Evaluate SVTRv2-AR at F=1/F=3/F=5 using BJP only
 - [ ] Add SVTRv2-AR to the computational-efficiency comparison
 - [ ] Integrate SVTRv2-AR results into manuscript/response
 - [ ] Expand CCPD discussion in Related Work
