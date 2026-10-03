@@ -183,6 +183,7 @@ The baseline implementations in this repository are evaluated under the same LRL
 | Baseline | Venue | Paper | Code | Config | `model_g.name` | `cls_loss` |
 |---|---|---|---|---|---:|---:|
 | SVTRv2 | ICCV 2025 | [Paper](https://openaccess.thecvf.com/content/ICCV2025/html/Du_SVTRv2_CTC_Beats_Encoder-Decoder_Models_in_Scene_Text_Recognition_ICCV_2025_paper.html) | [OpenOCR](https://github.com/Topdu/OpenOCR) | `baselines_configs/SVTRV2_BASELINE.yaml` | `SVTRV2_BASELINE` | `CTC` |
+| SVTRv2-AR | ICPR 2026 revision baseline | [Competition report](https://arxiv.org/abs/2604.22506) | [OpenOCR SVTRv2+NRTR config](https://github.com/Topdu/OpenOCR/blob/main/configs/rec/nrtr/svtrv2_nrtr.yml) | `baselines_configs/SVTRV2_AR_BASELINE.yaml` | `SVTRV2_AR_BASELINE` | `SVTRV2_AR` |
 | OTE | CVPR 2024 | [Paper](https://openaccess.thecvf.com/content/CVPR2024/html/Xu_OTE_Exploring_Accurate_Scene_Text_Recognition_Using_One_Token_CVPR_2024_paper.html) | [OpenOCR](https://github.com/Topdu/OpenOCR) | `baselines_configs/OTE_BASELINE.yaml` | `OTE_BASELINE` | `OTE` |
 | LISTER | ICCV 2023 | [Paper](https://openaccess.thecvf.com/content/ICCV2023/html/Cheng_LISTER_Neighbor_Decoding_for_Length-Insensitive_Scene_Text_Recognition_ICCV_2023_paper.html) | [OpenOCR](https://github.com/Topdu/OpenOCR) | `baselines_configs/LISTER_BASELINE.yaml` | `LISTER_BASELINE` | `LISTER_INTERNAL` |
 | IGTR | TPAMI 2025 | [Paper](https://doi.org/10.1109/TPAMI.2025.3525526) | [OpenOCR](https://github.com/Topdu/OpenOCR) | `baselines_configs/IGTR_BASELINE.yaml` | `IGTR_BASELINE` | `IGTR_INTERNAL` |
@@ -216,6 +217,42 @@ Validate with `F=5` and Bayes fusion:
 python3 test.py \
   --config baselines_configs/SVTRV2_BASELINE.yaml \
   --checkpoints ./experiments/baselines/SVTRV2_BASELINE_svtrv2/student_weights \
+  --split ./LMDB-Datasets/competition_dataset_lmdb \
+  --mode val \
+  --in_images 5 \
+  --fusion bayes
+```
+
+### SVTRv2-AR revision baseline
+
+This additional baseline was added for the OJ-ITS major revision. It uses the
+OpenOCR SVTRv2/NRTR autoregressive architecture adapted to the $32\times96$
+LRLPR input and the seven-character plate alphabet. It is trained only on the
+same LRLPR training data used by the controlled baselines; no external
+pretraining or external ALPR dataset is enabled by this config.
+
+For temporal evaluation, SVTRv2-AR intentionally supports only the paper's
+BJP/product-rule protocol. At each autoregressive step, every frame is
+conditioned on the same fused prefix, the per-frame next-token log
+probabilities are summed, and the selected fused token is fed back as the
+shared prefix for the next step. This avoids combining probabilities
+conditioned on different frame-specific decoding histories.
+
+Train:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 DEBUG=True python3 train_gan.py \
+  --config baselines_configs/SVTRV2_AR_BASELINE.yaml \
+  --save ./experiments/baselines \
+  --tag svtrv2_ar
+```
+
+Evaluate with the paper protocol:
+
+```bash
+python3 test.py \
+  --config baselines_configs/SVTRV2_AR_BASELINE.yaml \
+  --checkpoints ./experiments/baselines/SVTRV2_AR_BASELINE_svtrv2_ar/student_weights \
   --split ./LMDB-Datasets/competition_dataset_lmdb \
   --mode val \
   --in_images 5 \
