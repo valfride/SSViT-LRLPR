@@ -19,9 +19,12 @@ the manuscript:
 ## Protocol
 
 All models are benchmarked on the same physical GPU, in separate fresh Python
-processes, using their validation-selected checkpoint as resolved by the same
-filename convention used by `test.py` (highest `*acc_*.pth`, falling back to
-`last.pth`).
+processes, using their validation-selected checkpoint. Baseline experiment roots contain
+timestamped run subdirectories (for example,
+`experiments/baselines/CPPD_BASELINE/CPPD_BASELINE_<timestamp>/`), so the
+worker searches recursively for `*acc_*.pth` and selects the highest encoded
+validation accuracy. It falls back to `last.pth` only when exactly one such
+file exists.
 
 The runner prepares one fixed set of real LRLPR-26 TEST_3k tracklets with the
 repository validation wrapper. The exact same preprocessed tensors are reused
@@ -69,12 +72,12 @@ The default paths follow the repository's documented baseline layout:
 
 ```text
 Ours     experiments/revision_eval/submitted_model/
-SVTRv2   experiments/baselines/SVTRV2_BASELINE/student_weights/
-OTE      experiments/baselines/OTE_BASELINE/student_weights/
-LISTER   experiments/baselines/LISTER_BASELINE/student_weights/
-IGTR     experiments/baselines/IGTR_BASELINE/student_weights/
-CPPD     experiments/baselines/CPPD_BASELINE/student_weights/
-MDiff4STR experiments/baselines/MDIFF_BASELINE/student_weights/
+SVTRv2   experiments/baselines/SVTRV2_BASELINE/
+OTE      experiments/baselines/OTE_BASELINE/
+LISTER   experiments/baselines/LISTER_BASELINE/
+IGTR     experiments/baselines/IGTR_BASELINE/
+CPPD     experiments/baselines/CPPD_BASELINE/
+MDiff4STR experiments/baselines/MDIFF_BASELINE/
 ```
 
 Weights remain local/ignored; only benchmark results and manifests should be
