@@ -226,10 +226,14 @@ python3 test.py \
 ### SVTRv2-AR revision baseline
 
 This additional baseline was added for the OJ-ITS major revision. It uses the
-OpenOCR SVTRv2/NRTR autoregressive architecture adapted to the $32\times96$
-LRLPR input and the seven-character plate alphabet. It is trained only on the
-same LRLPR training data used by the controlled baselines; no external
-pretraining or external ALPR dataset is enabled by this config.
+OpenOCR SVTRv2/NRTR autoregressive configuration pinned to
+`Topdu/OpenOCR@1ccfc6ee6161f7133b192e16af3a9265273997ba`, adapted to the
+$32\times96$ LRLPR input and the seven-character plate alphabet. It is trained
+from scratch only on the same LRLPR training data and augmentation pipeline
+used by the controlled baselines; no external pretraining or external ALPR
+dataset is enabled. The controlled optimization protocol uses AdamW
+($10^{-4}$, weight decay $0.05$), OneCycleLR with a 1.5-epoch warmup, batch 64,
+a 500-epoch maximum, and validation early stopping with patience 25.
 
 For temporal evaluation, SVTRv2-AR intentionally supports only the paper's
 BJP/product-rule protocol. At each autoregressive step, every frame is
