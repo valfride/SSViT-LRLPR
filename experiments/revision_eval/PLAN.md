@@ -41,7 +41,7 @@ the paper repository.
 - [x] Audit complete feature-extractor topology
 - [x] Confirm SFB locations
 - [x] Confirm Restormer/PixelShuffle order
-- [ ] Fully document deformable projection details
+- [x] Fully document deformable projection details
 - [x] Confirm 3 decoder layers
 - [x] Confirm d_model=384
 - [x] Confirm 12 attention heads
@@ -51,7 +51,7 @@ the paper repository.
 - [x] Correct autoregressive interpretation: decoder is parallel/fixed-length
 - [x] Confirm training-time query conditioning/token masking behavior
 - [x] Confirm normalized cosine classifier
-- [ ] Write the audited decoder/architecture specification into the manuscript
+- [x] Write the audited decoder/architecture specification into the manuscript
 - [ ] Add reviewer-response evidence/reference to implementation details
 
 ### R1.4 — Additional baseline / related work
