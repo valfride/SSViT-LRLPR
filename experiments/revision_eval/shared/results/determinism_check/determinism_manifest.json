@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "config": "experiments/revision_eval/submitted_model/config_snapshot.yaml",
+  "checkpoints": "experiments/revision_eval/submitted_model",
+  "dataset": "/home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k",
+  "frames": 1,
+  "fusion": "bayes",
+  "prediction_sha256_run_a": "f98d965471302e2b071c51362b5a9147696b4b49b6926c7b8d5671a8cb3ad8ed",
+  "prediction_sha256_run_b": "f98d965471302e2b071c51362b5a9147696b4b49b6926c7b8d5671a8cb3ad8ed",
+  "predictions_byte_identical": true,
+  "metrics_identical": true,
+  "reproducibility_metadata_identical": true,
+  "run_a_reproducibility": {
+    "seed": 42,
+    "cudnn_benchmark": false,
+    "cudnn_deterministic": true
+  },
+  "run_b_reproducibility": {
+    "seed": 42,
+    "cudnn_benchmark": false,
+    "cudnn_deterministic": true
+  }
+}
