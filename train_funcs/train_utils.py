@@ -778,6 +778,9 @@ def build_loss_function(cls_loss_type, converter, device, current_epoch=None):
     elif cls_loss_type == 'OTE':
         from models.ote.ote_bridge import OTELossWrapper
         return OTELossWrapper(ignore_index=38).to(device)
+    elif cls_loss_type == 'SVTRV2_AR':
+        from models.svtrv2.svtrv2_ar_bridge import SVTRv2ARLoss
+        return SVTRv2ARLoss(ignore_index=38, label_smoothing=0.1).to(device)
     elif cls_loss_type == 'POLY':
         
         # ==========================================
@@ -822,7 +825,7 @@ def prepare_targets(cls_loss_type, text_label, converter, device, is_training=Tr
         t1, t2 = converter.encode_cppd(text_label, max_len=7)
         return (t1.to(device), t2.to(device))
     # ---> THE FIX: Add 'CE' to both of these lists! <---
-    elif cls_loss_type in ['OTE', 'POLY', 'FL', 'CTC', 'LISTER_INTERNAL', 'CE']:
+    elif cls_loss_type in ['OTE', 'SVTRV2_AR', 'POLY', 'FL', 'CTC', 'LISTER_INTERNAL', 'CE']:
         encode_func = getattr(converter, f'encode_{"variable" if cls_loss_type in ["POLY", "CTC", "FL", "LISTER_INTERNAL", "CE"] else "ote"}')
         return encode_func(text_label, max_len=7).to(device)
     elif cls_loss_type == 'MDIFF_INTERNAL':
@@ -910,7 +913,7 @@ def compute_task_loss(preds, true_targets, loss_fn_spatial, cls_loss_type):
     """Intelligently calculates the primary OCR loss regardless of architecture."""
     if 'loss_internal' in preds and preds['loss_internal'] is not None:
         return preds['loss_internal']
-    elif cls_loss_type in ['CPPD', 'OTE']:
+    elif cls_loss_type in ['CPPD', 'OTE', 'SVTRV2_AR']:
         return loss_fn_spatial(preds, true_targets)
     else:
         return loss_fn_spatial(preds['logits'], true_targets)
