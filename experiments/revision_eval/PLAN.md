@@ -151,7 +151,7 @@ consistency issue appears during manuscript integration.
 
 ## Final revision
 - [ ] Update architecture figure where needed
-- [ ] Rewrite Methods using audited implementation details
+- [x] Rewrite Methods using audited implementation details
 - [x] Replace ablation table
 - [x] Add statistical reporting
 - [x] Add temporal-fusion control table/discussion
@@ -161,4 +161,5 @@ consistency issue appears during manuscript integration.
 - [ ] Write point-by-point response letter
 - [ ] Produce unmarked revised manuscript
 - [ ] Produce optional highlighted-changes manuscript
+- [x] Source-level numerical/reference consistency audit
 - [ ] Final reproducibility/consistency audit
