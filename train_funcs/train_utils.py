@@ -1178,75 +1178,150 @@ def SROCR_VAL(val_loader, model_g, model_ghost, config, **kwargs):
             true_targets = prepare_targets(cls_loss_type, flat_labels, true_converter, device, is_training=False)
             
             # ==========================================
-            # 1. STUDENT INFERENCE & LOSS COMPUTATION
+            # 1--4. INFERENCE, TEMPORAL FUSION, AND DECODING
             # ==========================================
-            with torch.amp.autocast('cuda', enabled=config.get('use_fp16', False)):
-                output_s = model_g(flat_imgs, temporal_pool=True) 
-                if isinstance(output_s, (tuple, list)): output_s = output_s[0]
-                
-                # ---> THE EVIDENTIAL FIX: Convert expected_prob to log-space for ensembling
-                if cls_loss_type == 'EVIDENTIAL':
-                    logits_s = torch.log(output_s['expected_prob'] + 1e-8)
-                else:
-                    logits_s = output_s['logits']
-                
-                # Calculate Validation Loss
-                if loss_fn_spatial is not None:
-                    loss_s = compute_task_loss(output_s, true_targets, loss_fn_spatial, cls_loss_type)
-                    if torch.isfinite(loss_s):
-                        total_val_loss += loss_s.item()
-                        val_batches += 1
+            if cls_loss_type == 'SVTRV2_AR':
+                # The AR baseline is validation-selected under the same BJP
+                # protocol used for its final F=3/F=5 paper evaluation.
+                # All frames receive one shared fused prefix at each AR step.
+                ar_model_s = model_g.module if hasattr(model_g, 'module') else model_g
+                ar_model_t = (
+                    model_ghost.module
+                    if model_ghost is not None and hasattr(model_ghost, 'module')
+                    else model_ghost
+                )
 
-            # ==========================================
-            # 2. GHOST INFERENCE (Fixed Variable Name)
-            # ==========================================
-            logits_t = None
-            if model_ghost is not None:
                 with torch.amp.autocast('cuda', enabled=config.get('use_fp16', False)):
-                    output_t = model_ghost(flat_imgs, temporal_pool=True)
-                    if isinstance(output_t, (tuple, list)): output_t = output_t[0]
-                    
-                    if cls_loss_type == 'EVIDENTIAL':
-                        logits_t = torch.log(output_t['expected_prob'] + 1e-8)
-                    else:
-                        logits_t = output_t['logits']
+                    # Teacher-forced loss is computed frame-wise.
+                    output_s_loss = model_g(
+                        flat_imgs,
+                        temporal_pool=True,
+                        tgt=true_targets,
+                    )
+                    if isinstance(output_s_loss, (tuple, list)):
+                        output_s_loss = output_s_loss[0]
+                    if loss_fn_spatial is not None:
+                        loss_s = compute_task_loss(
+                            output_s_loss,
+                            true_targets,
+                            loss_fn_spatial,
+                            cls_loss_type,
+                        )
+                        if torch.isfinite(loss_s):
+                            total_val_loss += loss_s.item()
+                            val_batches += 1
 
-            # ==========================================
-            # 3. TEMPORAL SOFT ENSEMBLING (Zero-Cost Upgrade)
-            # ==========================================
-            # logits_s shape: (B * Seq_Len, T, C)
-            _, T_len, C_classes = logits_s.shape
-            
-            # Reshape to group by sequence: (B, Seq_Len, T, C)
-            logits_seq_s = logits_s.view(B, Seq_Len, T_len, C_classes)
-            
-            # Convert to probabilities and Mean-Pool across the 5 frames
-            probs_seq_s = torch.softmax(logits_seq_s, dim=-1)
-            fused_probs_s = probs_seq_s.mean(dim=1) # Shape: (B, T, C)
-            
-            # Convert back to pseudo-logits for the decoder
-            fused_logits_s = torch.log(fused_probs_s + 1e-8)
+                    fused_logits_s = ar_model_s.bjp_decode(
+                        flat_imgs,
+                        batch_size=B,
+                        frames=Seq_Len,
+                    )
 
-            # Do the same for the Ghost if it exists
-            if logits_t is not None:
-                logits_seq_t = logits_t.reshape(B, Seq_Len, T_len, C_classes)
-                fused_probs_t = torch.softmax(logits_seq_t, dim=-1).mean(dim=1)
-                fused_logits_t = torch.log(fused_probs_t + 1e-8)
+                    fused_logits_t = None
+                    if ar_model_t is not None:
+                        fused_logits_t = ar_model_t.bjp_decode(
+                            flat_imgs,
+                            batch_size=B,
+                            frames=Seq_Len,
+                        )
 
-            # ==========================================
-            # 4. DECODING (Once per sequence!)
-            # ==========================================
-            if cls_loss_type == 'CTC':
-                seq_preds_s, seq_scores_s = ctc_greedy_decoder(fused_logits_s, true_converter, return_scores=True)
-                if logits_t is not None:
-                    seq_preds_t, seq_scores_t = ctc_greedy_decoder(fused_logits_t, true_converter, return_scores=True)
+                seq_preds_s = decode_batch_logits(
+                    fused_logits_s,
+                    true_converter,
+                )
+                seq_scores_s = (
+                    F.log_softmax(fused_logits_s, dim=-1)
+                    .max(dim=-1)[0].sum(dim=1)
+                )
+                logits_t = fused_logits_t
+                if fused_logits_t is not None:
+                    seq_preds_t = decode_batch_logits(
+                        fused_logits_t,
+                        true_converter,
+                    )
+                    seq_scores_t = (
+                        F.log_softmax(fused_logits_t, dim=-1)
+                        .max(dim=-1)[0].sum(dim=1)
+                    )
             else:
-                seq_preds_s = decode_batch_logits(fused_logits_s, true_converter)
-                seq_scores_s = F.log_softmax(fused_logits_s, dim=-1).max(dim=-1)[0].sum(dim=1)
-                
+                # ==========================================
+                # Standard baseline validation path
+                # ==========================================
+                with torch.amp.autocast('cuda', enabled=config.get('use_fp16', False)):
+                    output_s = model_g(flat_imgs, temporal_pool=True)
+                    if isinstance(output_s, (tuple, list)):
+                        output_s = output_s[0]
+
+                    if cls_loss_type == 'EVIDENTIAL':
+                        logits_s = torch.log(output_s['expected_prob'] + 1e-8)
+                    else:
+                        logits_s = output_s['logits']
+
+                    if loss_fn_spatial is not None:
+                        loss_s = compute_task_loss(
+                            output_s,
+                            true_targets,
+                            loss_fn_spatial,
+                            cls_loss_type,
+                        )
+                        if torch.isfinite(loss_s):
+                            total_val_loss += loss_s.item()
+                            val_batches += 1
+
+                logits_t = None
+                if model_ghost is not None:
+                    with torch.amp.autocast('cuda', enabled=config.get('use_fp16', False)):
+                        output_t = model_ghost(flat_imgs, temporal_pool=True)
+                        if isinstance(output_t, (tuple, list)):
+                            output_t = output_t[0]
+
+                        if cls_loss_type == 'EVIDENTIAL':
+                            logits_t = torch.log(output_t['expected_prob'] + 1e-8)
+                        else:
+                            logits_t = output_t['logits']
+
+                _, T_len, C_classes = logits_s.shape
+                logits_seq_s = logits_s.view(B, Seq_Len, T_len, C_classes)
+                probs_seq_s = torch.softmax(logits_seq_s, dim=-1)
+                fused_probs_s = probs_seq_s.mean(dim=1)
+                fused_logits_s = torch.log(fused_probs_s + 1e-8)
+
                 if logits_t is not None:
-                    seq_preds_t = decode_batch_logits(fused_logits_t, true_converter)
-                    seq_scores_t = F.log_softmax(fused_logits_t, dim=-1).max(dim=-1)[0].sum(dim=1)
+                    logits_seq_t = logits_t.reshape(B, Seq_Len, T_len, C_classes)
+                    fused_probs_t = torch.softmax(logits_seq_t, dim=-1).mean(dim=1)
+                    fused_logits_t = torch.log(fused_probs_t + 1e-8)
+
+                if cls_loss_type == 'CTC':
+                    seq_preds_s, seq_scores_s = ctc_greedy_decoder(
+                        fused_logits_s,
+                        true_converter,
+                        return_scores=True,
+                    )
+                    if logits_t is not None:
+                        seq_preds_t, seq_scores_t = ctc_greedy_decoder(
+                            fused_logits_t,
+                            true_converter,
+                            return_scores=True,
+                        )
+                else:
+                    seq_preds_s = decode_batch_logits(
+                        fused_logits_s,
+                        true_converter,
+                    )
+                    seq_scores_s = (
+                        F.log_softmax(fused_logits_s, dim=-1)
+                        .max(dim=-1)[0].sum(dim=1)
+                    )
+
+                    if logits_t is not None:
+                        seq_preds_t = decode_batch_logits(
+                            fused_logits_t,
+                            true_converter,
+                        )
+                        seq_scores_t = (
+                            F.log_softmax(fused_logits_t, dim=-1)
+                            .max(dim=-1)[0].sum(dim=1)
+                        )
 
             # ==========================================
             # 5. SCORING
