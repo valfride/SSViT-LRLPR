@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "config": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/no_restormer_seed123.yaml",
+  "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/no_restormer_seed123/ghost_weights",
+  "dataset": "/home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k",
+  "frames": [
+    1,
+    3,
+    5
+  ],
+  "fusions": [
+    "bayes"
+  ],
+  "tta": false,
+  "swa": false,
+  "num_swa": 1,
+  "runs": [
+    {
+      "frames": 1,
+      "fusion": "bayes",
+      "metrics_json": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_restormer/seed123/ghost/F1_bayes.json",
+      "predictions_csv": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_restormer/seed123/ghost/F1_bayes_predictions.csv",
+      "log": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_restormer/seed123/ghost/F1_bayes.txt",
+      "return_code": 0,
+      "status": "ok"
+    },
+    {
+      "frames": 3,
+      "fusion": "bayes",
+      "metrics_json": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_restormer/seed123/ghost/F3_bayes.json",
+      "predictions_csv": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_restormer/seed123/ghost/F3_bayes_predictions.csv",
+      "log": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_restormer/seed123/ghost/F3_bayes.txt",
+      "return_code": 0,
+      "status": "ok"
+    },
+    {
+      "frames": 5,
+      "fusion": "bayes",
+      "metrics_json": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_restormer/seed123/ghost/F5_bayes.json",
+      "predictions_csv": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_restormer/seed123/ghost/F5_bayes_predictions.csv",
+      "log": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/evaluations/no_restormer/seed123/ghost/F5_bayes.txt",
+      "return_code": 0,
+      "status": "ok"
+    }
+  ]
+}
