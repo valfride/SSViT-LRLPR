@@ -46,37 +46,37 @@ MODEL_SPECS = {
         "display_name": "SVTRv2",
         "config": ROOT / "baselines_configs/SVTRV2_BASELINE.yaml",
         "checkpoints": ROOT
-        / "experiments/baselines/SVTRV2_BASELINE/student_weights",
+        / "experiments/baselines/SVTRV2_BASELINE",
     },
     "ote": {
         "display_name": "OTE",
         "config": ROOT / "baselines_configs/OTE_BASELINE.yaml",
         "checkpoints": ROOT
-        / "experiments/baselines/OTE_BASELINE/student_weights",
+        / "experiments/baselines/OTE_BASELINE",
     },
     "lister": {
         "display_name": "LISTER",
         "config": ROOT / "baselines_configs/LISTER_BASELINE.yaml",
         "checkpoints": ROOT
-        / "experiments/baselines/LISTER_BASELINE/student_weights",
+        / "experiments/baselines/LISTER_BASELINE",
     },
     "igtr": {
         "display_name": "IGTR",
         "config": ROOT / "baselines_configs/IGTR_BASELINE.yaml",
         "checkpoints": ROOT
-        / "experiments/baselines/IGTR_BASELINE/student_weights",
+        / "experiments/baselines/IGTR_BASELINE",
     },
     "cppd": {
         "display_name": "CPPD",
         "config": ROOT / "baselines_configs/CPPD_BASELINE.yaml",
         "checkpoints": ROOT
-        / "experiments/baselines/CPPD_BASELINE/student_weights",
+        / "experiments/baselines/CPPD_BASELINE",
     },
     "mdiff": {
         "display_name": "MDiff4STR",
         "config": ROOT / "baselines_configs/MDIFF_BASELINE.yaml",
         "checkpoints": ROOT
-        / "experiments/baselines/MDIFF_BASELINE/student_weights",
+        / "experiments/baselines/MDIFF_BASELINE",
     },
 }
 
