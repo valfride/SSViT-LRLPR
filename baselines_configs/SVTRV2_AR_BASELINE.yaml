@@ -1,6 +1,6 @@
 alphabet: 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ
-early_stop_patience: 25
-epoch_max: 500
+early_stop_patience: 100
+epoch_max: 100
 func_train: SROCR_TRAIN
 func_val: SROCR_VAL
 
@@ -15,9 +15,11 @@ func_val: SROCR_VAL
 #   - train from scratch on the same LRLPR train/validation split;
 #   - 32x96 LR input and the same repository augmentation wrapper;
 #   - no external pretraining/data;
-#   - lr=1e-4, max 500 epochs, OneCycleLR with 1.5-epoch warmup, matching
-#     the existing non-CTC baseline family in this repository;
-#   - validation-selected checkpoint with early-stop patience 25.
+#   - lr=1e-4 and weight decay=0.05 in the controlled local optimizer;
+#   - 100 epochs with a 10-epoch OneCycleLR warmup, following the
+#     LRLPR-competition SVTRv2-AR training schedule reported in
+#     Laroca et al. (ICPR 2026);
+#   - validation-selected checkpoint over the 100-epoch budget.
 #
 # Temporal evaluation is BJP/product-rule only. The decoder uses one shared
 # fused prefix across all frames at each autoregressive step.
@@ -32,7 +34,7 @@ model_g:
 
 LRScheduler:
   name: OneCycleLR
-  warmup_epoch: 1.5
+  warmup_epoch: 10
   cycle_momentum: false
 
 name: SVTRV2_AR_BASELINE
