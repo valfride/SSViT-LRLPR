@@ -25,7 +25,7 @@ identical across all models.
 | IGTR | AdamW | 1e-4 | 0.05 | OneCycleLR | 1.5 ep | 500 | 64 | 25 (trainer default) |
 | CPPD | AdamW | 1e-4 | 0.01 (PyTorch default) | OneCycleLR | 1.5 ep | 500 | 64 | 25 (trainer default) |
 | MDiff4STR | AdamW | 1e-4 | 0.05 | OneCycleLR | 1.5 ep | 500 | 64 | 25 (trainer default) |
-| SVTRv2-AR (revision) | AdamW | 1e-4 | 0.05 | OneCycleLR | 1.5 ep | 500 | 64 | 25 |
+| SVTRv2-AR (revision) | AdamW | 1e-4 | 0.05 | OneCycleLR | 10 ep | 100 | 64 | 100 (full budget; best-val checkpoint) |
 
 The proposed submitted model is separate from this baseline family: AdamW
 with LR 1e-4 and weight decay 0.001, ReduceLROnPlateau, no LR warmup,
@@ -36,7 +36,9 @@ batch 64, maximum 1000 epochs, and validation early stopping.
 There are several similarly named config fields and they must not be conflated:
 
 - `LRScheduler.warmup_epoch` controls the OneCycleLR warmup fraction in
-  `train_gan.py`. For the non-CTC baseline family it is 1.5 epochs.
+  `train_gan.py`. The historical non-CTC baselines use 1.5 epochs; the added
+  SVTRv2-AR baseline uses the literature-reported LRLPR schedule of 10 warm-up
+  epochs over a 100-epoch run.
 - `ema_warmup_epochs` controls only the proposed model's EMA hard-copy phase.
   It is not learning-rate warmup.
 - Legacy top-level `warmup_epochs` entries in some baseline YAML files are not
@@ -65,9 +67,11 @@ Controlled adaptations are limited to the LRLPR experiment:
 2. output vocabulary -> 36 alphanumeric characters plus EOS/BOS/PAD;
 3. maximum plate content length -> seven characters;
 4. training from scratch in the same LRLPR data/augmentation pipeline;
-5. common local baseline optimization scale (LR 1e-4, max 500 epochs,
-   OneCycleLR 1.5-epoch warmup, validation early stopping);
-6. multi-frame inference -> BJP/product-rule only.
+5. LRLPR-specific SVTRv2-AR schedule from the ICPR 2026 competition report:
+   OneCycleLR over 100 epochs with 10 warm-up epochs;
+6. controlled local optimizer scale (LR 1e-4, weight decay 0.05, batch 64)
+   and validation selection on the paper's 1k-track validation split;
+7. multi-frame inference -> BJP/product-rule only.
 
 For the AR decoder, BJP is applied with one shared fused prefix. At step t,
 every frame evaluates the next-token distribution conditioned on the same
@@ -77,6 +81,13 @@ calls are batched together, so this preserves the paper's batched multi-frame
 execution semantics without mixing different AR histories.
 
 ## Reproducibility rule for the revision run
+
+The ICPR 2026 competition report states that the OpenOCR team trained
+SVTRv2-AR with AdamW and OneCycleLR for 100 epochs including 10 warm-up
+epochs, used PARSeq augmentation, and monitored a 25-track validation holdout.
+For the controlled paper comparison we preserve only the architecture and the
+reported 100/10 scheduler shape while keeping the manuscript's common 19k/1k
+split, 32x96 input, and repository augmentation pipeline.
 
 Do not change the SVTRv2-AR config after the training run begins. The generated
 `config_snapshot.yaml`, training log, validation-selected checkpoint name,
