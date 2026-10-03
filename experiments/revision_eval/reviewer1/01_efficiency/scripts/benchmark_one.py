@@ -86,10 +86,18 @@ def select_checkpoint(path: Path) -> Path:
 
 
 def clean_state_dict(state_dict):
-    return {
-        str(key).replace("module.", ""): value
-        for key, value in state_dict.items()
-    }
+    cleaned = {}
+    for key, value in state_dict.items():
+        new_key = str(key).replace("module.", "")
+        # Legacy LISTER checkpoints used cntx_attn_blocks directly under the
+        # decoder. The current implementation wraps the identical blocks in
+        # LocalAttentionModule as cntx_module.attn_blocks.
+        new_key = new_key.replace(
+            "decoder.cntx_attn_blocks.",
+            "decoder.cntx_module.attn_blocks.",
+        )
+        cleaned[new_key] = value
+    return cleaned
 
 
 def state_dict_from_checkpoint(checkpoint):
@@ -507,10 +515,10 @@ def main() -> None:
     missing, unexpected = model.load_state_dict(state_dict, strict=False)
     del checkpoint, state_dict
 
-    if len(missing) > 25 or len(unexpected) > 25:
+    if missing or unexpected:
         raise RuntimeError(
-            "Large checkpoint/model mismatch: "
-            f"missing={len(missing)}, unexpected={len(unexpected)}"
+            "Checkpoint/model mismatch after compatibility remapping: "
+            f"missing={list(missing)}, unexpected={list(unexpected)}"
         )
 
     model = model.to(device)
