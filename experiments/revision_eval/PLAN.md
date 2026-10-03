@@ -126,7 +126,7 @@ the paper repository.
 - [x] Verify repeated inference produces byte-identical prediction CSVs
 - [x] Record evaluation reproducibility metadata in metrics JSON
 - [x] Record final hardware details used for reported efficiency experiments
-- [ ] Correct EMA description in manuscript
+- [x] Correct EMA description in manuscript
 - [ ] Consolidate audited training/architecture details into manuscript and response
 
 ## Editor-in-Chief
