@@ -72,105 +72,130 @@ reviewer2/04_statistics/results/
   analysis_manifest.json
 ```
 
-## 3. Evaluate the matched-epoch EMA ablation
+## 3. Evaluate the EMA ablation
 
-EMA must be isolated without changing checkpoint-selection epoch. The dedicated
-evaluator finds the EMA/ghost checkpoint already used for each full-model seed,
-then evaluates the student checkpoint from that exact same epoch.
+The EMA evaluator supports two checkpoint-selection protocols.
 
-First pull the latest revision tooling, then run a dry-run:
+### 3.1 Matched-final-epoch comparison
+
+This is the stricter causal comparison. It evaluates `student_weights/last.pth`
+and `ghost_weights/last.pth` from the same completed training run and requires
+the two checkpoints to report the same epoch.
+
+Dry-run:
 
 ```bash
 python3 \
   experiments/revision_eval/reviewer2/01_controlled_ablation/scripts/evaluate_ema_ablation.py \
+  --selection last \
   --dry-run \
   --strict
 ```
 
-For seeds 123 and 2026, the selected EMA epoch is read from the existing F1 ghost
-evaluation JSON and the matching student checkpoint is taken from the corresponding
-controlled full-model run.
-
-For seed 42, the script reads the epoch stored in the frozen submitted checkpoint
-and searches the historical submitted training trajectory:
-
-```text
-experiments/ablations/ce_sfb/ce_sfb_13-05-2026-final/student_weights/
-```
-
-If the submitted checkpoint does not expose an epoch, provide it explicitly:
+Evaluate:
 
 ```bash
 python3 \
   experiments/revision_eval/reviewer2/01_controlled_ablation/scripts/evaluate_ema_ablation.py \
-  --seed42-epoch EPOCH \
-  --dry-run \
-  --strict
-```
-
-If the historical student checkpoint is stored elsewhere, use either
-`--seed42-run-dir` or `--seed42-student-checkpoint`.
-
-Once the dry-run resolves all three matched pairs, evaluate them:
-
-```bash
-python3 \
-  experiments/revision_eval/reviewer2/01_controlled_ablation/scripts/evaluate_ema_ablation.py \
+  --selection last \
   --gpu 0 \
   --skip-existing \
   --keep-going \
   --strict
 ```
 
-The student outputs are written beside the existing EMA outputs:
-
-```text
-reviewer2/01_controlled_ablation/results/evaluations/
-  full/
-    seed42/
-      ghost/
-      student/
-    seed123/
-      ghost/
-      student/
-    seed2026/
-      ghost/
-      student/
-```
-
-The evaluator also records the exact EMA epoch and matching student checkpoint in:
+Outputs remain under the original path for backward compatibility:
 
 ```text
 reviewer2/01_controlled_ablation/results/ema_ablation/
+  evaluations/seed<seed>/{student,ghost}/
   ema_evaluation_manifest.json
 ```
 
+### 3.2 Best-vs-best comparison
+
+This is the practical validation-selection comparison and is the one intended for
+the primary EMA ablation table. Student and EMA checkpoints are selected
+independently using the highest validation accuracy encoded in the retained
+top-checkpoint filenames:
+
+```text
+student_weights/student_acc_<acc>_ep_<epoch>.pth
+ghost_weights/ghost_acc_<acc>_ep_<epoch>.pth
+```
+
+The best student and best EMA are therefore allowed to come from different epochs.
+Ties in validation accuracy are broken by later epoch.
+
+Dry-run:
+
+```bash
+python3 \
+  experiments/revision_eval/reviewer2/01_controlled_ablation/scripts/evaluate_ema_ablation.py \
+  --selection best \
+  --dry-run \
+  --strict
+```
+
+Evaluate:
+
+```bash
+python3 \
+  experiments/revision_eval/reviewer2/01_controlled_ablation/scripts/evaluate_ema_ablation.py \
+  --selection best \
+  --gpu 0 \
+  --skip-existing \
+  --keep-going \
+  --strict
+```
+
+Best-vs-best outputs are kept separate from the matched-final-epoch results:
+
+```text
+reviewer2/01_controlled_ablation/results/ema_ablation/best/
+  evaluations/seed<seed>/{student,ghost}/
+  ema_evaluation_manifest.json
+```
+
+For seed 42, both modes use the historical submitted training trajectory by
+default:
+
+```text
+experiments/ablations/ce_sfb/ce_sfb_13-05-2026-final/
+```
+
+Use `--seed42-run-dir` only if that historical run is stored elsewhere.
+
 ## 4. Run the EMA statistics
 
-After all nine matched student evaluations (3 seeds x F1/F3/F5) are complete:
+Matched-final-epoch statistics:
 
 ```bash
 python3 \
   experiments/revision_eval/reviewer2/04_statistics/scripts/analyze_ema_statistics.py \
+  --selection last \
   --strict
 ```
 
-This reports mean +/- sample standard deviation for EMA and student weights,
-per-seed paired bootstrap 95% confidence intervals, exact McNemar tests, and a
-hierarchical paired-bootstrap 95% confidence interval across seeds.
-
-For this analysis:
-
-```text
-delta = EMA exact-match accuracy - matched-epoch student exact-match accuracy
-```
-
-A positive delta therefore means EMA improves exact recognition.
-
-EMA outputs are written under:
+These remain under:
 
 ```text
 reviewer2/04_statistics/results/ema/
+```
+
+Best-vs-best statistics:
+
+```bash
+python3 \
+  experiments/revision_eval/reviewer2/04_statistics/scripts/analyze_ema_statistics.py \
+  --selection best \
+  --strict
+```
+
+These are written separately under:
+
+```text
+reviewer2/04_statistics/results/ema_best/
   ema_seed_summary.csv
   ema_paired_seed_tests.csv
   ema_hierarchical_bootstrap.csv
@@ -178,5 +203,19 @@ reviewer2/04_statistics/results/ema/
   ema_analysis_manifest.json
 ```
 
-The bootstrap RNG seed and number of bootstrap replicates are recorded in the
-analysis manifests so the reported intervals are reproducible.
+Both analyses report mean +/- sample standard deviation, paired track-level
+bootstrap 95% confidence intervals, exact McNemar tests, and hierarchical
+paired-bootstrap 95% confidence intervals across seeds.
+
+For both protocols:
+
+```text
+delta = EMA exact-match accuracy - student exact-match accuracy
+```
+
+A positive delta means EMA has higher exact recognition under that checkpoint
+selection protocol.
+
+The two protocols answer different questions and should not be conflated:
+`best` measures the practical effect after independent validation-based model
+selection, whereas `last` isolates EMA at a common training epoch.
