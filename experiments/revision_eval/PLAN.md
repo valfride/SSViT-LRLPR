@@ -61,7 +61,7 @@ the paper repository.
 - [x] Batch all frame-conditioned AR decoder calls under the shared-prefix BJP rule
 - [x] Lock and document the controlled SVTRv2-AR training protocol
 - [x] Align the manuscript training/fusion description with the implementation
-- [x] Smoke-test SVTRv2-AR model, teacher-forced loss, and F=1/F=3/F=5 BJP paths
+- [ ] Re-run SVTRv2-AR smoke test after final protocol/BJP lock
 - [ ] Train the controlled SVTRv2-AR baseline
 - [ ] Evaluate SVTRv2-AR at F=1/F=3/F=5 using BJP only
 - [ ] Add SVTRv2-AR to the computational-efficiency comparison
