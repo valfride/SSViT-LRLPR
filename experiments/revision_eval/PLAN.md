@@ -162,4 +162,5 @@ consistency issue appears during manuscript integration.
 - [ ] Produce unmarked revised manuscript
 - [ ] Produce optional highlighted-changes manuscript
 - [x] Source-level numerical/reference consistency audit
+- [x] Add reproducible clean/highlighted manuscript build helper
 - [ ] Final reproducibility/consistency audit
