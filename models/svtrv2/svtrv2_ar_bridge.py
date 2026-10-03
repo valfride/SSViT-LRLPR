@@ -8,12 +8,14 @@ from models.ote.nrtr_decoder import NRTRDecoder
 
 
 class SVTRv2ARBaseline(nn.Module):
-    """SVTRv2-style visual encoder with the OpenOCR NRTR autoregressive decoder.
+    """OpenOCR SVTRNet + NRTR autoregressive revision baseline.
 
-    The architecture follows OpenOCR's `configs/rec/nrtr/svtrv2_nrtr.yml`,
-    adapted only to the 32x96 LRLPR input and seven-character Brazilian plate
-    vocabulary.  Temporal inference uses AR-aware BJP/product-rule fusion:
-    every frame is conditioned on the same fused prefix at each decoding step.
+    Architecture source: Topdu/OpenOCR commit
+    1ccfc6ee6161f7133b192e16af3a9265273997ba,
+    `configs/rec/nrtr/svtrv2_nrtr.yml`.  The architecture is adapted to the
+    32x96 LRLPR input and seven-character Brazilian/Mercosur plate vocabulary.
+    Temporal inference uses AR-aware BJP/product-rule fusion: every frame is
+    conditioned on the same fused prefix at each decoding step.
     """
 
     def __init__(
@@ -131,21 +133,33 @@ class SVTRv2ARBaseline(nn.Module):
             device=flat_images.device,
         )
 
+        # The visual encoder already processes B*F frames in one batch. During
+        # AR decoding we also evaluate all F frame-conditioned next-token
+        # distributions in one decoder batch. This is mathematically identical
+        # to looping over frames, but matches the batched multi-frame protocol
+        # used elsewhere in the paper and avoids serial decoder overhead.
+        memory_bf = memory.reshape(
+            batch_size * frames,
+            token_count,
+            channels,
+        )
+
         for step in range(self.decode_steps):
             current_prefix = prefix[:, : step + 1]
-            frame_log_probs = []
+            prefix_bf = (
+                current_prefix[:, None, :]
+                .expand(batch_size, frames, step + 1)
+                .reshape(batch_size * frames, step + 1)
+            )
 
-            for frame_idx in range(frames):
-                frame_log_probs.append(
-                    self._next_token_log_probs(
-                        memory[:, frame_idx],
-                        current_prefix,
-                    )
-                )
+            frame_log_probs = self._next_token_log_probs(
+                memory_bf,
+                prefix_bf,
+            ).reshape(batch_size, frames, -1)
 
             # BJP/product rule in log space. Division by F is unnecessary for
             # argmax decoding and would not change the normalized distribution.
-            fused_log_probs = torch.stack(frame_log_probs, dim=1).sum(dim=1)
+            fused_log_probs = frame_log_probs.sum(dim=1)
             fused_steps.append(fused_log_probs.unsqueeze(1))
 
             next_token = fused_log_probs.argmax(dim=-1)
