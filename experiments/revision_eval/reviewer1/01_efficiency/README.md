@@ -1,0 +1,205 @@
+# Reviewer 1.1 — Computational efficiency
+
+This directory contains the common benchmarking protocol requested by Reviewer 1:
+
+> Add an efficiency comparison (#params, FLOPs, memory, per-frame and
+> per-tracklet latency) for your model and all baselines.
+
+The benchmark covers the proposed model and the six principal baselines used in
+the manuscript:
+
+- Ours
+- SVTRv2
+- OTE
+- LISTER
+- IGTR
+- CPPD
+- MDiff4STR
+
+## Protocol
+
+All models are benchmarked on the same physical GPU, in separate fresh Python
+processes, using their validation-selected checkpoint as resolved by the same
+filename convention used by `test.py` (highest `*acc_*.pth`, falling back to
+`last.pth`).
+
+The runner prepares one fixed set of real LRLPR-26 TEST_3k tracklets with the
+repository validation wrapper. The exact same preprocessed tensors are reused
+for every architecture.
+
+Default settings:
+
+- input size: 3 x 32 x 96;
+- real TEST_3k inputs;
+- 100 fixed tracklets;
+- 30 warm-up iterations;
+- 100 timed iterations;
+- batch size 1 for F=1;
+- the five F=5 observations are flattened to a batch of 5, matching `test.py`;
+- FP16 follows each model config when `--precision auto` is used;
+- channels-last CUDA input layout, matching `test.py`;
+- TF32 disabled explicitly;
+- performance mode uses `cudnn.benchmark=True`;
+- latency uses `time.perf_counter()` with CUDA synchronization immediately
+  before and after every timed inference;
+- each model runs in a fresh subprocess to avoid cross-model CUDA allocator
+  contamination.
+
+F=1 latency is one model forward pass.
+
+F=5 tracklet latency includes one batched forward pass for the five observations
+plus product-rule / sum-log-probability tensor fusion. This matches the paper's
+submitted temporal-processing structure. It excludes disk I/O, LMDB access,
+image resize/normalization, host-to-device transfer, final Python string
+conversion, and CTC collapse/string decoding.
+
+Peak GPU memory is the maximum PyTorch allocated memory during inference and
+includes model parameters and the active input tensor. F=1 and F=5 are measured
+separately after the latency pool is released.
+
+FLOPs are measured with the PyTorch 2.6
+`torch.utils.flop_counter.FlopCounterMode`. The output records the profiler
+convention and any failure explicitly. For models with data-dependent inference
+paths, FLOPs are measured over multiple real samples and summarized rather than
+silently assuming a fixed graph.
+
+## Checkpoint paths
+
+The default paths follow the repository's documented baseline layout:
+
+```text
+Ours     experiments/revision_eval/submitted_model/
+SVTRv2   experiments/baselines/SVTRV2_BASELINE_svtrv2/student_weights/
+OTE      experiments/baselines/OTE_BASELINE_ote/student_weights/
+LISTER   experiments/baselines/LISTER_BASELINE_lister/student_weights/
+IGTR     experiments/baselines/IGTR_BASELINE_igtr/student_weights/
+CPPD     experiments/baselines/CPPD_BASELINE_cppd/student_weights/
+MDiff4STR experiments/baselines/MDIFF_BASELINE_mdiff/student_weights/
+```
+
+Weights remain local/ignored; only benchmark results and manifests should be
+committed.
+
+## 1. Pull and syntax-check
+
+```bash
+git pull --ff-only
+
+python3 -m py_compile \
+  experiments/revision_eval/reviewer1/01_efficiency/scripts/benchmark_one.py \
+  experiments/revision_eval/reviewer1/01_efficiency/scripts/benchmark_efficiency.py
+```
+
+## 2. Preflight
+
+Inspect the planned commands without running GPU work:
+
+```bash
+python3 \
+  experiments/revision_eval/reviewer1/01_efficiency/scripts/benchmark_efficiency.py \
+  --gpu 0 \
+  --dry-run \
+  --keep-going
+```
+
+The dry-run checks the expected config/checkpoint locations. The real input cache
+is not created in dry-run mode.
+
+## 3. Smoke-test the proposed model
+
+Run the proposed model first with a short timing loop:
+
+```bash
+python3 \
+  experiments/revision_eval/reviewer1/01_efficiency/scripts/benchmark_efficiency.py \
+  --models ours \
+  --gpu 0 \
+  --sample-count 20 \
+  --warmup 10 \
+  --iterations 20 \
+  --flop-samples 3 \
+  --rebuild-input-cache \
+  --strict
+```
+
+This also creates the reusable real-input cache under:
+
+```text
+experiments/revision_eval/reviewer1/01_efficiency/results/benchmark_inputs.pt
+```
+
+The `.pt` cache is a generated local artifact and must not be committed.
+
+## 4. Publication run
+
+After the smoke test succeeds:
+
+```bash
+python3 \
+  experiments/revision_eval/reviewer1/01_efficiency/scripts/benchmark_efficiency.py \
+  --gpu 0 \
+  --sample-count 100 \
+  --warmup 30 \
+  --iterations 100 \
+  --flop-samples 10 \
+  --rebuild-input-cache \
+  --keep-going \
+  --strict
+```
+
+If GPU 0 is not the GPU intended for the paper, replace `--gpu 0` with the
+chosen physical device and use that same GPU for every model.
+
+Do not mix results from different GPU models in the final table.
+
+## Outputs
+
+Per-model machine-readable results:
+
+```text
+results/
+  ours.json
+  svtrv2.json
+  ote.json
+  lister.json
+  igtr.json
+  cppd.json
+  mdiff.json
+```
+
+Aggregated outputs:
+
+```text
+results/efficiency_summary.csv
+results/efficiency_summary.md
+results/benchmark_manifest.json
+results/benchmark_inputs.json
+```
+
+The generated `benchmark_inputs.json` records dataset provenance, tensor shape,
+track selection, and the SHA-256 of the local tensor cache.
+
+## Before committing results
+
+Verify that no model weights or generated input cache are staged:
+
+```bash
+git status --short
+
+git diff --cached --name-only | grep -E '\.(pth|pt|ckpt)$'
+```
+
+The second command should print nothing.
+
+Then stage only the text/JSON/CSV benchmark evidence:
+
+```bash
+git add \
+  experiments/revision_eval/reviewer1/01_efficiency/results/*.json \
+  experiments/revision_eval/reviewer1/01_efficiency/results/*.csv \
+  experiments/revision_eval/reviewer1/01_efficiency/results/*.md
+
+git status --short
+```
+
+Do not add `benchmark_inputs.pt`.
