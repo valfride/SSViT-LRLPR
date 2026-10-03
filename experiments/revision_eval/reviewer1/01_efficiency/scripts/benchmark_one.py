@@ -580,16 +580,18 @@ def main() -> None:
         )
 
     def f5_sequential_call(x):
-        frame_logits = []
+        # Measure five true batch-size-one forwards. Do not concatenate/fuse
+        # here: decoders such as LISTER can emit a data-dependent number of
+        # output steps when each frame is decoded independently, so forcing a
+        # position-wise fusion would either fail or require an artificial
+        # padding/alignment rule. The actual paper tracklet pipeline is covered
+        # by f5_batched_call(), which includes product-rule fusion.
+        outputs = []
         for frame_index in range(5):
-            logits = forward_logits(x[frame_index : frame_index + 1])
-            frame_logits.append(logits)
-        logits = torch.cat(frame_logits, dim=0)
-        return product_fuse(
-            logits,
-            frames=5,
-            probability_output=probability_output,
-        )
+            outputs.append(
+                forward_logits(x[frame_index : frame_index + 1])
+            )
+        return outputs
 
     print(
         "Output interpretation: "
@@ -722,6 +724,10 @@ def main() -> None:
             "f1": f1_flops,
             "f5_batched_tracklet_with_product_fusion": f5_batched_flops,
             "f5_sequential_tracklet_with_product_fusion": f5_sequential_flops,
+            "f5_sequential_note": (
+                "Legacy key name retained for compatibility; this measurement is "
+                "five serial batch-size-one forwards without temporal fusion."
+            ),
         },
         "latency_ms": {
             "f1_forward": f1_latency,
@@ -758,8 +764,9 @@ def main() -> None:
                 "sum-log-probability tensor fusion; matches test.py evaluation batching"
             ),
             "f5_sequential_includes": (
-                "five consecutive batch-size-one network forwards plus product-rule / "
-                "sum-log-probability tensor fusion; deployment-oriented tracklet latency"
+                "five consecutive batch-size-one network forwards; no cross-frame "
+                "fusion is applied because independently decoded variable-length "
+                "recognizers (e.g. LISTER) need an explicit alignment/padding rule"
             ),
             "channels_last": device.type == "cuda",
             "deterministic": bool(args.deterministic),
