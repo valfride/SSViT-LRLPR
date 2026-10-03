@@ -350,20 +350,20 @@ def aggregate_results(
         "",
         (
             "F=1 latency is a single-frame model forward. The primary F=5 "
-            "tracklet latency is deployment-oriented: five consecutive batch-size-one "
-            "forwards plus product-rule / sum-log-probability fusion. A separate "
-            "batched F=5 latency is also reported because test.py evaluates the five "
-            "observations together as a batch of five. Disk I/O, preprocessing, "
-            "host-to-device transfer, and final string/CTC decoding are excluded."
+            "tracklet latency follows test.py: the five observations are processed "
+            "as one batch of five and product-rule / sum-log-probability fusion is "
+            "included. A supplementary serial-five-frame latency reports five "
+            "consecutive batch-size-one forwards without cross-frame fusion. Disk "
+            "I/O, preprocessing, host-to-device transfer, and final string/CTC "
+            "decoding are excluded."
         ),
         "",
         (
             "| Model | Params (M) | F1 GFLOPs | F1 latency (ms) | "
-            "F5 seq. GFLOPs | F5 seq. latency (ms) | "
-            "F5 batched latency (ms) | F1 peak mem (MiB) | "
-            "F5 seq. peak mem (MiB) |"
+            "F5 GFLOPs | F5 tracklet latency (ms) | "
+            "F5 peak mem (MiB) | Serial 5-frame latency (ms) |"
         ),
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
 
     for row in rows:
@@ -393,11 +393,10 @@ def aggregate_results(
                     fmt(row["params_m"]),
                     fmt(row["f1_gflops_mean"]),
                     f1_latency,
-                    fmt(row["f5_sequential_gflops_mean"]),
-                    f5_sequential_latency,
+                    fmt(row["f5_batched_gflops_mean"]),
                     f5_batched_latency,
-                    fmt(row["f1_peak_memory_mib"], digits=1),
-                    fmt(row["f5_sequential_peak_memory_mib"], digits=1),
+                    fmt(row["f5_batched_peak_memory_mib"], digits=1),
+                    f5_sequential_latency,
                 ]
             )
             + " |"
