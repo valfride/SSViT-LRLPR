@@ -20,20 +20,22 @@ revision config.
 ## Controlled training protocol
 
 The architecture and AR loss follow the pinned OpenOCR implementation, while
-training is deliberately run inside the same LRLPR baseline pipeline used for
-the other paper baselines. The locked protocol is:
+training is deliberately run inside the same controlled LRLPR data pipeline
+used for the paper baselines. The locked protocol is:
 
-- training from scratch on the same LRLPR train/validation split;
+- training from scratch on the same 19k/1k LRLPR train/validation split;
 - 32x96 LR inputs and the same repository augmentation wrapper;
 - AdamW with learning rate 1e-4 and weight decay 0.05;
-- OneCycleLR with a 1.5-epoch warmup;
+- OneCycleLR over 100 epochs with a 10-epoch warmup;
 - batch size 64;
-- at most 500 epochs, with early stopping after 25 validation epochs without
-  improvement;
+- validation-selected checkpoint over the 100-epoch budget;
 - no EMA, external pretraining, or external training data.
 
-This is a controlled LRLPR retraining of the OpenOCR architecture, not a
-reproduction of OpenOCR's original Union14M training recipe.
+The 100-epoch/10-warmup schedule follows the LRLPR-specific SVTRv2-AR
+training description in the ICPR 2026 competition report. We intentionally
+retain the paper's common LRLPR split, input size, and augmentation wrapper
+instead of reproducing the competition team's 25-track validation holdout,
+PARSeq augmentation, external-data variants, or pretrained variants.
 
 ## Temporal fusion policy
 
