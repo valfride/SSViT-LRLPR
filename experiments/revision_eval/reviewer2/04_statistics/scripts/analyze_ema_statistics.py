@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Statistical analysis for the matched-epoch EMA-versus-student ablation."""
+"""Statistical analysis for EMA-versus-student ablations.
+
+Supports two checkpoint-selection protocols:
+  last: same-final-epoch student versus EMA;
+  best: independently validation-selected best student versus best EMA.
+"""
 
 from __future__ import annotations
 
@@ -127,17 +132,29 @@ def fmt(value, digits=3):
     return f"{float(value):.{digits}f}"
 
 
+def default_paths(root: Path, selection: str):
+    revision = root / "experiments/revision_eval/reviewer2/01_controlled_ablation"
+    stats = root / "experiments/revision_eval/reviewer2/04_statistics/results"
+    if selection == "last":
+        return revision / "results/ema_ablation/evaluations", stats / "ema"
+    return revision / "results/ema_ablation/best/evaluations", stats / "ema_best"
+
+
 def main() -> None:
     root = repo_root()
-    evaluation_root_default = (
-        root
-        / "experiments/revision_eval/reviewer2/01_controlled_ablation/results/ema_ablation/evaluations"
-    )
-    output_default = root / "experiments/revision_eval/reviewer2/04_statistics/results/ema"
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--evaluation-root", default=str(evaluation_root_default))
-    parser.add_argument("--output-dir", default=str(output_default))
+    parser.add_argument(
+        "--selection",
+        choices=("last", "best"),
+        default="last",
+        help=(
+            "'last' analyzes the matched-final-epoch comparison; 'best' analyzes "
+            "independently validation-selected best student and EMA checkpoints."
+        ),
+    )
+    parser.add_argument("--evaluation-root", default=None)
+    parser.add_argument("--output-dir", default=None)
     parser.add_argument("--seeds", nargs="+", type=int, default=list(DEFAULT_SEEDS))
     parser.add_argument("--frames", nargs="+", type=int, default=list(DEFAULT_FRAMES))
     parser.add_argument("--fusion", default="bayes")
@@ -149,8 +166,9 @@ def main() -> None:
     if args.bootstrap_samples < 1000:
         parser.error("--bootstrap-samples must be at least 1000")
 
-    evaluation_root = Path(args.evaluation_root)
-    output_dir = Path(args.output_dir)
+    default_eval, default_output = default_paths(root, args.selection)
+    evaluation_root = Path(args.evaluation_root) if args.evaluation_root else default_eval
+    output_dir = Path(args.output_dir) if args.output_dir else default_output
     rng = np.random.default_rng(args.random_seed)
 
     metrics_by_source = {"ghost": {}, "student": {}}
@@ -186,6 +204,7 @@ def main() -> None:
                 continue
 
             row = {
+                "selection": args.selection,
                 "weight_source": source,
                 "frames": frames,
                 "n_seeds": len(available),
@@ -199,7 +218,7 @@ def main() -> None:
                 )
             seed_summary.append(row)
 
-    summary_fields = ["weight_source", "frames", "n_seeds", "seeds"]
+    summary_fields = ["selection", "weight_source", "frames", "n_seeds", "seeds"]
     for metric in METRICS:
         summary_fields.extend([f"{metric}_mean", f"{metric}_std"])
     write_csv(output_dir / "ema_seed_summary.csv", seed_summary, summary_fields)
@@ -213,12 +232,8 @@ def main() -> None:
 
         for seed in args.seeds:
             stem = f"F{frames}_{args.fusion}_predictions.csv"
-            ema_path = (
-                evaluation_root / f"seed{seed}" / "ghost" / stem
-            )
-            student_path = (
-                evaluation_root / f"seed{seed}" / "student" / stem
-            )
+            ema_path = evaluation_root / f"seed{seed}" / "ghost" / stem
+            student_path = evaluation_root / f"seed{seed}" / "student" / stem
 
             if not ema_path.is_file() or not student_path.is_file():
                 if args.strict:
@@ -274,6 +289,7 @@ def main() -> None:
             seed_deltas.append(delta_pp)
             per_seed.append(
                 {
+                    "selection": args.selection,
                     "seed": seed,
                     "frames": frames,
                     "n_tracks": total,
@@ -295,6 +311,7 @@ def main() -> None:
             )
             hierarchical.append(
                 {
+                    "selection": args.selection,
                     "frames": frames,
                     "n_seeds": len(discordance_by_seed),
                     "seeds": ",".join(str(seed) for seed in sorted(discordance_by_seed)),
@@ -310,6 +327,7 @@ def main() -> None:
             )
 
     per_seed_fields = [
+        "selection",
         "seed",
         "frames",
         "n_tracks",
@@ -324,6 +342,7 @@ def main() -> None:
     write_csv(output_dir / "ema_paired_seed_tests.csv", per_seed, per_seed_fields)
 
     hierarchical_fields = [
+        "selection",
         "frames",
         "n_seeds",
         "seeds",
@@ -338,10 +357,25 @@ def main() -> None:
         hierarchical_fields,
     )
 
+    if args.selection == "last":
+        title = "EMA-versus-student statistical summary (matched final epoch)"
+        interpretation = (
+            "Positive deltas mean the matched-final-epoch EMA model is more "
+            "accurate than the student."
+        )
+        purpose = "same-final-epoch EMA versus student ablation"
+    else:
+        title = "EMA-versus-student statistical summary (best vs best)"
+        interpretation = (
+            "Positive deltas mean the independently validation-selected best EMA "
+            "checkpoint is more accurate than the independently selected best student."
+        )
+        purpose = "independently validation-selected best EMA versus best student ablation"
+
     lines = [
-        "# EMA-versus-student statistical summary",
+        f"# {title}",
         "",
-        "Positive deltas mean the matched-epoch EMA model is more accurate than the student.",
+        interpretation,
         "",
         "## Across-seed exact-match accuracy",
         "",
@@ -386,8 +420,9 @@ def main() -> None:
     (output_dir / "ema_summary.md").write_text("\n".join(lines), encoding="utf-8")
 
     manifest = {
-        "schema_version": 1,
-        "purpose": "matched-epoch EMA versus student ablation",
+        "schema_version": 2,
+        "purpose": purpose,
+        "selection": args.selection,
         "evaluation_root": str(evaluation_root),
         "fusion": args.fusion,
         "requested_seeds": args.seeds,
@@ -408,6 +443,7 @@ def main() -> None:
     )
 
     print(f"Wrote EMA statistical analysis to: {output_dir}")
+    print(f"Selection protocol: {args.selection}")
     print(f"Across-seed rows: {len(seed_summary)}")
     print(f"Per-seed paired tests: {len(per_seed)}")
     print(f"Hierarchical comparisons: {len(hierarchical)}")
