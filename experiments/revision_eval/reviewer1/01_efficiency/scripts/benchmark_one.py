@@ -642,6 +642,29 @@ def main() -> None:
             "  F1 FLOPs: "
             f"{f1_flops['gflops']['mean']:.3f} GFLOPs"
         )
+    else:
+        print(
+            "  F1 FLOPs: unavailable"
+            + (
+                f" ({f1_flops.get('error')})"
+                if f1_flops.get("error")
+                else ""
+            )
+        )
+    if f5_flops.get("gflops"):
+        print(
+            "  F5 FLOPs: "
+            f"{f5_flops['gflops']['mean']:.3f} GFLOPs"
+        )
+    else:
+        print(
+            "  F5 FLOPs: unavailable"
+            + (
+                f" ({f5_flops.get('error')})"
+                if f5_flops.get("error")
+                else ""
+            )
+        )
     print(
         "  F1 latency: "
         f"{f1_latency['mean']:.3f} +/- {f1_latency['std']:.3f} ms"
