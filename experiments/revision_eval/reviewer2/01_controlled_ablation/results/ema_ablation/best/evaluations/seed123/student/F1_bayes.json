@@ -7,6 +7,11 @@
   "swa": false,
   "num_swa": 1,
   "cls_loss": "CE",
+  "reproducibility": {
+    "seed": 42,
+    "cudnn_benchmark": false,
+    "cudnn_deterministic": true
+  },
   "config": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/full_seed123.yaml",
   "checkpoint_directory": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/ema_ablation/best/staged_checkpoints/seed123/student",
   "checkpoint_files": [
@@ -23,8 +28,8 @@
     "cer_percent": 11.961904761904762,
     "edit_errors": 2512,
     "ground_truth_characters": 21000,
-    "partial_6_percent": 79.46666666666667,
-    "partial_6_correct": 2384,
+    "partial_6_percent": 79.5,
+    "partial_6_correct": 2385,
     "partial_5_percent": 89.26666666666667,
     "partial_5_correct": 2678,
     "old_brazilian_accuracy_percent": 38.166666666666664,
@@ -33,8 +38,8 @@
     "mercosur_accuracy_percent": 63.333333333333336,
     "mercosur_correct": 1520,
     "mercosur_total": 2400,
-    "mean_confidence_correct": 0.9798880103217589,
-    "mean_confidence_incorrect": 0.8425614871392783,
-    "confidence_gap": 0.13732652318248062
+    "mean_confidence_correct": 0.9798842232469746,
+    "mean_confidence_incorrect": 0.842568974740495,
+    "confidence_gap": 0.13731524850647958
   }
 }

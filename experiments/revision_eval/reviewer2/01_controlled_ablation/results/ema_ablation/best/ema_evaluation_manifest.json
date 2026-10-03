@@ -46,7 +46,6 @@
         "5",
         "--fusions",
         "bayes",
-        "--skip-existing",
         "--keep-going"
       ],
       "student_return_code": 0,
@@ -69,7 +68,6 @@
         "5",
         "--fusions",
         "bayes",
-        "--skip-existing",
         "--keep-going"
       ],
       "ghost_return_code": 0,
@@ -106,7 +104,6 @@
         "5",
         "--fusions",
         "bayes",
-        "--skip-existing",
         "--keep-going"
       ],
       "student_return_code": 0,
@@ -129,7 +126,6 @@
         "5",
         "--fusions",
         "bayes",
-        "--skip-existing",
         "--keep-going"
       ],
       "ghost_return_code": 0,
@@ -166,7 +162,6 @@
         "5",
         "--fusions",
         "bayes",
-        "--skip-existing",
         "--keep-going"
       ],
       "student_return_code": 0,
@@ -189,7 +184,6 @@
         "5",
         "--fusions",
         "bayes",
-        "--skip-existing",
         "--keep-going"
       ],
       "ghost_return_code": 0,

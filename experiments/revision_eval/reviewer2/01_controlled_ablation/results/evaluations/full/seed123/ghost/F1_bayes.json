@@ -7,6 +7,11 @@
   "swa": false,
   "num_swa": 1,
   "cls_loss": "CE",
+  "reproducibility": {
+    "seed": 42,
+    "cudnn_benchmark": false,
+    "cudnn_deterministic": true
+  },
   "config": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/configs/full_seed123.yaml",
   "checkpoint_directory": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/checkpoints/full_seed123/ghost_weights",
   "checkpoint_files": [
@@ -23,8 +28,8 @@
     "cer_percent": 11.733333333333333,
     "edit_errors": 2464,
     "ground_truth_characters": 21000,
-    "partial_6_percent": 79.76666666666667,
-    "partial_6_correct": 2393,
+    "partial_6_percent": 79.8,
+    "partial_6_correct": 2394,
     "partial_5_percent": 89.56666666666666,
     "partial_5_correct": 2687,
     "old_brazilian_accuracy_percent": 40.333333333333336,
@@ -33,8 +38,8 @@
     "mercosur_accuracy_percent": 64.125,
     "mercosur_correct": 1539,
     "mercosur_total": 2400,
-    "mean_confidence_correct": 0.9772717633546891,
-    "mean_confidence_incorrect": 0.8394125781181107,
-    "confidence_gap": 0.13785918523657847
+    "mean_confidence_correct": 0.9772714627350025,
+    "mean_confidence_incorrect": 0.8394016836822571,
+    "confidence_gap": 0.13786977905274544
   }
 }

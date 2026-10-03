@@ -7,6 +7,11 @@
   "swa": false,
   "num_swa": 1,
   "cls_loss": "CE",
+  "reproducibility": {
+    "seed": 42,
+    "cudnn_benchmark": false,
+    "cudnn_deterministic": true
+  },
   "config": "/home/vwnascimento/doc2025/project1/experiments/ablations/ce_sfb/ce_sfb_13-05-2026-final/config_snapshot.yaml",
   "checkpoint_directory": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/ema_ablation/best/staged_checkpoints/seed42/ghost",
   "checkpoint_files": [
@@ -33,8 +38,8 @@
     "mercosur_accuracy_percent": 83.91666666666667,
     "mercosur_correct": 2014,
     "mercosur_total": 2400,
-    "mean_confidence_correct": 0.9974118512692308,
-    "mean_confidence_incorrect": 0.9490386752538015,
-    "confidence_gap": 0.04837317601542934
+    "mean_confidence_correct": 0.9974123823680968,
+    "mean_confidence_incorrect": 0.9490271716736932,
+    "confidence_gap": 0.0483852106944036
   }
 }
