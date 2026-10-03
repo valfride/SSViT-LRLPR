@@ -253,41 +253,142 @@ def measure_peak_memory(fn, input_tensor, device):
     }
 
 
-def profile_flops(fn, pool, sample_count: int, device):
+def _deform_conv_manual_flops(model, accumulator):
+    """Register hooks that estimate convolution MAC FLOPs for DeformConv2d.
+
+    torch.profiler does not report FLOPs for torchvision's custom deformable
+    convolution operator on the tested stack. We therefore supplement the
+    profiler with the standard convolution arithmetic count for this operator.
+    Bilinear sampling/interpolation overhead is not included, matching the
+    conventional MAC/FLOP accounting used by common model profilers.
+    """
     try:
-        from torch.utils.flop_counter import FlopCounterMode
+        from torchvision.ops import DeformConv2d
+    except Exception:
+        return []
+
+    handles = []
+
+    def hook(module, inputs, output):
+        x = inputs[0]
+        if not torch.is_tensor(x) or not torch.is_tensor(output):
+            return
+        batch = int(output.shape[0])
+        out_channels = int(output.shape[1])
+        out_h = int(output.shape[-2])
+        out_w = int(output.shape[-1])
+        in_channels = int(x.shape[1])
+        groups = int(getattr(module, "groups", 1))
+        kernel_size = getattr(module, "kernel_size", (1, 1))
+        if isinstance(kernel_size, int):
+            kernel_h = kernel_w = kernel_size
+        else:
+            kernel_h, kernel_w = kernel_size
+        macs = (
+            batch
+            * out_channels
+            * out_h
+            * out_w
+            * (in_channels // groups)
+            * int(kernel_h)
+            * int(kernel_w)
+        )
+        # Convention: one multiply + one add = two FLOPs.
+        accumulator["flops"] += 2.0 * float(macs)
+        accumulator["calls"] += 1
+
+    for module in model.modules():
+        if isinstance(module, DeformConv2d):
+            handles.append(module.register_forward_hook(hook))
+    return handles
+
+
+def profile_flops(fn, pool, sample_count: int, device, model):
+    """Profile FLOPs with one consistent PyTorch-profiler backend.
+
+    PyTorch's experimental FlopCounterMode currently fails on the proposed
+    model's torchvision DeformConv2d path in the tested environment. To keep
+    all architectures on the same accounting backend, use torch.profiler with
+    with_flops=True for every model and supplement unsupported DeformConv2d
+    convolution arithmetic analytically.
+    """
+    try:
+        from torch.profiler import ProfilerActivity, profile
     except Exception as exc:
         return {
             "available": False,
-            "error": f"FlopCounterMode unavailable: {exc}",
+            "error": f"torch.profiler unavailable: {exc}",
             "gflops": None,
         }
 
     values = []
+    deform_counts = []
     try:
         count = min(sample_count, len(pool))
-        with torch.inference_mode():
+        activities = [ProfilerActivity.CPU]
+        if device.type == "cuda":
+            activities.append(ProfilerActivity.CUDA)
+
+        with torch.no_grad():
             for index in range(count):
-                synchronize(device)
-                with FlopCounterMode(display=False) as counter:
-                    output = fn(pool[index])
-                synchronize(device)
-                values.append(float(counter.get_total_flops()) / 1.0e9)
-                del output
+                manual_deform = {"flops": 0.0, "calls": 0}
+                handles = _deform_conv_manual_flops(model, manual_deform)
+                try:
+                    synchronize(device)
+                    with profile(
+                        activities=activities,
+                        record_shapes=True,
+                        with_flops=True,
+                    ) as prof:
+                        output = fn(pool[index])
+                        synchronize(device)
+
+                    profiler_flops = 0.0
+                    profiler_deform_flops = 0.0
+                    for event in prof.key_averages():
+                        event_flops = float(getattr(event, "flops", 0) or 0)
+                        profiler_flops += event_flops
+                        if "deform" in str(event.key).lower():
+                            profiler_deform_flops += event_flops
+
+                    # Add manual deformable-convolution arithmetic only when
+                    # the profiler itself did not assign FLOPs to the custom op.
+                    supplemental = (
+                        manual_deform["flops"]
+                        if profiler_deform_flops == 0.0
+                        else 0.0
+                    )
+                    values.append((profiler_flops + supplemental) / 1.0e9)
+                    deform_counts.append(
+                        {
+                            "calls": int(manual_deform["calls"]),
+                            "supplemental_gflops": supplemental / 1.0e9,
+                        }
+                    )
+                    del output, prof
+                finally:
+                    for handle in handles:
+                        handle.remove()
+
         return {
             "available": True,
             "error": None,
             "gflops": summarize(values),
+            "backend": "torch.profiler.profile(with_flops=True)",
             "convention": (
-                "PyTorch torch.utils.flop_counter; operation coverage follows "
-                "the installed PyTorch version"
+                "multiply and add are counted as two FLOPs; PyTorch profiler "
+                "covers supported convolution/matrix-multiplication operators; "
+                "torchvision DeformConv2d convolution arithmetic is supplemented "
+                "analytically when the profiler reports zero FLOPs for that custom op"
             ),
+            "deform_conv_supplement": deform_counts,
         }
     except Exception as exc:
         return {
             "available": False,
             "error": f"{type(exc).__name__}: {exc}",
             "gflops": None,
+            "backend": "torch.profiler.profile(with_flops=True)",
         }
 
 
@@ -470,8 +571,20 @@ def main() -> None:
     def f1_call(x):
         return forward_logits(x)
 
-    def f5_call(x):
+    def f5_batched_call(x):
         logits = forward_logits(x)
+        return product_fuse(
+            logits,
+            frames=5,
+            probability_output=probability_output,
+        )
+
+    def f5_sequential_call(x):
+        frame_logits = []
+        for frame_index in range(5):
+            logits = forward_logits(x[frame_index : frame_index + 1])
+            frame_logits.append(logits)
+        logits = torch.cat(frame_logits, dim=0)
         return product_fuse(
             logits,
             frames=5,
@@ -491,8 +604,15 @@ def main() -> None:
         args.iterations,
         device,
     )
-    f5_latency = measure_latency(
-        f5_call,
+    f5_batched_latency = measure_latency(
+        f5_batched_call,
+        f5_pool,
+        args.warmup,
+        args.iterations,
+        device,
+    )
+    f5_sequential_latency = measure_latency(
+        f5_sequential_call,
         f5_pool,
         args.warmup,
         args.iterations,
@@ -504,12 +624,21 @@ def main() -> None:
         f1_pool,
         args.flop_samples,
         device,
+        model,
     )
-    f5_flops = profile_flops(
-        f5_call,
+    f5_batched_flops = profile_flops(
+        f5_batched_call,
         f5_pool,
         args.flop_samples,
         device,
+        model,
+    )
+    f5_sequential_flops = profile_flops(
+        f5_sequential_call,
+        f5_pool,
+        args.flop_samples,
+        device,
+        model,
     )
 
     # Free the latency pools before peak-memory measurement. Peak-memory runs use
@@ -536,7 +665,18 @@ def main() -> None:
         f5_memory_input = f5_memory_input.contiguous(
             memory_format=torch.channels_last
         )
-    f5_memory = measure_peak_memory(f5_call, f5_memory_input, device)
+    f5_batched_memory = measure_peak_memory(
+        f5_batched_call,
+        f5_memory_input,
+        device,
+    )
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+    f5_sequential_memory = measure_peak_memory(
+        f5_sequential_call,
+        f5_memory_input,
+        device,
+    )
     del f5_memory_input
 
     if device.type == "cuda":
@@ -580,15 +720,18 @@ def main() -> None:
         "probe_output_shape_f5_flat_batch": probe_shape,
         "flops": {
             "f1": f1_flops,
-            "f5_tracklet_with_product_fusion": f5_flops,
+            "f5_batched_tracklet_with_product_fusion": f5_batched_flops,
+            "f5_sequential_tracklet_with_product_fusion": f5_sequential_flops,
         },
         "latency_ms": {
             "f1_forward": f1_latency,
-            "f5_tracklet_forward_plus_product_fusion": f5_latency,
+            "f5_batched_tracklet_forward_plus_product_fusion": f5_batched_latency,
+            "f5_sequential_tracklet_forward_plus_product_fusion": f5_sequential_latency,
         },
         "peak_memory": {
             "f1": f1_memory,
-            "f5_tracklet_forward_plus_product_fusion": f5_memory,
+            "f5_batched_tracklet_forward_plus_product_fusion": f5_batched_memory,
+            "f5_sequential_tracklet_forward_plus_product_fusion": f5_sequential_memory,
         },
         "protocol": {
             "warmup_iterations": args.warmup,
@@ -610,9 +753,13 @@ def main() -> None:
                 "final Python string conversion",
                 "CTC collapse/string decoding",
             ],
-            "f5_includes": (
-                "network forward for five frames plus product-rule / "
-                "sum-log-probability tensor fusion"
+            "f5_batched_includes": (
+                "one network forward on a batch of five frames plus product-rule / "
+                "sum-log-probability tensor fusion; matches test.py evaluation batching"
+            ),
+            "f5_sequential_includes": (
+                "five consecutive batch-size-one network forwards plus product-rule / "
+                "sum-log-probability tensor fusion; deployment-oriented tracklet latency"
             ),
             "channels_last": device.type == "cuda",
             "deterministic": bool(args.deterministic),
@@ -671,17 +818,31 @@ def main() -> None:
                 else ""
             )
         )
-    if f5_flops.get("gflops"):
+    if f5_batched_flops.get("gflops"):
         print(
-            "  F5 FLOPs: "
-            f"{f5_flops['gflops']['mean']:.3f} GFLOPs"
+            "  F5 batched FLOPs: "
+            f"{f5_batched_flops['gflops']['mean']:.3f} GFLOPs"
         )
     else:
         print(
-            "  F5 FLOPs: unavailable"
+            "  F5 batched FLOPs: unavailable"
             + (
-                f" ({f5_flops.get('error')})"
-                if f5_flops.get("error")
+                f" ({f5_batched_flops.get('error')})"
+                if f5_batched_flops.get("error")
+                else ""
+            )
+        )
+    if f5_sequential_flops.get("gflops"):
+        print(
+            "  F5 sequential FLOPs: "
+            f"{f5_sequential_flops['gflops']['mean']:.3f} GFLOPs"
+        )
+    else:
+        print(
+            "  F5 sequential FLOPs: unavailable"
+            + (
+                f" ({f5_sequential_flops.get('error')})"
+                if f5_sequential_flops.get("error")
                 else ""
             )
         )
@@ -690,13 +851,23 @@ def main() -> None:
         f"{f1_latency['mean']:.3f} +/- {f1_latency['std']:.3f} ms"
     )
     print(
-        "  F5 latency: "
-        f"{f5_latency['mean']:.3f} +/- {f5_latency['std']:.3f} ms"
+        "  F5 batched latency: "
+        f"{f5_batched_latency['mean']:.3f} +/- "
+        f"{f5_batched_latency['std']:.3f} ms"
     )
-    if f5_memory["peak_allocated_mib"] is not None:
+    print(
+        "  F5 sequential latency: "
+        f"{f5_sequential_latency['mean']:.3f} +/- "
+        f"{f5_sequential_latency['std']:.3f} ms"
+    )
+    if f5_batched_memory["peak_allocated_mib"] is not None:
         print(
-            "  F5 peak memory: "
-            f"{f5_memory['peak_allocated_mib']:.1f} MiB"
+            "  F5 batched peak memory: "
+            f"{f5_batched_memory['peak_allocated_mib']:.1f} MiB"
+        )
+        print(
+            "  F5 sequential peak memory: "
+            f"{f5_sequential_memory['peak_allocated_mib']:.1f} MiB"
         )
     print(f"  Saved: {output_path}")
 
