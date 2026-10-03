@@ -18,13 +18,16 @@ the paper repository.
 
 ### R1.1 — Computational efficiency
 - [x] Define one common benchmarking protocol and hardware/software conditions
-- [ ] Parameter count
-- [ ] FLOPs/MACs
-- [ ] Peak inference GPU memory
-- [ ] F=1 per-frame latency
-- [ ] F=5 per-tracklet latency
-- [ ] Run the same protocol on all principal baselines
-- [ ] Prepare efficiency table and interpretation
+- [x] Parameter count
+- [x] FLOPs/MACs
+- [x] Peak inference GPU memory
+- [x] F=1 per-frame latency
+- [x] F=5 per-tracklet latency
+- [x] Run the same protocol on all principal baselines
+- [x] Prepare machine-readable and Markdown efficiency tables
+- [x] Verify strict checkpoint loading for all seven models
+- [x] Record Quadro RTX 8000 / PyTorch 2.6.0+cu124 / CUDA 12.4 conditions
+- [ ] Write efficiency interpretation into manuscript/response
 
 ### R1.2 — Cross-dataset evaluation
 - [ ] Select one compatible external dataset
@@ -114,7 +117,7 @@ the paper repository.
 - [x] Make evaluation deterministic (cuDNN benchmark off; deterministic kernels on)
 - [x] Verify repeated inference produces byte-identical prediction CSVs
 - [x] Record evaluation reproducibility metadata in metrics JSON
-- [ ] Record final hardware details used for reported efficiency experiments
+- [x] Record final hardware details used for reported efficiency experiments
 - [ ] Correct EMA description in manuscript
 - [ ] Consolidate audited training/architecture details into manuscript and response
 
@@ -125,7 +128,7 @@ the paper repository.
 - [ ] Mention the added OJ-ITS literature explicitly in the response letter
 
 ## Remaining experiment priority
-1. [ ] R1.1 computational-efficiency benchmark for proposed model and principal baselines
+1. [x] R1.1 computational-efficiency benchmark for proposed model and principal baselines
 2. [ ] R1.2 one external zero-shot cross-dataset evaluation
 3. [ ] R1.4 SVTRv2-AR feasibility check and, if fair/compatible, baseline experiment
 4. [ ] Freeze all remaining experimental tables before manuscript editing
