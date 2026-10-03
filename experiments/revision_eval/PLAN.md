@@ -56,8 +56,11 @@ the paper repository.
 
 ### R1.4 — Additional baseline / related work
 - [x] Investigate SVTRv2-AR implementation and compatibility
-- [x] Add an official-data-only SVTRv2-AR baseline adapted from OpenOCR
+- [x] Add an OpenOCR-derived SVTRv2-AR baseline with no external data/pretraining
 - [x] Implement AR-aware BJP/product-rule decoding with one shared fused prefix
+- [x] Batch all frame-conditioned AR decoder calls under the shared-prefix BJP rule
+- [x] Lock and document the controlled SVTRv2-AR training protocol
+- [x] Align the manuscript training/fusion description with the implementation
 - [x] Smoke-test SVTRv2-AR model, teacher-forced loss, and F=1/F=3/F=5 BJP paths
 - [ ] Train the controlled SVTRv2-AR baseline
 - [ ] Evaluate SVTRv2-AR at F=1/F=3/F=5 using BJP only
