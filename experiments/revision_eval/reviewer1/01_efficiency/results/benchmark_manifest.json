@@ -8,7 +8,8 @@
     "lister",
     "igtr",
     "cppd",
-    "mdiff"
+    "mdiff",
+    "svtrv2_ar"
   ],
   "dataset": "/home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k",
   "input_cache": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer1/01_efficiency/results/benchmark_inputs.pt",
@@ -19,7 +20,9 @@
   "flop_samples": 10,
   "precision": "auto",
   "deterministic": false,
-  "checkpoint_overrides": {},
+  "checkpoint_overrides": {
+    "svtrv2_ar": "experiments/baselines/SVTRV2_AR_BASELINE_svtrv2_ar/student_weights"
+  },
   "runs": [
     {
       "model_key": "ours",
@@ -76,6 +79,37 @@
       "checkpoints": "/home/vwnascimento/doc2025/project1/experiments/baselines/MDIFF_BASELINE",
       "result": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer1/01_efficiency/results/mdiff.json",
       "status": "skipped_existing"
+    },
+    {
+      "model_key": "svtrv2_ar",
+      "display_name": "SVTRv2-AR",
+      "config": "/home/vwnascimento/doc2025/project1/baselines_configs/SVTRV2_AR_BASELINE.yaml",
+      "checkpoints": "experiments/baselines/SVTRV2_AR_BASELINE_svtrv2_ar/student_weights",
+      "result": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer1/01_efficiency/results/svtrv2_ar.json",
+      "command": [
+        "/home/vwnascimento/miniconda3/envs/yolov11/bin/python3",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer1/01_efficiency/scripts/benchmark_one.py",
+        "--model-name",
+        "SVTRv2-AR",
+        "--config",
+        "/home/vwnascimento/doc2025/project1/baselines_configs/SVTRV2_AR_BASELINE.yaml",
+        "--checkpoints",
+        "experiments/baselines/SVTRV2_AR_BASELINE_svtrv2_ar/student_weights",
+        "--input-cache",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer1/01_efficiency/results/benchmark_inputs.pt",
+        "--output",
+        "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer1/01_efficiency/results/svtrv2_ar.json",
+        "--precision",
+        "auto",
+        "--warmup",
+        "30",
+        "--iterations",
+        "100",
+        "--flop-samples",
+        "10"
+      ],
+      "return_code": 0,
+      "status": "ok"
     }
   ]
 }
