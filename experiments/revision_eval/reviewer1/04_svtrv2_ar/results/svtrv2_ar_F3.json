@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "mode": "val",
+  "fusion": "bayes",
+  "frames": 3,
+  "tta": false,
+  "swa": false,
+  "num_swa": 1,
+  "cls_loss": "SVTRV2_AR",
+  "reproducibility": {
+    "seed": 42,
+    "cudnn_benchmark": false,
+    "cudnn_deterministic": true
+  },
+  "config": "baselines_configs/SVTRV2_AR_BASELINE.yaml",
+  "checkpoint_directory": "experiments/baselines/SVTRV2_AR_BASELINE_svtrv2_ar/student_weights",
+  "checkpoint_files": [
+    "experiments/baselines/SVTRV2_AR_BASELINE_svtrv2_ar/student_weights/student_acc_0.7500_ep_52.pth"
+  ],
+  "dataset": "/home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k",
+  "metrics": {
+    "sequence_accuracy_percent": 68.8,
+    "sequence_correct": 2064,
+    "sequence_total": 3000,
+    "character_accuracy_percent": 91.15714285714286,
+    "character_correct": 19143,
+    "character_total": 21000,
+    "cer_percent": 8.838095238095239,
+    "edit_errors": 1856,
+    "ground_truth_characters": 21000,
+    "partial_6_percent": 85.1,
+    "partial_6_correct": 2553,
+    "partial_5_percent": 92.06666666666666,
+    "partial_5_correct": 2762,
+    "old_brazilian_accuracy_percent": 44.0,
+    "old_brazilian_correct": 264,
+    "old_brazilian_total": 600,
+    "mercosur_accuracy_percent": 75.0,
+    "mercosur_correct": 1800,
+    "mercosur_total": 2400,
+    "mean_confidence_correct": 0.992205606324151,
+    "mean_confidence_incorrect": 0.9140669449785956,
+    "confidence_gap": 0.07813866134555536
+  }
+}
