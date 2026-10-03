@@ -564,8 +564,19 @@ def main() -> None:
         f1_pool.append(f1)
         f5_pool.append(f5)
 
+    is_svtrv2_ar = config.get("cls_loss") == "SVTRV2_AR"
+
     def forward_logits(x):
         with autocast_context(device, use_fp16):
+            if is_svtrv2_ar:
+                # Benchmark the same shared-prefix autoregressive BJP path used
+                # by test.py. Here one pool item always represents one track,
+                # so batch_size=1 and the number of frames is x.shape[0].
+                return model.bjp_decode(
+                    x,
+                    batch_size=1,
+                    frames=int(x.shape[0]),
+                )
             output = model(x, epoch=100)
             return extract_logits(output)
 
@@ -581,6 +592,10 @@ def main() -> None:
 
     def f5_batched_call(x):
         logits = forward_logits(x)
+        if is_svtrv2_ar:
+            # bjp_decode() has already fused all five frame-conditioned
+            # next-token distributions under one shared AR prefix.
+            return logits
         return product_fuse(
             logits,
             frames=5,
@@ -768,8 +783,10 @@ def main() -> None:
                 "CTC collapse/string decoding",
             ],
             "f5_batched_includes": (
-                "one network forward on a batch of five frames plus product-rule / "
-                "sum-log-probability tensor fusion; matches test.py evaluation batching"
+                "SVTRv2-AR: batched five-frame visual encoding plus shared-prefix "
+                "autoregressive BJP decoding; other models: one network forward on "
+                "a batch of five frames plus product-rule / sum-log-probability "
+                "tensor fusion. Both match their test.py paper-evaluation paths."
             ),
             "f5_sequential_includes": (
                 "five consecutive batch-size-one network forwards; no cross-frame "
