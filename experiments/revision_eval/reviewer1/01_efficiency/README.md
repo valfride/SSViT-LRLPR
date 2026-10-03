@@ -50,20 +50,28 @@ Default settings:
 
 F=1 latency is one model forward pass.
 
-F=5 tracklet latency includes one batched forward pass for the five observations
-plus product-rule / sum-log-probability tensor fusion. This matches the paper's
-submitted temporal-processing structure. It excludes disk I/O, LMDB access,
-image resize/normalization, host-to-device transfer, final Python string
-conversion, and CTC collapse/string decoding.
+Two F=5 timings are recorded. The primary deployment-oriented tracklet latency
+runs five consecutive batch-size-one forwards and then applies product-rule /
+sum-log-probability fusion. A second batched F=5 timing processes the five
+observations in one batch of five, matching the current `test.py` evaluation
+implementation. Reporting both avoids making the batched GPU result look like
+five sequential frame inferences. Both exclude disk I/O, LMDB access, image
+resize/normalization, host-to-device transfer, final Python string conversion,
+and CTC collapse/string decoding.
 
 Peak GPU memory is the maximum PyTorch allocated memory during inference and
 includes model parameters and the active input tensor. F=1 and F=5 are measured
 separately after the latency pool is released.
 
-FLOPs are measured with the PyTorch 2.6
-`torch.utils.flop_counter.FlopCounterMode`. The output records the profiler
-convention and any failure explicitly. For models with data-dependent inference
-paths, FLOPs are measured over multiple real samples and summarized rather than
+FLOPs are measured with PyTorch's `torch.profiler.profile(with_flops=True)`
+using one common backend for every architecture. PyTorch's experimental
+`FlopCounterMode` is not used because it fails on the proposed model's
+`torchvision.ops.DeformConv2d` path in the tested environment. When the
+profiler assigns zero FLOPs to that custom deformable-convolution operator, the
+standard convolution arithmetic count is added analytically (multiply + add =
+two FLOPs); bilinear sampling overhead is not included. The JSON records the
+backend and this convention. For models with data-dependent inference paths,
+FLOPs are measured over multiple real samples and summarized rather than
 silently assuming a fixed graph.
 
 ## Checkpoint paths
