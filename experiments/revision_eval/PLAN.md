@@ -55,9 +55,14 @@ the paper repository.
 - [ ] Add reviewer-response evidence/reference to implementation details
 
 ### R1.4 — Additional baseline / related work
-- [ ] Investigate SVTRv2-AR implementation and compatibility
-- [ ] Add SVTRv2-AR baseline if a fair implementation/protocol is technically feasible
-- [ ] Otherwise document why an AR comparison cannot be made fairly
+- [x] Investigate SVTRv2-AR implementation and compatibility
+- [x] Add an official-data-only SVTRv2-AR baseline adapted from OpenOCR
+- [x] Implement AR-aware BJP/product-rule decoding with one shared fused prefix
+- [ ] Smoke-test the SVTRv2-AR training and validation paths
+- [ ] Train the controlled SVTRv2-AR baseline
+- [ ] Evaluate SVTRv2-AR at F=1/F=3/F=5 using BJP only
+- [ ] Add SVTRv2-AR to the computational-efficiency comparison
+- [ ] Integrate SVTRv2-AR results into manuscript/response
 - [ ] Expand CCPD discussion in Related Work
 
 ## Reviewer 2
