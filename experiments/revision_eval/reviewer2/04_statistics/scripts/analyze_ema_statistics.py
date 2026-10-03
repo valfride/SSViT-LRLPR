@@ -161,7 +161,6 @@ def main() -> None:
             for frames in args.frames:
                 path = (
                     evaluation_root
-                    / "full"
                     / f"seed{seed}"
                     / source
                     / f"F{frames}_{args.fusion}.json"
