@@ -48,6 +48,12 @@ MODEL_SPECS = {
         "checkpoints": ROOT
         / "experiments/baselines/SVTRV2_BASELINE",
     },
+    "svtrv2_ar": {
+        "display_name": "SVTRv2-AR",
+        "config": ROOT / "baselines_configs/SVTRV2_AR_BASELINE.yaml",
+        "checkpoints": ROOT
+        / "experiments/baselines/SVTRV2_AR_BASELINE_svtrv2_ar",
+    },
     "ote": {
         "display_name": "OTE",
         "config": ROOT / "baselines_configs/OTE_BASELINE.yaml",
@@ -80,7 +86,17 @@ MODEL_SPECS = {
     },
 }
 
-DEFAULT_MODELS = tuple(MODEL_SPECS)
+# Keep the already frozen seven-model comparison as the default. The revision
+# AR baseline is opt-in until its validation-selected checkpoint is available.
+DEFAULT_MODELS = (
+    "ours",
+    "svtrv2",
+    "ote",
+    "lister",
+    "igtr",
+    "cppd",
+    "mdiff",
+)
 
 
 def sha256_file(path: Path) -> str:
