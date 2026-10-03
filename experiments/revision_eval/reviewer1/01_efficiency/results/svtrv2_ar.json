@@ -3,7 +3,7 @@
   "model": "SVTRv2-AR",
   "config": "/home/vwnascimento/doc2025/project1/baselines_configs/SVTRV2_AR_BASELINE.yaml",
   "model_spec_name": "SVTRV2_AR_BASELINE",
-  "checkpoint": "experiments/baselines/SVTRV2_AR_BASELINE_svtrv2_ar/student_weights/student_acc_0.7500_ep_94.pth",
+  "checkpoint": "experiments/baselines/SVTRV2_AR_BASELINE_svtrv2_ar/student_weights/student_acc_0.7500_ep_52.pth",
   "checkpoint_state_source": "model_g_sd",
   "checkpoint_sha256": null,
   "checkpoint_load": {
@@ -1026,30 +1026,30 @@
   "latency_ms": {
     "f1_forward": {
       "n": 100,
-      "mean": 30.36888125585392,
-      "std": 1.8552953138891695,
-      "median": 29.61858210619539,
-      "p95": 33.56231492944062,
-      "min": 28.38722593151033,
-      "max": 38.311163894832134
+      "mean": 29.240190209820867,
+      "std": 0.7136137964847792,
+      "median": 29.0195340057835,
+      "p95": 30.479534063488245,
+      "min": 28.316289884969592,
+      "max": 32.741716131567955
     },
     "f5_batched_tracklet_forward_plus_product_fusion": {
       "n": 100,
-      "mean": 32.17426501912996,
-      "std": 2.4767832896358897,
-      "median": 31.350782955996692,
-      "p95": 37.38797199912369,
-      "min": 29.522439930588007,
-      "max": 41.44139192067087
+      "mean": 30.61695276759565,
+      "std": 1.040132554588972,
+      "median": 30.447878991253674,
+      "p95": 31.189931789413095,
+      "min": 29.80161807499826,
+      "max": 37.75038802996278
     },
     "f5_sequential_tracklet_forward_plus_product_fusion": {
       "n": 100,
-      "mean": 150.50739146769047,
-      "std": 7.496635023708415,
-      "median": 147.49115309678018,
-      "p95": 168.44577295705676,
-      "min": 141.59716595895588,
-      "max": 170.67194497212768
+      "mean": 145.5711356108077,
+      "std": 3.2567125547370543,
+      "median": 144.7623500134796,
+      "p95": 150.6812130101025,
+      "min": 141.8318951036781,
+      "max": 160.82241293042898
     }
   },
   "peak_memory": {

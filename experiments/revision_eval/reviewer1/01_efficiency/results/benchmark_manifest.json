@@ -21,7 +21,7 @@
   "precision": "auto",
   "deterministic": false,
   "checkpoint_overrides": {
-    "svtrv2_ar": "experiments/baselines/SVTRV2_AR_BASELINE_svtrv2_ar/student_weights"
+    "svtrv2_ar": "experiments/baselines/SVTRV2_AR_BASELINE_svtrv2_ar/student_weights/student_acc_0.7500_ep_52.pth"
   },
   "runs": [
     {
@@ -84,7 +84,7 @@
       "model_key": "svtrv2_ar",
       "display_name": "SVTRv2-AR",
       "config": "/home/vwnascimento/doc2025/project1/baselines_configs/SVTRV2_AR_BASELINE.yaml",
-      "checkpoints": "experiments/baselines/SVTRV2_AR_BASELINE_svtrv2_ar/student_weights",
+      "checkpoints": "experiments/baselines/SVTRV2_AR_BASELINE_svtrv2_ar/student_weights/student_acc_0.7500_ep_52.pth",
       "result": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer1/01_efficiency/results/svtrv2_ar.json",
       "command": [
         "/home/vwnascimento/miniconda3/envs/yolov11/bin/python3",
@@ -94,7 +94,7 @@
         "--config",
         "/home/vwnascimento/doc2025/project1/baselines_configs/SVTRV2_AR_BASELINE.yaml",
         "--checkpoints",
-        "experiments/baselines/SVTRV2_AR_BASELINE_svtrv2_ar/student_weights",
+        "experiments/baselines/SVTRV2_AR_BASELINE_svtrv2_ar/student_weights/student_acc_0.7500_ep_52.pth",
         "--input-cache",
         "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer1/01_efficiency/results/benchmark_inputs.pt",
         "--output",
