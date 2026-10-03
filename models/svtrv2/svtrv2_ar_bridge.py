@@ -39,7 +39,7 @@ class SVTRv2ARBaseline(nn.Module):
         self.encoder = SVTRNet(
             img_size=[32, 96],
             in_channels=in_channels,
-            out_char_num=max_len,
+            out_char_num=25,  # upstream svtrv2_nrtr.yml; unused when last_stage=False
             out_channels=256,
             patch_merging="Conv",
             embed_dim=[128, 256, 384],
