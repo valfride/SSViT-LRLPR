@@ -448,6 +448,17 @@ def main() -> None:
         default="0",
         help="Physical CUDA device exposed to each fresh worker subprocess.",
     )
+    parser.add_argument(
+        "--checkpoint-override",
+        action="append",
+        default=[],
+        metavar="MODEL=PATH",
+        help=(
+            "Override one model checkpoint path without editing the script. "
+            "Repeat as needed, e.g. --checkpoint-override svtrv2=/path/to/student_weights. "
+            f"Valid model keys: {', '.join(MODEL_SPECS)}"
+        ),
+    )
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument("--hash-checkpoints", action="store_true")
     parser.add_argument("--rebuild-input-cache", action="store_true")
@@ -468,6 +479,27 @@ def main() -> None:
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    checkpoint_overrides = {}
+    for item in args.checkpoint_override:
+        if "=" not in item:
+            parser.error(
+                "--checkpoint-override must use MODEL=PATH, "
+                f"got: {item!r}"
+            )
+        model_key, raw_path = item.split("=", 1)
+        model_key = model_key.strip()
+        raw_path = raw_path.strip()
+        if model_key not in MODEL_SPECS:
+            parser.error(
+                "Unknown checkpoint override model "
+                f"{model_key!r}; choose from {', '.join(MODEL_SPECS)}"
+            )
+        if not raw_path:
+            parser.error(
+                f"Empty checkpoint path for override {model_key!r}"
+            )
+        checkpoint_overrides[model_key] = Path(raw_path).expanduser()
 
     input_cache = (
         Path(args.input_cache)
@@ -512,6 +544,10 @@ def main() -> None:
         "flop_samples": args.flop_samples,
         "precision": args.precision,
         "deterministic": bool(args.deterministic),
+        "checkpoint_overrides": {
+            key: str(value)
+            for key, value in checkpoint_overrides.items()
+        },
         "runs": [],
     }
 
@@ -521,7 +557,10 @@ def main() -> None:
     for model_key in args.models:
         spec = MODEL_SPECS[model_key]
         config_path = Path(spec["config"])
-        checkpoint_path = Path(spec["checkpoints"])
+        checkpoint_path = checkpoint_overrides.get(
+            model_key,
+            Path(spec["checkpoints"]),
+        )
         result_path = output_dir / f"{model_key}.json"
         result_files[model_key] = result_path
 
