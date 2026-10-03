@@ -5,8 +5,35 @@ during the OJ-ITS major revision.
 
 The implementation uses the OpenOCR SVTRv2/NRTR configuration as the
 architectural reference, adapted to 32x96 LRLPR inputs and the seven-character
-Brazilian/Mercosur alphabet.  No external dataset or pretrained checkpoint is
-enabled by the revision config.
+Brazilian/Mercosur alphabet. The upstream source is pinned to
+`Topdu/OpenOCR@1ccfc6ee6161f7133b192e16af3a9265273997ba`, specifically
+`configs/rec/nrtr/svtrv2_nrtr.yml`,
+`openrec/modeling/encoders/svtrnet.py`, and
+`openrec/modeling/decoders/nrtr_decoder.py`.
+
+The local encoder and decoder sources reused by the bridge are
+`models/cppd/svtrnet.py` and `models/ote/nrtr_decoder.py`; after normalizing
+the repository-local import path and whitespace, they match the pinned OpenOCR
+sources. No external dataset or pretrained checkpoint is enabled by the
+revision config.
+
+## Controlled training protocol
+
+The architecture and AR loss follow the pinned OpenOCR implementation, while
+training is deliberately run inside the same LRLPR baseline pipeline used for
+the other paper baselines. The locked protocol is:
+
+- training from scratch on the same LRLPR train/validation split;
+- 32x96 LR inputs and the same repository augmentation wrapper;
+- AdamW with learning rate 1e-4 and weight decay 0.05;
+- OneCycleLR with a 1.5-epoch warmup;
+- batch size 64;
+- at most 500 epochs, with early stopping after 25 validation epochs without
+  improvement;
+- no EMA, external pretraining, or external training data.
+
+This is a controlled LRLPR retraining of the OpenOCR architecture, not a
+reproduction of OpenOCR's original Union14M training recipe.
 
 ## Temporal fusion policy
 
