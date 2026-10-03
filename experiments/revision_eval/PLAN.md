@@ -27,7 +27,8 @@ the paper repository.
 - [x] Prepare machine-readable and Markdown efficiency tables
 - [x] Verify strict checkpoint loading for all seven models
 - [x] Record Quadro RTX 8000 / PyTorch 2.6.0+cu124 / CUDA 12.4 conditions
-- [ ] Write efficiency interpretation into manuscript/response
+- [x] Write efficiency interpretation into manuscript
+- [ ] Add efficiency evidence to response letter
 
 ### R1.2 — Cross-dataset evaluation
 - [ ] Select one compatible external dataset
@@ -65,8 +66,9 @@ the paper repository.
 - [x] Train the controlled SVTRv2-AR baseline
 - [x] Evaluate SVTRv2-AR at F=1/F=3/F=5 using BJP only
 - [x] Add SVTRv2-AR to the computational-efficiency comparison
-- [ ] Integrate SVTRv2-AR results into manuscript/response
-- [ ] Expand CCPD discussion in Related Work
+- [x] Integrate SVTRv2-AR results into manuscript
+- [ ] Add SVTRv2-AR results to response letter
+- [x] Expand CCPD discussion in Related Work
 
 ## Reviewer 2
 
@@ -98,9 +100,10 @@ the paper repository.
 - [x] Evaluate CTC baseline fusion behavior
 - [x] Reproduce submitted SVTRv2 F=1/F=3/F=5 values with the canonical checkpoint
 - [x] Establish product-rule/logit-average equivalence for fixed-position softmax up to numerical effects
-- [ ] Rename/reframe BJP as product-rule / sum-log-probability temporal pooling
-- [ ] Rewrite conditional-independence and CTC-alignment claims
-- [ ] Add alternative-fusion control results to manuscript/response
+- [x] Retain BJP terminology and clarify its product-rule / sum-log-probability implementation
+- [x] Rewrite conditional-independence and CTC-alignment claims
+- [x] Add alternative-fusion control results to manuscript
+- [ ] Add temporal-fusion controls to response letter
 
 ### R2.4 — Statistical validation
 - [x] Make training seed configurable
@@ -112,7 +115,8 @@ the paper repository.
 - [x] Holm correction within comparison families
 - [x] Analyze best-vs-best EMA statistics
 - [x] Analyze matched-final-epoch EMA statistics
-- [ ] Integrate statistics and appropriately cautious claims into manuscript/response
+- [x] Integrate statistics and appropriately cautious claims into manuscript
+- [ ] Add statistical evidence to response letter
 
 ### R2.5 — Reproducibility
 - [x] Audit exact optimizer configuration
@@ -127,18 +131,19 @@ the paper repository.
 - [x] Record evaluation reproducibility metadata in metrics JSON
 - [x] Record final hardware details used for reported efficiency experiments
 - [x] Correct EMA description in manuscript
-- [ ] Consolidate audited training/architecture details into manuscript and response
+- [x] Consolidate audited training/architecture/augmentation details into manuscript
+- [ ] Add reproducibility details to response letter
 
 ## Editor-in-Chief
-- [ ] Search recent OJ-ITS literature
-- [ ] Select genuinely relevant recent OJ-ITS papers
-- [ ] Integrate selected citations into Related Work
+- [x] Search recent OJ-ITS literature
+- [x] Select genuinely relevant recent OJ-ITS papers
+- [x] Integrate selected citations into Related Work
 - [ ] Mention the added OJ-ITS literature explicitly in the response letter
 
 ## Remaining experiment priority
 1. [x] R1.1 computational-efficiency benchmark for proposed model and principal baselines
 2. [ ] R1.2 one external zero-shot cross-dataset evaluation
-3. [ ] R1.4 SVTRv2-AR feasibility check and, if fair/compatible, baseline experiment
+3. [x] R1.4 SVTRv2-AR feasibility check and baseline experiment
 4. [ ] Freeze all remaining experimental tables before manuscript editing
 
 No additional Reviewer-2 training experiment is currently planned unless a new
@@ -148,11 +153,11 @@ consistency issue appears during manuscript integration.
 - [ ] Update architecture figure where needed
 - [ ] Rewrite Methods using audited implementation details
 - [x] Replace ablation table
-- [ ] Add statistical reporting
-- [ ] Add temporal-fusion control table/discussion
-- [ ] Add efficiency table
+- [x] Add statistical reporting
+- [x] Add temporal-fusion control table/discussion
+- [x] Add efficiency table
 - [ ] Add external-evaluation table
-- [ ] Update Related Work, including recent OJ-ITS and CCPD discussion
+- [x] Update Related Work, including recent OJ-ITS and CCPD discussion
 - [ ] Write point-by-point response letter
 - [ ] Produce unmarked revised manuscript
 - [ ] Produce optional highlighted-changes manuscript
