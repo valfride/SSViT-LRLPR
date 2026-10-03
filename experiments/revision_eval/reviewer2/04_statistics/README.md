@@ -219,3 +219,45 @@ selection protocol.
 The two protocols answer different questions and should not be conflated:
 `best` measures the practical effect after independent validation-based model
 selection, whereas `last` isolates EMA at a common training epoch.
+
+
+## 5. Deterministic evaluation check
+
+The evaluation entry point overrides the training-time cuDNN benchmark setting and
+uses deterministic cuDNN kernels:
+
+```text
+seed = 42
+torch.backends.cudnn.benchmark = False
+torch.backends.cudnn.deterministic = True
+```
+
+This affects evaluation only; the training configuration is unchanged. The metrics
+JSON records these settings under `reproducibility`.
+
+Before freezing manuscript numbers, verify one representative checkpoint by running
+the exact same evaluation twice and comparing the prediction CSVs byte-for-byte:
+
+```bash
+python3 \
+  experiments/revision_eval/shared/scripts/verify_eval_determinism.py \
+  --config experiments/revision_eval/submitted_model/config_snapshot.yaml \
+  --checkpoints experiments/revision_eval/submitted_model \
+  --split /home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k \
+  --frames 1 \
+  --fusion bayes \
+  --gpu 0
+```
+
+A successful run ends with:
+
+```text
+Predictions byte-identical: True
+Metrics identical:          True
+✅ Determinism check PASSED.
+```
+
+The check writes `determinism_manifest.json` under
+`experiments/revision_eval/shared/results/determinism_check/`. By default the two
+temporary run directories are removed after a successful comparison; use
+`--keep-output` to retain them.
