@@ -1,12 +1,25 @@
 alphabet: 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ
-early_stop_patience: 100
-epoch_max: 100
-force_lr: false
+early_stop_patience: 25
+epoch_max: 500
 func_train: SROCR_TRAIN
 func_val: SROCR_VAL
 
 # Autoregressive SVTRv2/NRTR baseline requested in the OJ-ITS revision.
-# Temporal evaluation is BJP/product-rule only.  The decoder uses one shared
+# Architecture/loss provenance:
+#   Topdu/OpenOCR @ 1ccfc6ee6161f7133b192e16af3a9265273997ba
+#   configs/rec/nrtr/svtrv2_nrtr.yml
+#   openrec/modeling/encoders/svtrnet.py
+#   openrec/modeling/decoders/nrtr_decoder.py
+#
+# Controlled LRLPR training policy:
+#   - train from scratch on the same LRLPR train/validation split;
+#   - 32x96 LR input and the same repository augmentation wrapper;
+#   - no external pretraining/data;
+#   - lr=1e-4, max 500 epochs, OneCycleLR with 1.5-epoch warmup, matching
+#     the existing non-CTC baseline family in this repository;
+#   - validation-selected checkpoint with early-stop patience 25.
+#
+# Temporal evaluation is BJP/product-rule only. The decoder uses one shared
 # fused prefix across all frames at each autoregressive step.
 cls_loss: SVTRV2_AR
 
@@ -19,7 +32,7 @@ model_g:
 
 LRScheduler:
   name: OneCycleLR
-  warmup_epoch: 10
+  warmup_epoch: 1.5
   cycle_momentum: false
 
 name: SVTRV2_AR_BASELINE
@@ -79,4 +92,3 @@ val_dataset:
       test: true
     name: VSR_Sequence_collate_fn
 
-warmup_epochs: 0
