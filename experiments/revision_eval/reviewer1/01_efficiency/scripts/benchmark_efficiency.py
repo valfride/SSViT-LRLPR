@@ -360,8 +360,8 @@ def aggregate_results(
         "",
         (
             "| Model | Params (M) | F1 GFLOPs | F1 latency (ms) | "
-            "F5 GFLOPs | F5 tracklet latency (ms) | "
-            "F5 peak mem (MiB) | Serial 5-frame latency (ms) |"
+            "F1 peak mem (MiB) | F5 GFLOPs | F5 tracklet latency (ms) | "
+            "F5 peak mem (MiB) |"
         ),
         "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
@@ -393,10 +393,10 @@ def aggregate_results(
                     fmt(row["params_m"]),
                     fmt(row["f1_gflops_mean"]),
                     f1_latency,
+                    fmt(row["f1_peak_memory_mib"], digits=1),
                     fmt(row["f5_batched_gflops_mean"]),
                     f5_batched_latency,
                     fmt(row["f5_batched_peak_memory_mib"], digits=1),
-                    f5_sequential_latency,
                 ]
             )
             + " |"
