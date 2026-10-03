@@ -1,0 +1,26 @@
+{
+  "schema_version": 2,
+  "purpose": "independently validation-selected best EMA versus best student ablation",
+  "selection": "best",
+  "evaluation_root": "/home/vwnascimento/doc2025/project1/experiments/revision_eval/reviewer2/01_controlled_ablation/results/ema_ablation/best/evaluations",
+  "fusion": "bayes",
+  "requested_seeds": [
+    42,
+    123,
+    2026
+  ],
+  "requested_frames": [
+    1,
+    3,
+    5
+  ],
+  "bootstrap_samples": 10000,
+  "random_seed": 20261002,
+  "missing_evaluation_files": [],
+  "outputs": [
+    "ema_seed_summary.csv",
+    "ema_paired_seed_tests.csv",
+    "ema_hierarchical_bootstrap.csv",
+    "ema_summary.md"
+  ]
+}
