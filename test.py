@@ -383,201 +383,236 @@ def main():
             flat_images = lr_sequences.view(batch_size * sequence_length, channels, height, width)
             flat_images = flat_images.contiguous().to(memory_format=torch.channels_last)
 
-            view_logits = []
-
-            def get_logits(output_dict):
-                if not isinstance(output_dict, dict):
-                    raise TypeError(f"Expected model output dict, got {type(output_dict).__name__}")
-                if cls_loss_type == "EVIDENTIAL":
-                    if "expected_prob" not in output_dict:
-                        raise KeyError("Evidential model output is missing 'expected_prob'.")
-                    return torch.log(output_dict["expected_prob"].clamp_min(1.0e-8))
-                if "logits" not in output_dict:
-                    raise KeyError("Model output is missing 'logits'.")
-                return output_dict["logits"]
-
-            with torch.amp.autocast("cuda", enabled=use_fp16):
-                base_output = model(flat_images, epoch=100)
-                if isinstance(base_output, tuple):
-                    base_output = base_output[0]
-                view_logits.append(get_logits(base_output))
-
+            if cls_loss_type == "SVTRV2_AR":
+                if args.fusion != "bayes":
+                    raise ValueError(
+                        "SVTRv2-AR is evaluated only with BJP/product-rule fusion "
+                        "to preserve the paper's temporal-fusion protocol."
+                    )
                 if args.tta:
-                    positive_images = TF.rotate(
-                        flat_images,
-                        angle=2.5,
-                        interpolation=TF.InterpolationMode.BILINEAR,
+                    raise ValueError(
+                        "TTA is not enabled for the SVTRv2-AR BJP baseline."
                     )
-                    positive_output = model(positive_images, epoch=100)
-                    if isinstance(positive_output, tuple):
-                        positive_output = positive_output[0]
-                    view_logits.append(get_logits(positive_output))
-
-                    negative_images = TF.rotate(
-                        flat_images,
-                        angle=-2.5,
-                        interpolation=TF.InterpolationMode.BILINEAR,
+                if not hasattr(model, "bjp_decode"):
+                    raise AttributeError(
+                        "SVTRv2-AR model is missing the required bjp_decode() method."
                     )
-                    negative_output = model(negative_images, epoch=100)
-                    if isinstance(negative_output, tuple):
-                        negative_output = negative_output[0]
-                    view_logits.append(get_logits(negative_output))
 
-            if args.fusion in {"bayes", "average", "logit_average"}:
-                accumulated_log_probs = None
-                accumulated_probabilities = None
-                accumulated_logits = None
+                with torch.amp.autocast("cuda", enabled=use_fp16):
+                    fused_pseudo_logits = model.bjp_decode(
+                        flat_images,
+                        batch_size=batch_size,
+                        frames=sequence_length,
+                    )
 
-                for logits_tensor in view_logits:
-                    if logits_tensor.ndim != 3:
-                        raise ValueError(f"Expected logits [B*frames, chars, classes], got {tuple(logits_tensor.shape)}")
-                    if logits_tensor.size(0) != batch_size * sequence_length:
-                        raise ValueError(
-                            "Model output batch does not match B*sequence_length: "
-                            f"{logits_tensor.size(0)} vs {batch_size * sequence_length}"
+                predictions = decode_batch_logits(
+                    fused_pseudo_logits,
+                    true_converter,
+                )
+                scores = (
+                    F.log_softmax(fused_pseudo_logits, dim=-1)
+                    .max(dim=-1)
+                    .values.sum(dim=1)
+                )
+                final_prediction = normalize_plate(predictions[0])
+                raw_confidence = float(scores[0].item())
+            else:
+                view_logits = []
+
+                def get_logits(output_dict):
+                    if not isinstance(output_dict, dict):
+                        raise TypeError(f"Expected model output dict, got {type(output_dict).__name__}")
+                    if cls_loss_type == "EVIDENTIAL":
+                        if "expected_prob" not in output_dict:
+                            raise KeyError("Evidential model output is missing 'expected_prob'.")
+                        return torch.log(output_dict["expected_prob"].clamp_min(1.0e-8))
+                    if "logits" not in output_dict:
+                        raise KeyError("Model output is missing 'logits'.")
+                    return output_dict["logits"]
+
+                with torch.amp.autocast("cuda", enabled=use_fp16):
+                    base_output = model(flat_images, epoch=100)
+                    if isinstance(base_output, tuple):
+                        base_output = base_output[0]
+                    view_logits.append(get_logits(base_output))
+
+                    if args.tta:
+                        positive_images = TF.rotate(
+                            flat_images,
+                            angle=2.5,
+                            interpolation=TF.InterpolationMode.BILINEAR,
+                        )
+                        positive_output = model(positive_images, epoch=100)
+                        if isinstance(positive_output, tuple):
+                            positive_output = positive_output[0]
+                        view_logits.append(get_logits(positive_output))
+
+                        negative_images = TF.rotate(
+                            flat_images,
+                            angle=-2.5,
+                            interpolation=TF.InterpolationMode.BILINEAR,
+                        )
+                        negative_output = model(negative_images, epoch=100)
+                        if isinstance(negative_output, tuple):
+                            negative_output = negative_output[0]
+                        view_logits.append(get_logits(negative_output))
+
+                if args.fusion in {"bayes", "average", "logit_average"}:
+                    accumulated_log_probs = None
+                    accumulated_probabilities = None
+                    accumulated_logits = None
+
+                    for logits_tensor in view_logits:
+                        if logits_tensor.ndim != 3:
+                            raise ValueError(f"Expected logits [B*frames, chars, classes], got {tuple(logits_tensor.shape)}")
+                        if logits_tensor.size(0) != batch_size * sequence_length:
+                            raise ValueError(
+                                "Model output batch does not match B*sequence_length: "
+                                f"{logits_tensor.size(0)} vs {batch_size * sequence_length}"
+                            )
+
+                        _, num_characters, num_classes = logits_tensor.shape
+                        logits_sequence = logits_tensor.view(
+                            batch_size,
+                            sequence_length,
+                            num_characters,
+                            num_classes,
                         )
 
-                    _, num_characters, num_classes = logits_tensor.shape
-                    logits_sequence = logits_tensor.view(
-                        batch_size,
-                        sequence_length,
-                        num_characters,
-                        num_classes,
-                    )
+                        if looks_like_probabilities(logits_sequence):
+                            probabilities = logits_sequence.clamp_min(1.0e-8)
+                            log_probabilities = torch.log(probabilities)
+                        else:
+                            probabilities = torch.softmax(logits_sequence, dim=-1)
+                            log_probabilities = F.log_softmax(logits_sequence, dim=-1)
 
-                    if looks_like_probabilities(logits_sequence):
-                        probabilities = logits_sequence.clamp_min(1.0e-8)
-                        log_probabilities = torch.log(probabilities)
-                    else:
-                        probabilities = torch.softmax(logits_sequence, dim=-1)
-                        log_probabilities = F.log_softmax(logits_sequence, dim=-1)
+                        if args.fusion == "bayes":
+                            temporal_fused = log_probabilities.sum(dim=1)
+                            accumulated_log_probs = (
+                                temporal_fused
+                                if accumulated_log_probs is None
+                                else accumulated_log_probs + temporal_fused
+                            )
+                        elif args.fusion == "average":
+                            temporal_fused = probabilities.mean(dim=1)
+                            accumulated_probabilities = (
+                                temporal_fused
+                                if accumulated_probabilities is None
+                                else accumulated_probabilities + temporal_fused
+                            )
+                        else:
+                            temporal_fused = logits_sequence.mean(dim=1)
+                            accumulated_logits = (
+                                temporal_fused
+                                if accumulated_logits is None
+                                else accumulated_logits + temporal_fused
+                            )
 
                     if args.fusion == "bayes":
-                        temporal_fused = log_probabilities.sum(dim=1)
-                        accumulated_log_probs = (
-                            temporal_fused
-                            if accumulated_log_probs is None
-                            else accumulated_log_probs + temporal_fused
-                        )
+                        fused_pseudo_logits = accumulated_log_probs / len(view_logits)
                     elif args.fusion == "average":
-                        temporal_fused = probabilities.mean(dim=1)
-                        accumulated_probabilities = (
-                            temporal_fused
-                            if accumulated_probabilities is None
-                            else accumulated_probabilities + temporal_fused
+                        fused_pseudo_logits = torch.log(
+                            (accumulated_probabilities / len(view_logits)).clamp_min(1.0e-8)
                         )
                     else:
-                        temporal_fused = logits_sequence.mean(dim=1)
-                        accumulated_logits = (
-                            temporal_fused
-                            if accumulated_logits is None
-                            else accumulated_logits + temporal_fused
-                        )
+                        fused_pseudo_logits = accumulated_logits / len(view_logits)
 
-                if args.fusion == "bayes":
-                    fused_pseudo_logits = accumulated_log_probs / len(view_logits)
-                elif args.fusion == "average":
-                    fused_pseudo_logits = torch.log(
-                        (accumulated_probabilities / len(view_logits)).clamp_min(1.0e-8)
-                    )
-                else:
-                    fused_pseudo_logits = accumulated_logits / len(view_logits)
-
-                if cls_loss_type == "CTC":
-                    predictions, scores = ctc_greedy_decoder(
-                        fused_pseudo_logits,
-                        true_converter,
-                        return_scores=True,
-                    )
-                else:
-                    predictions = decode_batch_logits(fused_pseudo_logits, true_converter)
-                    scores = F.log_softmax(fused_pseudo_logits, dim=-1).max(dim=-1).values.sum(dim=1)
-
-                final_prediction = normalize_plate(predictions[0])
-                raw_confidence = scores[0].item() if torch.is_tensor(scores[0]) else float(scores[0])
-
-            else:  # post-decoding fusion
-                decoded_strings = []
-                decoded_confidences = []
-
-                for logits_tensor in view_logits:
                     if cls_loss_type == "CTC":
-                        frame_predictions, frame_scores = ctc_greedy_decoder(
-                            logits_tensor,
+                        predictions, scores = ctc_greedy_decoder(
+                            fused_pseudo_logits,
                             true_converter,
                             return_scores=True,
                         )
                     else:
-                        frame_predictions = decode_batch_logits(logits_tensor, true_converter)
-                        frame_scores = F.log_softmax(logits_tensor, dim=-1).max(dim=-1).values.sum(dim=1)
+                        predictions = decode_batch_logits(fused_pseudo_logits, true_converter)
+                        scores = F.log_softmax(fused_pseudo_logits, dim=-1).max(dim=-1).values.sum(dim=1)
 
-                    decoded_strings.extend(normalize_plate(value) for value in frame_predictions)
-                    if torch.is_tensor(frame_scores):
-                        decoded_confidences.extend(float(value) for value in frame_scores.detach().cpu().tolist())
-                    else:
-                        decoded_confidences.extend(float(value) for value in frame_scores)
+                    final_prediction = normalize_plate(predictions[0])
+                    raw_confidence = scores[0].item() if torch.is_tensor(scores[0]) else float(scores[0])
 
-                if not decoded_strings:
-                    raise RuntimeError("Post-decoding fusion produced no decoded frame predictions.")
+                else:  # post-decoding fusion
+                    decoded_strings = []
+                    decoded_confidences = []
 
-                if args.fusion == "majority":
-                    vote_counts = defaultdict(int)
-                    vote_confidences = defaultdict(list)
-                    for decoded, confidence in zip(decoded_strings, decoded_confidences):
-                        vote_counts[decoded] += 1
-                        vote_confidences[decoded].append(confidence)
+                    for logits_tensor in view_logits:
+                        if cls_loss_type == "CTC":
+                            frame_predictions, frame_scores = ctc_greedy_decoder(
+                                logits_tensor,
+                                true_converter,
+                                return_scores=True,
+                            )
+                        else:
+                            frame_predictions = decode_batch_logits(logits_tensor, true_converter)
+                            frame_scores = F.log_softmax(logits_tensor, dim=-1).max(dim=-1).values.sum(dim=1)
 
-                    maximum_votes = max(vote_counts.values())
-                    tied_candidates = [
-                        decoded for decoded, count in vote_counts.items() if count == maximum_votes
-                    ]
-                    final_prediction = max(
-                        tied_candidates,
-                        key=lambda decoded: sum(vote_confidences[decoded]) / len(vote_confidences[decoded]),
-                    )
-                    raw_confidence = sum(vote_confidences[final_prediction]) / len(
-                        vote_confidences[final_prediction]
-                    )
-                else:  # char_majority
-                    fused_characters = []
-                    winning_confidences = []
+                        decoded_strings.extend(normalize_plate(value) for value in frame_predictions)
+                        if torch.is_tensor(frame_scores):
+                            decoded_confidences.extend(float(value) for value in frame_scores.detach().cpu().tolist())
+                        else:
+                            decoded_confidences.extend(float(value) for value in frame_scores)
 
-                    for position in range(PLATE_LENGTH):
-                        char_counts = defaultdict(int)
-                        char_confidences = defaultdict(list)
+                    if not decoded_strings:
+                        raise RuntimeError("Post-decoding fusion produced no decoded frame predictions.")
 
+                    if args.fusion == "majority":
+                        vote_counts = defaultdict(int)
+                        vote_confidences = defaultdict(list)
                         for decoded, confidence in zip(decoded_strings, decoded_confidences):
-                            if position >= len(decoded):
-                                continue
-                            character = decoded[position]
-                            char_counts[character] += 1
-                            char_confidences[character].append(confidence)
+                            vote_counts[decoded] += 1
+                            vote_confidences[decoded].append(confidence)
 
-                        if not char_counts:
-                            break
-
-                        maximum_votes = max(char_counts.values())
-                        tied_characters = [
-                            character
-                            for character, count in char_counts.items()
-                            if count == maximum_votes
+                        maximum_votes = max(vote_counts.values())
+                        tied_candidates = [
+                            decoded for decoded, count in vote_counts.items() if count == maximum_votes
                         ]
-                        winning_character = max(
-                            tied_characters,
-                            key=lambda character: (
-                                sum(char_confidences[character])
-                                / len(char_confidences[character])
-                            ),
+                        final_prediction = max(
+                            tied_candidates,
+                            key=lambda decoded: sum(vote_confidences[decoded]) / len(vote_confidences[decoded]),
                         )
-                        fused_characters.append(winning_character)
-                        winning_confidences.extend(char_confidences[winning_character])
+                        raw_confidence = sum(vote_confidences[final_prediction]) / len(
+                            vote_confidences[final_prediction]
+                        )
+                    else:  # char_majority
+                        fused_characters = []
+                        winning_confidences = []
 
-                    final_prediction = "".join(fused_characters)
-                    raw_confidence = (
-                        sum(winning_confidences) / len(winning_confidences)
-                        if winning_confidences
-                        else 0.0
-                    )
+                        for position in range(PLATE_LENGTH):
+                            char_counts = defaultdict(int)
+                            char_confidences = defaultdict(list)
+
+                            for decoded, confidence in zip(decoded_strings, decoded_confidences):
+                                if position >= len(decoded):
+                                    continue
+                                character = decoded[position]
+                                char_counts[character] += 1
+                                char_confidences[character].append(confidence)
+
+                            if not char_counts:
+                                break
+
+                            maximum_votes = max(char_counts.values())
+                            tied_characters = [
+                                character
+                                for character, count in char_counts.items()
+                                if count == maximum_votes
+                            ]
+                            winning_character = max(
+                                tied_characters,
+                                key=lambda character: (
+                                    sum(char_confidences[character])
+                                    / len(char_confidences[character])
+                                ),
+                            )
+                            fused_characters.append(winning_character)
+                            winning_confidences.extend(char_confidences[winning_character])
+
+                        final_prediction = "".join(fused_characters)
+                        raw_confidence = (
+                            sum(winning_confidences) / len(winning_confidences)
+                            if winning_confidences
+                            else 0.0
+                        )
+
 
             normalized_confidence = normalized_sequence_confidence(
                 raw_confidence,
