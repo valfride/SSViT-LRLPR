@@ -232,8 +232,11 @@ $32\times96$ LRLPR input and the seven-character plate alphabet. It is trained
 from scratch only on the same LRLPR training data and augmentation pipeline
 used by the controlled baselines; no external pretraining or external ALPR
 dataset is enabled. The controlled optimization protocol uses AdamW
-($10^{-4}$, weight decay $0.05$), OneCycleLR with a 1.5-epoch warmup, batch 64,
-a 500-epoch maximum, and validation early stopping with patience 25.
+($10^{-4}$, weight decay $0.05$), OneCycleLR over 100 epochs with a 10-epoch
+warmup, batch 64, and validation-based checkpoint selection. The 100/10
+schedule follows the LRLPR-specific SVTRv2-AR description in the ICPR 2026
+competition report; the common paper split/input/augmentation pipeline is
+retained for the controlled comparison.
 
 For temporal evaluation, SVTRv2-AR intentionally supports only the paper's
 BJP/product-rule protocol. At each autoregressive step, every frame is
