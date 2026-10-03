@@ -69,12 +69,12 @@ The default paths follow the repository's documented baseline layout:
 
 ```text
 Ours     experiments/revision_eval/submitted_model/
-SVTRv2   experiments/baselines/SVTRV2_BASELINE_svtrv2/student_weights/
-OTE      experiments/baselines/OTE_BASELINE_ote/student_weights/
-LISTER   experiments/baselines/LISTER_BASELINE_lister/student_weights/
-IGTR     experiments/baselines/IGTR_BASELINE_igtr/student_weights/
-CPPD     experiments/baselines/CPPD_BASELINE_cppd/student_weights/
-MDiff4STR experiments/baselines/MDIFF_BASELINE_mdiff/student_weights/
+SVTRv2   experiments/baselines/SVTRV2_BASELINE/student_weights/
+OTE      experiments/baselines/OTE_BASELINE/student_weights/
+LISTER   experiments/baselines/LISTER_BASELINE/student_weights/
+IGTR     experiments/baselines/IGTR_BASELINE/student_weights/
+CPPD     experiments/baselines/CPPD_BASELINE/student_weights/
+MDiff4STR experiments/baselines/MDIFF_BASELINE/student_weights/
 ```
 
 Weights remain local/ignored; only benchmark results and manifests should be
