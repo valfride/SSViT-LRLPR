@@ -157,8 +157,8 @@ class SVTRv2ARBaseline(nn.Module):
                 prefix_bf,
             ).reshape(batch_size, frames, -1)
 
-            # BJP/product rule in log space. Division by F is unnecessary for
-            # argmax decoding and would not change the normalized distribution.
+            # BJP/product rule in log space. Division by F preserves argmax
+            # decoding but changes the normalized distribution (temperature).
             fused_log_probs = frame_log_probs.sum(dim=1)
             fused_steps.append(fused_log_probs.unsqueeze(1))
 
