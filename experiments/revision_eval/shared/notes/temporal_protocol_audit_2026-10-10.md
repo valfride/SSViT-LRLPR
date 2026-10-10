@@ -8,9 +8,12 @@ replace a full 3,000-track re-evaluation.
 - The paper's multi-frame test results use test.py with --fusion bayes.
   This sums per-frame log-probabilities for each native output timestep/slot
   before greedy decoding (SVTRv2-AR is handled through shared-prefix BJP).
-- The common SROCR_VAL training-validation routine instead averages frame
-  probabilities and then selects checkpoints based on validation sequence
-  accuracy. Selection uses the validation split, not test results.
+- The common SROCR_VAL training-validation routine instead averages
+  per-frame softmax outputs and selects checkpoints based on validation
+  sequence accuracy. Selection uses the validation split, not test results.
+  For SVTRv2 CTC, its inference head already returns probabilities, so this
+  routine applies an additional softmax during checkpoint selection. That
+  historical selection rule is documented but not silently changed here.
 - SVTRv2's classifier returns softmax probabilities in eval mode. The legacy
   logit_average branch therefore averaged those probabilities directly.
   This is not an independent raw-logit control and the column was removed from
