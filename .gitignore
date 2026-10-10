@@ -62,3 +62,30 @@ experiments/*
 experiments/revision_eval/**/*.pth
 experiments/revision_eval/**/*.pt
 experiments/revision_eval/**/*.ckpt
+
+
+# ============================================================
+# Final exclusions for revision_eval
+# These must come AFTER !experiments/revision_eval/**
+# ============================================================
+
+# Python generated files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Local environments and editor metadata
+.venv/
+venv/
+.vscode/
+
+# Training logs and checkpoints
+*.log
+*.pt
+*.pth
+*.ckpt
+
+# Temporary training arrays
+*.npy
+*.npz

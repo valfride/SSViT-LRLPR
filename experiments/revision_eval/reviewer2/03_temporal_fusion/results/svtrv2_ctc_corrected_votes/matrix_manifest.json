@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "config": "baselines_configs/SVTRV2_BASELINE.yaml",
+  "checkpoints": "experiments/revision_eval/reviewer2/03_temporal_fusion/svtrv2_submitted",
+  "dataset": "/home/vwnascimento/doc2025/LMDB-Datasets/CompetitionDataset_LMDB_TEST_3k",
+  "frames": [
+    3,
+    5
+  ],
+  "fusions": [
+    "majority",
+    "char_majority"
+  ],
+  "tta": false,
+  "swa": false,
+  "num_swa": 1,
+  "runs": [
+    {
+      "frames": 3,
+      "fusion": "majority",
+      "metrics_json": "experiments/revision_eval/reviewer2/03_temporal_fusion/results/svtrv2_ctc_corrected_votes/F3_majority.json",
+      "predictions_csv": "experiments/revision_eval/reviewer2/03_temporal_fusion/results/svtrv2_ctc_corrected_votes/F3_majority_predictions.csv",
+      "log": "experiments/revision_eval/reviewer2/03_temporal_fusion/results/svtrv2_ctc_corrected_votes/F3_majority.txt",
+      "return_code": 0,
+      "status": "ok"
+    },
+    {
+      "frames": 3,
+      "fusion": "char_majority",
+      "metrics_json": "experiments/revision_eval/reviewer2/03_temporal_fusion/results/svtrv2_ctc_corrected_votes/F3_char_majority.json",
+      "predictions_csv": "experiments/revision_eval/reviewer2/03_temporal_fusion/results/svtrv2_ctc_corrected_votes/F3_char_majority_predictions.csv",
+      "log": "experiments/revision_eval/reviewer2/03_temporal_fusion/results/svtrv2_ctc_corrected_votes/F3_char_majority.txt",
+      "return_code": 0,
+      "status": "ok"
+    },
+    {
+      "frames": 5,
+      "fusion": "majority",
+      "metrics_json": "experiments/revision_eval/reviewer2/03_temporal_fusion/results/svtrv2_ctc_corrected_votes/F5_majority.json",
+      "predictions_csv": "experiments/revision_eval/reviewer2/03_temporal_fusion/results/svtrv2_ctc_corrected_votes/F5_majority_predictions.csv",
+      "log": "experiments/revision_eval/reviewer2/03_temporal_fusion/results/svtrv2_ctc_corrected_votes/F5_majority.txt",
+      "return_code": 0,
+      "status": "ok"
+    },
+    {
+      "frames": 5,
+      "fusion": "char_majority",
+      "metrics_json": "experiments/revision_eval/reviewer2/03_temporal_fusion/results/svtrv2_ctc_corrected_votes/F5_char_majority.json",
+      "predictions_csv": "experiments/revision_eval/reviewer2/03_temporal_fusion/results/svtrv2_ctc_corrected_votes/F5_char_majority_predictions.csv",
+      "log": "experiments/revision_eval/reviewer2/03_temporal_fusion/results/svtrv2_ctc_corrected_votes/F5_char_majority.txt",
+      "return_code": 0,
+      "status": "ok"
+    }
+  ]
+}
