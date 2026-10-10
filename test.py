@@ -479,7 +479,8 @@ def main():
                             num_classes,
                         )
 
-                        if looks_like_probabilities(logits_sequence):
+                        probability_output = looks_like_probabilities(logits_sequence)
+                        if probability_output:
                             probabilities = logits_sequence.clamp_min(1.0e-8)
                             log_probabilities = torch.log(probabilities)
                         else:
@@ -501,7 +502,11 @@ def main():
                                 else accumulated_probabilities + temporal_fused
                             )
                         else:
-                            temporal_fused = logits_sequence.mean(dim=1)
+                            # At inference the SVTRv2 CTC head returns probabilities,
+                            # not raw logits. Their logarithm is equivalent to
+                            # pre-softmax logits up to a class-independent constant.
+                            logit_scores = log_probabilities if probability_output else logits_sequence
+                            temporal_fused = logit_scores.mean(dim=1)
                             accumulated_logits = (
                                 temporal_fused
                                 if accumulated_logits is None
@@ -536,8 +541,17 @@ def main():
 
                     for logits_tensor in view_logits:
                         if cls_loss_type == "CTC":
+                            # The SVTRv2 eval head emits probabilities. Convert
+                            # these to log-probabilities before the CTC decoder,
+                            # which applies softmax internally; otherwise voting
+                            # ties use confidences distorted by a second softmax.
+                            ctc_frame_scores = (
+                                torch.log(logits_tensor.float().clamp_min(1.0e-8))
+                                if looks_like_probabilities(logits_tensor)
+                                else logits_tensor
+                            )
                             frame_predictions, frame_scores = ctc_greedy_decoder(
-                                logits_tensor,
+                                ctc_frame_scores,
                                 true_converter,
                                 return_scores=True,
                             )
