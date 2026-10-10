@@ -174,7 +174,7 @@ def main():
     parser.add_argument(
         "--fusion",
         type=str,
-        default="logit_average",
+        default="bayes",
         choices=["bayes", "average", "majority", "char_majority", "logit_average"],
         help="Temporal fusion strategy",
     )
