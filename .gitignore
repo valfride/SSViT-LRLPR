@@ -89,3 +89,6 @@ venv/
 # Temporary training arrays
 *.npy
 *.npz
+
+# Local LMDB dataset link
+/competition_dataset_lmdb
