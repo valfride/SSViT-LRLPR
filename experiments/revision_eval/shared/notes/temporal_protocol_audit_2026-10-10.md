@@ -83,14 +83,39 @@ It also removes the redundant/mislabeled logit-average control and states
 that the uncorrected product of correlated frame posteriors is a heuristic,
 not an exact calibrated Bayesian posterior.
 
-## Remaining before final table freeze
+## Corrected CTC voting results verified on 3,000 test tracklets
 
-1. Run the read-only full metadata audit on the 3,000-track test data.
-2. Re-run SVTRv2 CTC F=3/F=5 sequence-/character-majority with the corrected
-   confidence handling and compare predictions and rounded Recognition Rate
-   against the historical results.
-3. If chronological-first-F is intended, rerun **all** affected F=1/F=3
-   results under a newly versioned, explicitly sorted evaluation protocol;
-   otherwise keep the original metadata-order protocol transparently named.
-4. Preserve submitted checkpoints and the original benchmark/fusion artifacts;
-   never overwrite them with recalculations lacking a separate provenance.
+The user ran the corrected evaluator from revision/reviewer-eval-tooling on
+daugman, using the frozen SVTRv2 checkpoint, F=3/5, and sequence-/character-
+majority controls, with results written to a **new** directory:
+`experiments/revision_eval/reviewer2/03_temporal_fusion/results/svtrv2_ctc_corrected_votes/`.
+
+| Frames | Fusion | Original RR (%) | Corrected RR (%) | Correct/3000 before | Correct/3000 after |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 3 | majority | 62.5000 | 62.5000 | 1875 | 1875 |
+| 3 | char_majority | 63.3333 | 63.3667 | 1900 | 1901 |
+| 5 | majority | 67.1333 | 67.2667 | 2014 | 2018 |
+| 5 | char_majority | 69.3667 | 69.2667 | 2081 | 2078 |
+
+Corrected output was reported from the four JSON metrics objects:
+F3_majority.json, F3_char_majority.json, F5_majority.json,
+F5_char_majority.json. This audit note records the values provided from the
+local run; the JSON files themselves have not been uploaded/checked through
+this GitHub connection.
+
+The revised paper now reports the corrected one-decimal controls:
+F=3 sequence/character majority 62.5/63.4, F=5 67.3/69.3.
+Both BJP results are unchanged (68.6 at F=3, 73.8 at F=5), so the experimental
+conclusion is unchanged: product-rule fusion gives the best RR among the
+tested alternatives. No checkpoint was retrained.
+
+## Remaining protocol considerations
+
+1. Retain the historical metadata-order F=1/F=3 evaluation protocol and
+   document it consistently; reordering the **same** F frames does not affect
+   BJP fusion, but replacing frames with chronological-first F frames changes
+   the selected input subset and would require rerunning those evaluations.
+2. The full 3,000-track frame-order audit remains optional for a complete
+   metadata provenance check and has not been run as part of this note.
+3. Preserve submitted checkpoints and original benchmark/fusion artifacts;
+   never overwrite them with recalculations lacking separate provenance.
