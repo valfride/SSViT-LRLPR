@@ -1,6 +1,9 @@
 # LPLCv2 mixed Poor/Illegible: native aspect-controlled 3,000-crop F=1 test
 
-**Status:** implementation committed, not yet run on daugman.
+**Status:** aspect-filtered **dry-run completed successfully** on daugman.
+The selected 3,000-crop population now contains **844 Illegible and 2,156 Poor**;
+its original crop aspect ratio has minimum **1.7059**. The completed
+LMDB build and `--verify-only` output have **not yet been supplied**.
 This is an explicitly post-hoc, new test **variant**. Never overwrite
 the previous mixed 905 Illegible + 2,095 Poor dataset, or replace
 the earlier frozen Poor-only 3,000-case external evaluation.
@@ -65,6 +68,69 @@ reported as the same dataset or as an unbiased improvement of OCR
 performance. Any comparison to the unfiltered mixed set is a
 **post-hoc geometry sensitivity analysis**, and the prior
 Poor-only external RR of 24.57% remains unchanged.
+
+## Observed aspect-controlled dry-run — 13 October 2026
+
+The user ran the builder's geometry-controlled preview on `daugman` and
+supplied the following end-state and geometry figures. **These are
+dry-run statistics; no completed dataset has been verified.**
+
+| Property | Original mixed 3,000 | Geometry-controlled preview |
+| --- | ---: | ---: |
+| Total plate crops | 3,000 | **3,000** |
+| Illegible | 905 | **844** |
+| Poor | 2,095 | **2,156** |
+| Distinct source photographs | 2,986 | **2,986** |
+| Distinct plate OCR strings | 2,985 | **2,985** |
+| Cross-class source/label overlap | 0 / 0 | **0 / 0** |
+| Min native crop width/height | 0.963 | **1.7059** |
+| Median native aspect ratio | 2.7222 | **2.7333** |
+| Native aspect deviation >10% from 3:1 | 1,419 | **1,369** |
+| Native aspect deviation >20% from 3:1 | 438 | **363** |
+
+Sixty-one Illegible samples were removed (905 → 844).
+The total number of removed and replenished Poor samples
+cannot be determined from the *final class totals alone*; inspect
+`native_aspect_selection.removed_counts` and
+`native_aspect_selection.added_near_ideal_poor` in the original
+dry-run output. The builder records them automatically.
+
+Final layout: Poor Mercosur 1,731; Illegible Mercosur 689;
+Poor old Brazilian 425; Illegible old Brazilian 155.
+The final subset includes **2,420 Mercosur and 580 old Brazilian**
+plate crops.
+
+Final original crop ratios by class:
+
+| Measurement | Illegible (844) | Poor (2,156) |
+| --- | ---: | ---: |
+| Width p10 / median / p90 | 29 / 38 / 48 | 36 / 45 / 74 |
+| Height p10 / median / p90 | 11 / 14 / 19 | 13 / 16 / 27 |
+| Aspect min–max | 1.7059–4.2222 | 1.75–4.6176 |
+| Aspect p10 / median / p90 | 2.3091 / 2.6667 / 3.0 | 2.4 / 2.75 / 3.0377 |
+| Exactly 3:1 | 41 | 117 |
+| >10% off 3:1 | 454 | 915 |
+| >20% off 3:1 | 136 | 227 |
+
+Model configuration SHA-256s checked by the dry-run:
+
+- Frozen CNN–ViT:
+  `9db50ded91aabfff67d2863057e51bd4ef6a8dd8da5ce7a67c61fe3626fd7673`
+- SVTRv2-AR:
+  `f8c656f5486018553c88746678de842d7dd5ff3ebb30f1697ad48a3e8dc0a31f`
+
+Both configs specify the same direct bicubic resize to **96×32**,
+without padding. The crop filter applies **only the lower native
+aspect bound (1.7)**; retained extreme wide crops above 3.5
+are intentionally not removed. The 75-case reduction in
+`>20%` native-aspect deviations is descriptive and does not
+establish improved OCR accuracy or annotation correctness.
+
+The existing baseline datasets and evaluation scores remain
+unchanged. The next step is to run the non-dry command below in
+a **new output directory**, verify all 3,000 crops, freeze the
+resulting new selection manifest SHA-256, and run the frozen
+models with independent result output paths.
 
 ## Phase 1: dry-run on daugman (do this FIRST)
 
