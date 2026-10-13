@@ -122,3 +122,46 @@ and limitations (especially legibility-conditioned sample selection).
 Then replace the explicit pending R1.2 placeholder in the response letter.
 
 Do not assert overall LPLCv2 generalization beyond the eligible Poor subset.
+
+## Local preparation outcome — 12 October 2026
+
+The preparation script was successfully executed on `daugman` against
+`~/doc2025/LMDB-Datasets/LPLC_dataset/annotations_v2.json`:
+
+| Audit field | Value |
+| --- | ---: |
+| Poor annotated plate instances | 7,520 |
+| Invalid/incompatible OCR labels | 577 |
+| Valid seven-character OCR labels | 6,943 |
+| Excluded as occluded | 2 |
+| Eligible candidates before decode | 6,941 |
+| Unique eligible OCR labels | 6,780 |
+| Unique eligible source images | 6,666 |
+| Selected plate crops | **3,000** |
+| Unique selected OCR labels | **3,000** |
+| Unique selected source images | **3,000** |
+| Source-image conflicts skipped while selecting | 57 |
+| Distinct cameras in selection | 422 |
+| Rain-flagged samples | 73 |
+| Faulty-camera-flagged samples | 211 |
+| Crop width range | 17–226 pixels |
+| Crop height range | 10–104 pixels |
+
+Time of day in selected subset: afternoon 940, evening 874, morning 769,
+night 417. Acquisition day: 0: 879, 1: 1,157, 2: 964.
+
+**Frozen selection manifest SHA-256:**
+
+`5a2ddbfff8a92309d50094b9097b42338ee825b18edc9a7b2d38e4d18610f5d0`
+
+The sample was generated **without** `--exclude-labels-metadata`; overlap
+with LRLPR-26 labels must still be audited independently before the results
+are characterized as cross-dataset identity-disjoint. A cross-label overlap
+audit does not automatically invalidate a cross-dataset evaluation, but it
+changes the claims that may be made. Do not silently change the frozen
+selection after inspecting predictions.
+
+**Pending:** visually inspect the contact sheet, run independent label-overlap
+audit, verify local frozen checkpoints, run F=1 inference and record measured
+RR, character accuracy and CER. Dataset crops and annotation manifests stay
+outside the public repository.
