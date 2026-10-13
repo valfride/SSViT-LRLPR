@@ -586,3 +586,38 @@ bin counts and accuracies. Run it again with a **new** output filename
 overwriting the old output; examine whether the nonmonotonic
 pattern persists separately within Brazilian/Mercosur classes. The
 sample and model prediction CSV must remain unchanged.
+
+
+## Visual QA of native-versus-model contact sheet — 13 October 2026
+
+A user-shared `selected_random.jpg` contact sheet (24 selected
+examples, with source photograph, original-pixel crop and bicubic
+96×32 input) was visually inspected following the native-size audit.
+
+**Observed:** many plates really are small and degraded *within the
+provided source photographs*, showing night exposure issues, blur,
+strong color casts, low contrast and blockiness. Examples include
+`ANV5648` (41×17 px), `AHQ9H77` (43×15 px),
+`BCJ0129` (41×14 px; magenta illumination) and
+`AAF9666` (70×23 px; severely dark/noisy). Larger samples such as
+`BBH6J46` (101×40 px) may remain hard due to very low contrast.
+No assertion about untouched sensor-native files can be made from
+a contact sheet alone.
+
+**Possible annotation/cropping problem:** the random sample
+`AYL8217` (34×12 px; source filename prefix `077c8ab4`)
+appears as an almost featureless gray crop with a dark line, rather
+than a visible seven-character plate. It needs a magnified source-image
+inspection with its original annotation rectangle overlaid. This is
+a qualitative QA **flag**, not a verified misannotation or permission
+to change the frozen test subset. The montage cannot establish how
+many other plates have incorrect coordinates.
+
+**Protocol:** preserve the complete frozen 3,000-plate manifest,
+its existing predictions and its reported 24.57% RR. Inspect flagged
+source/annotation cases and report any annotation-quality limitation
+transparently. If a separate quality-controlled evaluation is
+justified, define objective image-only exclusion rules and report
+it explicitly as a secondary sensitivity analysis; never silently
+remove hard examples after reading OCR predictions. The crop QA
+has not yet been completed for all 3,000 samples.
