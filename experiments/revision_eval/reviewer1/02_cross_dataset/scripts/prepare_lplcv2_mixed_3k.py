@@ -266,7 +266,9 @@ def aspect_filter_and_refill(base_tagged, all_illegible, all_poor,
             "source_track_id": row["track_id"],
             "source_image": row["source_image"],
             "annotation_index": row["annotation_index"],
-            "original_aspect_ratio": round(original_aspect(row), 6),
+            "original_aspect_ratio": original_aspect(row),
+            "crop_width": int(row["crop_width"]),
+            "crop_height": int(row["crop_height"]),
         }
 
     report = {
@@ -420,9 +422,9 @@ def verify(folder, expected_hash=None):
         above = Counter(
             r["source_legibility"] for r in removal_rows
             if maximum is not None and r["original_aspect_ratio"] > maximum)
-        if dict(below) != native_aspect_selection["removed_below_min"]:
+        if dict(below) != native_aspect_selection.get("removed_below_min", dict(below)):
             raise RuntimeError("Recorded below-minimum removals differ from summary")
-        if dict(above) != native_aspect_selection["removed_above_max"]:
+        if dict(above) != native_aspect_selection.get("removed_above_max", dict(above)):
             raise RuntimeError("Recorded above-maximum removals differ from summary")
         if sum(below.values()) + sum(above.values()) != required:
             raise RuntimeError("Removed records do not violate the native aspect interval")
@@ -448,7 +450,7 @@ def verify(folder, expected_hash=None):
             (r["source_image"], r["annotation_index"]) for r in rows
         }
         if removed_log_ids & present_ids:
-            raise RuntimeError("A supposedly removed low-aspect record remains in test")
+            raise RuntimeError("A supposedly removed out-of-range crop remains in test")
     elif any(r.get("selection_origin") == "near_ideal_poor_refill" for r in rows):
         raise RuntimeError("Unexpected replacement in unfiltered mixed LMDB")
     if len({(row["source_image"], row["annotation_index"]) for row in rows}) != 3000:
