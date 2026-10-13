@@ -65,6 +65,7 @@ def describe(rows):
     widths = [r["width"] for r in rows]
     heights = [r["height"] for r in rows]
     ratios = [r["ratio"] for r in rows]
+    border_margins = [r["border_margin"] for r in rows]
     sources = Counter(r["source"] for r in rows)
     labels = Counter(r["label"] for r in rows)
     return {
@@ -86,6 +87,16 @@ def describe(rows):
         ],
         "occluded_count": sum(r["occluded"] for r in rows),
         "type_missing_count": sum(r["missing_type"] for r in rows),
+        # Diagnostic only: the ROI margin setting on the curator's
+        # detector ROI is not known to be enforced, and the LPLCv2
+        # box is a separate annotation type. Never silently discard.
+        "native_annotation_border_margin_px_min_p10_median_p90": [
+            min(border_margins), percentile(border_margins, 10),
+            percentile(border_margins, 50), percentile(border_margins, 90),
+        ],
+        "annotations_at_source_image_border": sum(v == 0 for v in border_margins),
+        "annotations_below_2px_source_image_margin": sum(v < 2 for v in border_margins),
+        "annotations_at_least_2px_source_image_margin": sum(v >= 2 for v in border_margins),
         "height_at_least_px": {
             str(value): sum(r["height"] >= value for r in rows)
             for value in HEIGHT_BANDS
@@ -161,6 +172,7 @@ def inventory(args):
             w, h = x2 - x1, y2 - y1
             row = {
                 "width": w, "height": h, "ratio": w / h,
+                "border_margin": min(x1, y1, iw - x2, ih - y2),
                 "source": filename, "label": label,
                 "occluded": bool(ann.get("occ", False)),
                 "missing_type": not (
@@ -189,6 +201,7 @@ def inventory(args):
             "minimum_native_crop_height_px": args.min_height,
             "ocr": "old Brazilian or Mercosur seven-character structure",
             "bbox": "floor/ceil axis-aligned envelope of original four corners, fully in bounds",
+            "border_2px_rule": "reported diagnostically, NOT an exclusion filter",
             "vehicle_types": "all, including motorcycles and missing vehicle types",
             "occlusion": "retained",
             "duplicates": "annotation instances retained; source/label repeats counted",
