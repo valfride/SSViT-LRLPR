@@ -824,29 +824,29 @@ aspect-ratio protocol. Any aspect-preserving letterbox
 evaluation would be a separate preprocessing variant.
 
 
-## New post-hoc native-aspect-controlled mixed variant (pending)
+## New post-hoc two-sided aspect-controlled mixed variant (pending)
 
-A distinct **3,000-plate** variant removes only source crop
-aspect ratios below **1.7:1** from the previously seeded mixed
-905-Illegible/2,095-Poor selection, then replenishes with an
-equal number of **unused Poor** crops having aspect ratios
-between **2.5:1 and 3.5:1**. The replacement pool excludes
-photographs or OCR labels overlapping with Illegible.
-Hence the remaining Illegible count may be below 905, with
-the corresponding number added to Poor. All model inputs
-remain 96×32 bicubic; actual crop bytes remain unchanged.
-The builder checks both parent manifest hashes and records
-every removal/replacement. The original mixed dataset
-remains unchanged and the new experiment is explicitly
-**post-hoc geometry sensitivity**, not a replacement for
-the frozen Poor-only external evaluation.
+The updated builder can create a **new 3,000-plate sensitivity set**
+from the exact earlier seeded 905 Illegible + 2,095 Poor draw.
+It removes all original crops with native width/height
+**outside the inclusive interval [1.7, 4.0]**, separately counting
+below-1.7 and above-4.0 removals. The builder refills 1-for-1 from
+unused Poor crops having native ratio in **[2.5, 3.5]**, rejects
+cross-class source-photo / OCR-label overlap, and records all
+replacements and their source annotations. Since some Illegible
+crops may be removed, their final count will be under 905 and
+the Poor share correspondingly higher. The model inputs stay
+96×32 bicubic with unchanged original crop PNG bytes.
+
+The *previous, one-sided* (minimum 1.7; **no maximum**) dry-run
+yielded 844 Illegible, 2,156 Poor, min native ratio 1.7059 and
+363 crops with native aspect deviating more than 20% from 3:1.
+**Those counts do not apply to the new two-sided filter; its
+dry-run is pending.** Both the frozen Poor-only result and
+the unfiltered mixed-selection protocol remain unchanged.
+This is a post-hoc geometry sensitivity analysis, not
+an official LPLCv2 OCR test distribution.
 
 See [MIXED_ASPECT_CONTROLLED_3K.md](MIXED_ASPECT_CONTROLLED_3K.md)
-for the dry-run/build/verify commands and caveats. The
-**successful dry-run** selected 844 Illegible and 2,156 Poor
-plate crops (3,000 total), retaining 2,986 distinct source
-photographs and 2,985 OCR strings with zero cross-class
-overlap. Native crop min aspect ratio became 1.7059;
-the >20%-off-3:1 count fell from 438 to 363. The model
-input remains 96×32 direct bicubic. **LMDB creation and
-full validation are still pending.**
+for the updated `--max-native-aspect 4.0` dry-run/build/verify commands,
+the different output directory, and selection regression tests.
