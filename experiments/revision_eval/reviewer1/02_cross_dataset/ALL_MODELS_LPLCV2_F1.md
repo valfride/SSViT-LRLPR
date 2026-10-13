@@ -176,8 +176,32 @@ python3 "$RUNNER" --character-table
 This new no-inference command reads each local `F1_bayes.json`,
 requires 3,000 plates and 21,000 GT/slot character positions, and
 cross-checks the computed character metrics against integer counts.
-Keep the main Table-I-style 7/7, >=6, >=5 table and consider adding
-a compact character accuracy/CER table or corresponding discussion
-**after inspecting the full eight-model diagnostic output**.
-No new scores are assumed here.
+The user ran the character diagnostic successfully, yielding all
+eight rows below. These rounded percentages were checked locally by
+`--character-table` against exact integer numerator/denominator counts.
+
+| Model | Exact-match RR (%) ↑ | Char. accuracy (%) ↑ | CER (%) ↓ |
+|---|---:|---:|---:|
+| MDiff4STR | 12.03 | 62.18 | 37.75 |
+| CPPD | **27.17** | 73.10 | 26.86 |
+| IGTR | 26.73 | **75.11** | **24.86** |
+| LISTER | 18.13 | 64.04 | 35.39 |
+| SVTRv2 | 16.53 | 64.44 | 31.97 |
+| OTE | 12.47 | 57.86 | 42.02 |
+| SVTRv2-AR | 20.07 | 68.51 | 31.40 |
+| Ours (best EMA) | 26.40 | 72.80 | 27.17 |
+
+The full-plate and character-level rankings are not identical:
+CPPD leads exact-match RR, while IGTR leads char. accuracy and CER.
+The best-validation EMA CNN--ViT is third in all three metrics
+on this fixed 3,000-crop subset; relative to CPPD, it trails by
+0.77 percentage points in RR and 0.30 percentage points in char.
+accuracy, with 0.31 percentage points higher CER.
+No significance or distinct Poor/Illegible cohort claims follow from
+these aggregate metrics alone.
+
+The manuscript retains the Table-I-style 7/7, >=6, >=5 main table
+and adds a compact character-accuracy/CER diagnostic table with
+these values, under the dedicated Cross-Dataset Experimental Results
+subsection.
 
