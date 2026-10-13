@@ -282,12 +282,13 @@ def main():
     check_datasets(datasets)
     variants = VARIANTS if args.variant == "both" else (args.variant,)
     print("Using isolated 7,023-sample results paths; old 3,000-sample results unchanged.")
+    # All operations, including aggregate reporting, must verify the
+    # original validation-selected checkpoints against any present results.
+    checkpoints = checkpoint_preflight(args.lock, datasets)
     if args.report:
         report(datasets, variants)
-    else:
-        checkpoints = checkpoint_preflight(args.lock, datasets)
-        if args.run:
-            run_all(checkpoints, datasets, variants)
+    elif args.run:
+        run_all(checkpoints, datasets, variants)
 
 
 if __name__ == "__main__":
