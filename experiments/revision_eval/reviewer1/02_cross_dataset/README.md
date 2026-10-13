@@ -863,3 +863,19 @@ an official LPLCv2 OCR test distribution.
 See [MIXED_ASPECT_CONTROLLED_3K.md](MIXED_ASPECT_CONTROLLED_3K.md)
 for the updated `--max-native-aspect 4.0` dry-run/build/verify commands,
 the different output directory, and selection regression tests.
+
+**Both frozen F=1 models have now been evaluated on this exact
+independently verified 3,000-crop LMDB:** CNN–ViT obtained
+**26.40% exact-match RR (792/3,000)**, 72.80% character-slot
+accuracy and 27.17% CER, versus SVTRv2-AR at **20.07%
+(602/3,000)**, 68.51% character-slot accuracy and 31.40% CER.
+This is an observed **+6.33 percentage-point** CNN–ViT advantage.
+CNN–ViT selected the existing submitted-model `last.pth`;
+SVTRv2-AR explicitly selected its original frozen
+`student_acc_0.7500_ep_52.pth` checkpoint. Scores split by
+Poor (2,158) versus Illegible (842), and the paired
+McNemar test, remain to be calculated from the local frozen
+per-track predictions. These are exploratory, as-annotated
+post-hoc geometry-controlled results, **not** the older
+Poor-only cross-dataset result.
+
