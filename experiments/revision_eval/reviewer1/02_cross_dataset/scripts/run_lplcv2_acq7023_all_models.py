@@ -99,7 +99,7 @@ def complete(entry, dataset, variant, checkpoint=None):
     return doc
 
 
-def checkpoint_preflight(lock, datasets):
+def checkpoint_preflight(lock, datasets, variants):
     # The previous lock deliberately contains the old frozen manifest SHA;
     # importing load_lock verifies that untouched checkpoint selection.
     ckpts = load_lock(lock)
@@ -109,7 +109,7 @@ def checkpoint_preflight(lock, datasets):
         preflight_config(config_for(config), loss)
         ckpt = ckpts[model]
         print(f"\n{model}: {ckpt.name}, checkpoint SHA256 {sha256(ckpt)}")
-        for variant in VARIANTS:
+        for variant in variants:
             found = complete(entry, datasets[variant], variant, ckpt)
             output = output_dir(variant, slug)
             if found is None and output.exists() and any(output.iterdir()):
@@ -270,7 +270,7 @@ def main():
     operations.add_argument("--preflight", action="store_true")
     operations.add_argument("--run", action="store_true")
     operations.add_argument("--report", action="store_true")
-    p.add_argument("--variant", choices=("both", "tight", "padded"), default="both")
+    p.add_argument("--variant", choices=("both", "tight", "padded"), default="padded")
     p.add_argument("--tight-dataset", type=Path, default=(
         Path.home() / "doc2025/LMDB-Datasets/LPLCv2_AcqStrict_Tight_7023"))
     p.add_argument("--padded-dataset", type=Path, default=(
@@ -284,7 +284,7 @@ def main():
     print("Using isolated 7,023-sample results paths; old 3,000-sample results unchanged.")
     # All operations, including aggregate reporting, must verify the
     # original validation-selected checkpoints against any present results.
-    checkpoints = checkpoint_preflight(args.lock, datasets)
+    checkpoints = checkpoint_preflight(args.lock, datasets, variants)
     if args.report:
         report(datasets, variants)
     elif args.run:
