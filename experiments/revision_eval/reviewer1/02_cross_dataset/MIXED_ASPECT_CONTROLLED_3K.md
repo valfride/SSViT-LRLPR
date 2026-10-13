@@ -1,15 +1,42 @@
 # LPLCv2 mixed Poor/Illegible: native aspect-controlled 3,000-crop F=1 test
 
-**Status:** the revised **two-sided [1.7,4.0] dry-run has completed
-successfully on daugman**, with 842 Illegible and 2,158 Poor plate
-crops (3,000 total), no cross-class source or label overlap, and
-native width/height inside the accepted bounds. **The LMDB has not yet
-been built or verified**, and no final mixed manifest SHA-256 has been
-received. The previous lower-bound-only (844/2,156) dry-run remains
-documented below for historical comparison.
+**Status:** the revised **two-sided [1.7,4.0] LMDB was built on daugman**
+(13 October 2026), with 842 Illegible and 2,158 Poor crops (3,000 total),
+zero cross-class source/label overlap, and original crop geometry within
+[1.7, 4.0]. The build returns its final selection-manifest SHA-256 and
+calls the internal `verify(stage)` before staging is atomically renamed.
+A separate post-build `--verify-only` run has **not yet been supplied**.
+The previous one-sided [1.7, infinity) dry-run (844/2,156) is retained
+below as historical evidence.
 This is an explicitly post-hoc, new test **variant**. Never overwrite
 the previous mixed 905 Illegible + 2,095 Poor dataset, or replace
 the earlier frozen Poor-only 3,000-case external evaluation.
+
+## Frozen built LMDB provenance
+
+The completed build command reported:
+
+- Output directory: `~/doc2025/LMDB-Datasets/LPLCv2_MixedAspect1p7to4p0_TEST_3k`
+- **Selection-manifest SHA-256**:
+  `3d64cb68c98732fc5803a3de40950efa1da1cb9421c0c653ba18b915bed30d05`
+- Source Illegible parent SHA-256:
+  `7e74f46d991db9835739e7b99b5c01f1be6da7b21ba1b50b2c9bef848b7dfb0e`
+- Source Poor parent SHA-256:
+  `8a08180604d88b652c6d915853830b4b1fd0a9ff6bcceace597d8a57f199d408`
+- Submitted CNN–ViT config SHA-256:
+  `9db50ded91aabfff67d2863057e51bd4ef6a8dd8da5ce7a67c61fe3626fd7673`
+- SVTRv2-AR baseline config SHA-256:
+  `f8c656f5486018553c88746678de842d7dd5ff3ebb30f1697ad48a3e8dc0a31f`
+- Included files: `data.mdb`, `metadata.pkl`,
+  `selection_manifest.json`, `dataset_info.json`,
+  `validation.json`, `crops/`
+
+**Built does not mean external post-build verification is complete.**
+The builder validates every crop and metadata item in its temporary
+staging directory before atomic publication. Still run the independent
+`--verify-only` command below and check that the hash is identical
+before inference. The dataset's restricted images and per-sample
+annotation manifest must remain on daugman.
 
 ## Selection rule (independent of recognizer predictions)
 
@@ -124,10 +151,10 @@ no padding**, SHA-256
 `f8c656f5486018553c88746678de842d7dd5ff3ebb30f1697ad48a3e8dc0a31f`
 (SVTRv2-AR).
 
-**Next:** build the isolated `LPLCv2_MixedAspect1p7to4p0_TEST_3k`
-directory with precisely the same parameters, independently run
-`--verify-only`, and record the resulting selection-manifest hash.
-Do not alter the already frozen Poor-only or prior mixed selection.
+**Next:** the isolated `LPLCv2_MixedAspect1p7to4p0_TEST_3k`
+directory has been built; independently run `--verify-only` and ensure
+it reports the frozen manifest SHA-256 above. Do not alter the earlier
+Poor-only or prior mixed selection.
 
 ## Historical lower-bound-only dry-run — 13 October 2026
 
@@ -245,8 +272,8 @@ change the agreed threshold/replacement interval to make it pass.
 
 ## Phase 2: build NEW frozen variant and verify
 
-Only after reviewing the dry-run, repeat the command above
-without `--dry-run`:
+**Already executed successfully on daugman.** Preserved here
+for reproducibility. Do not rerun in the same output directory:
 
 ```bash
 python3 experiments/revision_eval/reviewer1/02_cross_dataset/scripts/prepare_lplcv2_mixed_3k.py \
@@ -268,8 +295,8 @@ python3 experiments/revision_eval/reviewer1/02_cross_dataset/scripts/prepare_lpl
   --verify-only
 ```
 
-Record the actual `selection_manifest.json` SHA-256 and
-`validation.json` for publication provenance. The verifier
+The built manifest SHA-256 is recorded above. Check that
+`--verify-only` reports the same value and inspect `validation.json`. The verifier
 checks each raw LMDB image, model 96x32 geometry, crop dimensions,
 category counts, original annotation uniqueness, absence of
 cross-subset overlaps and selected ratio thresholds. All restricted
