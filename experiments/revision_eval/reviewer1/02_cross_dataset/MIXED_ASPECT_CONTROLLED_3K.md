@@ -5,7 +5,9 @@
 zero cross-class source/label overlap, and original crop geometry within
 [1.7, 4.0]. The build returns its final selection-manifest SHA-256 and
 calls the internal `verify(stage)` before staging is atomically renamed.
-A separate post-build `--verify-only` run has **not yet been supplied**.
+The independent post-build `--verify-only` was executed on daugman
+and **passed all 3,000 samples**. The recomputed selection-manifest
+SHA-256 is identical to the frozen build manifest.
 The previous one-sided [1.7, infinity) dry-run (844/2,156) is retained
 below as historical evidence.
 This is an explicitly post-hoc, new test **variant**. Never overwrite
@@ -31,12 +33,11 @@ The completed build command reported:
   `selection_manifest.json`, `dataset_info.json`,
   `validation.json`, `crops/`
 
-**Built does not mean external post-build verification is complete.**
-The builder validates every crop and metadata item in its temporary
-staging directory before atomic publication. Still run the independent
-`--verify-only` command below and check that the hash is identical
-before inference. The dataset's restricted images and per-sample
-annotation manifest must remain on daugman.
+**Independent verification passed.** The builder validated all 3,000
+crop/metadata records during atomic staging, and the later, independent
+post-build `--verify-only` pass reconfirmed all 3,000 samples and
+the exact frozen manifest SHA-256. The dataset's restricted images,
+crop data, and per-sample annotation manifest remain on daugman.
 
 ## Selection rule (independent of recognizer predictions)
 
@@ -151,10 +152,9 @@ no padding**, SHA-256
 `f8c656f5486018553c88746678de842d7dd5ff3ebb30f1697ad48a3e8dc0a31f`
 (SVTRv2-AR).
 
-**Next:** the isolated `LPLCv2_MixedAspect1p7to4p0_TEST_3k`
-directory has been built; independently run `--verify-only` and ensure
-it reports the frozen manifest SHA-256 above. Do not alter the earlier
-Poor-only or prior mixed selection.
+**Next:** run both frozen recognition models at F=1 on the
+**same verified** `LPLCv2_MixedAspect1p7to4p0_TEST_3k` directory.
+Do not alter the earlier Poor-only or prior mixed selections.
 
 ## Historical lower-bound-only dry-run — 13 October 2026
 
@@ -295,12 +295,14 @@ python3 experiments/revision_eval/reviewer1/02_cross_dataset/scripts/prepare_lpl
   --verify-only
 ```
 
-The built manifest SHA-256 is recorded above. Check that
-`--verify-only` reports the same value and inspect `validation.json`. The verifier
-checks each raw LMDB image, model 96x32 geometry, crop dimensions,
-category counts, original annotation uniqueness, absence of
-cross-subset overlaps and selected ratio thresholds. All restricted
-images/manifests/predictions stay local on daugman.
+The independent `--verify-only` run returned `verified: 3000`,
+`all_test_split: true`, `all_crops_lmdb_match: true`,
+`all_model_inputs_96x32_bicubic: true`, and exactly the frozen
+manifest SHA-256. The verified 842/2,158 counts and the native
+aspect ratio range 1.7059–4.0 match the build. The verifier
+also validates category counts, original annotation uniqueness,
+and the absence of cross-subset source-image/OCR-label overlaps.
+All restricted images/manifests/predictions remain local on daugman.
 
 ## Evaluation only after manifest freeze
 
@@ -312,3 +314,62 @@ recognition, CER, and per-position accuracy, including original
 vs newly selected crop counts. Do not select or remove additional
 samples based on predictions; complete the independent
 source-target annotation review when feasible.
+
+
+## Frozen F=1 recognition invocations (after successful verification)
+
+CNN–ViT (the submitted checkpoint and configuration snapshot):
+
+```bash
+cd ~/doc2025/project1
+python3 experiments/revision_eval/shared/scripts/run_eval_matrix.py \
+  --config experiments/revision_eval/submitted_model/config_snapshot.yaml \
+  --checkpoints experiments/revision_eval/submitted_model \
+  --split ~/doc2025/LMDB-Datasets/LPLCv2_MixedAspect1p7to4p0_TEST_3k \
+  --output-dir experiments/revision_eval/reviewer1/02_cross_dataset/results/lplcv2_mixed_aspect_ours \
+  --frames 1 --fusions bayes
+```
+
+SVTRv2-AR: select the **original frozen LRLPR-26 baseline**
+`student_acc_0.7500_ep_52.pth`. Its exact daugman path must be
+verified; do **not** substitute another baseline checkpoint. A
+one-file symlink directory prevents the runner's automatic
+`*acc_*.pth` selection from choosing a different weight set.
+
+```bash
+cd ~/doc2025/project1
+mapfile -t CKPTS < <(
+  find "$HOME/doc2025" -type f -name 'student_acc_0.7500_ep_52.pth' -print
+)
+if (( ${#CKPTS[@]} != 1 )); then
+  printf 'Expected exactly 1 frozen SVTR checkpoint, found %s\n' "${#CKPTS[@]}"
+  printf '%s\n' "${CKPTS[@]}"
+else
+  SVTR_CKPT="${CKPTS[0]}"
+  RESULT_DIR="$PWD/experiments/revision_eval/reviewer1/02_cross_dataset/results/lplcv2_mixed_aspect_svtrv2_ar"
+  LINK_DIR="$RESULT_DIR/frozen_checkpoint_only"
+  mkdir -p "$LINK_DIR"
+  ln -sfn "$SVTR_CKPT" "$LINK_DIR/student_acc_0.7500_ep_52.pth"
+  sha256sum "$SVTR_CKPT"
+
+  python3 experiments/revision_eval/shared/scripts/run_eval_matrix.py \
+    --config baselines_configs/SVTRV2_AR_BASELINE.yaml \
+    --checkpoints "$LINK_DIR" \
+    --split ~/doc2025/LMDB-Datasets/LPLCv2_MixedAspect1p7to4p0_TEST_3k \
+    --output-dir "$RESULT_DIR" \
+    --frames 1 --fusions bayes
+fi
+```
+
+Both evaluations must run **without TTA, SWA, training, sample filtering,
+or checkpoint reselection**. Expected output in each isolated
+directory: `F1_bayes.json`, `F1_bayes_predictions.csv`,
+`F1_bayes.txt` and `matrix_manifest.json`.
+The overall exact-match rate is not enough: also separately score
+the 842 Illegible and 2,158 Poor annotations by joining predictions
+against the frozen local `selection_manifest.json`. Because some
+Illegible OCR labels may be unverifiable from the released still crop,
+interpret as **exploratory as-annotated** recognition on a
+post-hoc geometry-controlled subset; the original Poor-only score
+remains unchanged. Do not commit restricted per-image prediction
+records or plate labels without permission.
