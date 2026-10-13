@@ -685,3 +685,65 @@ Retain the **original 3,000-sample results unaltered**, explicitly
 labeling any future filtered analysis as an additional, post-hoc
 sensitivity check. Data assets and review sheets remain local,
 subject to LPLCv2 redistribution restrictions.
+
+
+## Full 3,000-sample automated annotation-QA audit — 13 October 2026
+
+Read-only audit of frozen manifest SHA-256
+8a08180604d88b652c6d915853830b4b1fd0a9ff6bcceace597d8a57f199d408:
+
+| QA field | Count |
+| --- | ---: |
+| Source images successfully decoded | 3,000 |
+| At least one heuristic flag | 501 (16.70%) |
+| No heuristic flags | 2,499 (83.30%) |
+| Low grayscale standard deviation (below 16) | 339 |
+| Bounding box within 3.5% of source-image edge | 162 |
+| Annotated bbox aspect outside [1.7, 4.0] | 24 |
+| Review pages covering all 3,000 | 125 |
+| Priority-flagged pages | 21 |
+
+The flag types overlap (525 flag occurrences across 501 unique
+images). A flagged example is NOT automatically a ground-truth
+error; unflagged examples are NOT necessarily correct either.
+These numbers cannot be described as an annotation-error rate.
+
+### Planned blinded manual annotation-quality review
+
+Use the new script scripts/prepare_blind_annotation_review.py to
+take a seeded, random, 100-example review sample from the 501
+flagged and 200-example review sample from the 2,499 unflagged.
+It generates local review contact sheets and blind_review.csv
+with manual_status/manual_note fields; no model predictions
+or model correctness are read.
+
+    cd ~/doc2025/project1
+    git pull --ff-only
+    python3 experiments/revision_eval/reviewer1/02_cross_dataset/scripts/prepare_blind_annotation_review.py \
+      --qa-dir ~/doc2025/LMDB-Datasets/LPLCv2_annotation_QA_20261013 \
+      --dataset-root ~/doc2025/LMDB-Datasets/LPLC_dataset \
+      --output-dir ~/doc2025/LMDB-Datasets/LPLCv2_manual_QA_pilot_20261013 \
+      --flagged 100 --unflagged 200 --seed 2026
+
+Review flagged_sample_pages and unflagged_sample_pages,
+then assign exactly one manual_status to each row:
+valid_target, unverifiable_text, wrong_box_or_target,
+wrong_ocr_label, uncertain. A correctly localized but
+independently unreadable plate is distinct from a wrong box
+or proven OCR mislabel.
+
+After all 300 human classifications, run the read-only summary:
+
+    python3 experiments/revision_eval/reviewer1/02_cross_dataset/scripts/prepare_blind_annotation_review.py \
+      --output-dir ~/doc2025/LMDB-Datasets/LPLCv2_manual_QA_pilot_20261013 \
+      --summarize
+
+The output gives descriptive stratum-weighted proportions,
+not statistically certified counts or confidence intervals.
+Preserve all 3,000 frozen samples and existing predictions,
+including the original 24.57% as-annotated result. If
+material annotation failures are confirmed, extend manual
+QA and report sensitivity analyses separately, without
+retroactive undocumented sample exclusion.
+
+Keep all restricted sample imagery and manual reports local.
