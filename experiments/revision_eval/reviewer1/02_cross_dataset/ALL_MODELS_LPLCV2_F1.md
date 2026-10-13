@@ -205,3 +205,53 @@ and adds a compact character-accuracy/CER diagnostic table with
 these values, under the dedicated Cross-Dataset Experimental Results
 subsection.
 
+
+## Poor versus Illegible subgroup analysis (all eight models)
+
+**Purpose:** determine whether the external ranking changes with the
+frozen LPLCv2 source **legibility annotations**. This partitions exactly
+the already-verified 3,000 samples into 2,158 Poor and 842 OCR-labelled
+Illegible plate crops. It does not rerun recognition or introduce new
+test examples. For every model, **both cohorts come from the same F=1
+mixed-aspect selection**. Do not compare these subgroup results to the
+separately constructed historical Poor-only 3,000 subset.
+
+Run on daugman:
+
+```bash
+cd ~/doc2025/project1
+git pull --ff-only
+RUNNER=experiments/revision_eval/reviewer1/02_cross_dataset/scripts/run_lplcv2_all_models.py
+python3 -m py_compile "$RUNNER"
+python3 "$RUNNER" --legibility-table
+```
+
+This prints **two Markdown tables**, Poor (n=2,158) and Illegible
+(n=842), for all eight models, with 7/7 exact-match RR,
+>=6 and >=5 partial recognition, seven-slot character accuracy,
+Levenshtein CER, and **exact correct/total counts**.
+It does not print any plate GT, prediction, source filename or
+sample ID. Save its textual output privately if desired.
+
+For each model, it uses the existing
+`summarize_mixed_legibility_predictions.py` verification code:
+joins predictions to the frozen `selection_manifest.json` by
+virtual track ID, checks the frozen SHA-256
+`3d64cb68c98732fc5803a3de40950efa1da1cb9421c0c653ba18b915bed30d05`,
+checks sample identity/GT, independently computes every character
+match and edit distance, requires complete 3,000-prediction coverage,
+and verifies recomputed global integer counts against the original
+`F1_bayes.json`. The new eight-model command additionally ensures
+the Poor and Illegible subgroup numerators/denominators sum to the
+verified global totals. Any mismatch stops the command.
+
+**Scientific interpretation:** an OCR-labelled *Illegible* target is
+not necessarily human-readable from the released crop, so these
+are as-annotated recognition rates, not certified perceptual
+legibility performance. Compare rankings **within each cohort**;
+different class sizes and label quality preclude simple causal
+claims. Small between-model differences still require paired
+inference on the same local prediction identities, preferably
+accounting for duplicate source photographs. The main manuscript
+table remains frozen until real subgroup aggregate outputs
+are available.
