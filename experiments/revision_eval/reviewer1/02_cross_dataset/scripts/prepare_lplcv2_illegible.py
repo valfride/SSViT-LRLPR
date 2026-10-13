@@ -36,7 +36,9 @@ MANIFEST_FIELDS = (
     "track_id", "source_image", "annotation_index", "ocr", "legibility",
     "vehicle_type", "known_motorcycle", "occluded",
     "camera_id", "time", "day", "rain", "faulty",
-    "xy", "crop_box_xyxy", "source_width", "source_height",
+    "xy", "raw_annotation_box_xyxy", "crop_box_xyxy",
+    "bbox_clipped_to_image", "annotation_area_inside_image",
+    "source_width", "source_height",
     "crop_width", "crop_height", "crop_path",
 )
 
@@ -124,6 +126,69 @@ def inventory(annotations, exclude_known_motorcycles):
     return selected, stats
 
 
+def preflight_geometry(candidates, photos):
+    """Check every annotation against *decoded* source-image dimensions.
+
+    No crops are written. Distinguishes minor overflow from annotations
+    completely outside the image; provides details for independent QA.
+    """
+    stats = Counter()
+    problems = []
+    for candidate in candidates:
+        name = candidate["source_image"]
+        item = {"source_image": name,
+                "annotation_index": candidate["annotation_index"],
+                "ocr": candidate["ocr"],
+                "raw_bbox": candidate["bbox"]}
+        if candidate["bbox"] is None:
+            item["problem"] = "invalid_or_degenerate_box"
+            problems.append(item)
+            stats["invalid_or_degenerate_box"] += 1
+            continue
+        img = cv2.imread(str(photos / name), cv2.IMREAD_COLOR)
+        if img is None:
+            item["problem"] = "missing_or_undecodable_source_image"
+            problems.append(item)
+            stats["missing_or_undecodable_source_image"] += 1
+            continue
+        height, width = img.shape[:2]
+        x1, y1, x2, y2 = candidate["bbox"]
+        # Clamp every coordinate; negative maxima and positive out-of-image
+        # minima must be handled explicitly to detect zero intersection.
+        cx1, cy1 = max(0, min(width, x1)), max(0, min(height, y1))
+        cx2, cy2 = max(0, min(width, x2)), max(0, min(height, y2))
+        area = (x2 - x1) * (y2 - y1)
+        inside = max(0, cx2 - cx1) * max(0, cy2 - cy1)
+        fraction = inside / area
+        candidate["source_dimensions"] = [width, height]
+        candidate["clipped_bbox"] = [cx1, cy1, cx2, cy2]
+        candidate["inside_fraction"] = fraction
+        if inside == 0:
+            problem = "no_in_frame_intersection"
+        elif [cx1, cy1, cx2, cy2] != candidate["bbox"]:
+            problem = "partially_outside_image"
+        else:
+            stats["fully_in_bounds"] += 1
+            continue
+        stats[problem] += 1
+        problems.append({
+            **item,
+            "problem": problem, "image_width": width, "image_height": height,
+            "clipped_bbox": [cx1, cy1, cx2, cy2],
+            "inside_fraction": round(fraction, 6),
+            "area_lost_percent": round(100 * (1 - fraction), 3),
+        })
+    return {
+        "candidate_count": len(candidates),
+        "counts": dict(stats),
+        "problem_count": len(problems),
+        "problems": problems,
+        "note": ("An out-of-frame annotation may target an intentionally "
+                 "partially visible plate or be incorrect. Clipping recovers "
+                 "ONLY the visible intersection, not missing characters."),
+    }
+
+
 def make_sheet(entries, output, num, seed):
     if num <= 0:
         return
@@ -203,6 +268,7 @@ def validate(output, expected=None):
         "known_motorcycles": sum(r["known_motorcycle"] for r in rows),
         "missing_vehicle_type": sum(not r["vehicle_type"] for r in rows),
         "occluded": sum(r["occluded"] for r in rows),
+        "bbox_clipped_to_image": sum(r.get("bbox_clipped_to_image", False) for r in rows),
         "all_legibility": "Illegible (leg=0)", "split": "test", "frames": 1,
     }
 
@@ -216,6 +282,19 @@ def build(args):
     annotations = json.loads(json_path.read_text(encoding="utf-8"))
     candidates, stats = inventory(annotations, args.exclude_known_motorcycles)
     print("Illegible annotation inventory:\n" + json.dumps(stats, indent=2))
+    geometric = preflight_geometry(candidates, photos)
+    print("Image/annotation geometry preflight:")
+    print(json.dumps({**geometric, "problems": geometric["problems"][:30]},
+                     indent=2))
+    if len(geometric["problems"]) > 30:
+        print("Showing first 30 of", len(geometric["problems"]), "issues")
+    if args.audit_report:
+        report_path = args.audit_report.expanduser().resolve()
+        if report_path.exists():
+            raise FileExistsError("Refusing to overwrite geometry audit: " + str(report_path))
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(geometric, indent=2) + "\n", encoding="utf-8")
+        print("Full geometry report:", report_path)
     if args.audit_only:
         return
     if args.output is None:
@@ -227,13 +306,24 @@ def build(args):
         raise RuntimeError(
             f"Local annotation version has {stats['valid_7char_ocr']} seven-character "
             f"Illegible labels, expected {args.expect_all}. Re-audit before proceeding.")
-    # An all-available dataset cannot silently drop samples with missing,
-    # corrupted or out-of-bounds source/geometry. Report and fail instead.
-    invalid = [x for x in candidates if x["bbox"] is None]
-    missing = [x for x in candidates if not (photos / x["source_image"]).is_file()]
-    if invalid or missing:
-        raise RuntimeError(f"Cannot build all available: {len(invalid)} invalid boxes, "
-                           f"{len(missing)} missing image files; inspect originals")
+    # Preflight every instance BEFORE staging an LMDB. No candidate is silently
+    # discarded. An explicitly requested clipping policy is permitted only
+    # for intersecting boxes above the chosen retained-area threshold.
+    blockers = [x for x in geometric["problems"]
+                if x["problem"] != "partially_outside_image"]
+    overflowing = [x for x in geometric["problems"]
+                   if x["problem"] == "partially_outside_image"]
+    severely_outside = [x for x in overflowing
+                        if x["inside_fraction"] < args.min_inside_fraction]
+    if blockers or (overflowing and not args.clip_out_of_bounds) or (
+            args.clip_out_of_bounds and severely_outside):
+        raise RuntimeError(
+            f"Geometry preflight failed: {len(blockers)} missing/invalid/"
+            f"nonintersecting annotations; {len(overflowing)} partially outside; "
+            f"{len(severely_outside)} below min inside fraction "
+            f"{args.min_inside_fraction:.3f}. "
+            "Inspect report; use --clip-out-of-bounds ONLY after manual "
+            "review of cases and never claim those crops are fully intact.")
     output.parent.mkdir(parents=True, exist_ok=True)
     items = []
     metadata = []
@@ -249,11 +339,13 @@ def build(args):
                     if img is None:
                         raise RuntimeError("Cannot decode original image: " + cand["source_image"])
                     height, width = img.shape[:2]
-                    x1, y1, x2, y2 = cand["bbox"]
+                    if [width, height] != cand["source_dimensions"]:
+                        raise RuntimeError("Image geometry changed after preflight")
+                    originally_outside = cand["bbox"] != cand["clipped_bbox"]
+                    x1, y1, x2, y2 = (cand["clipped_bbox"] if args.clip_out_of_bounds
+                                      else cand["bbox"])
                     if not (0 <= x1 < x2 <= width and 0 <= y1 < y2 <= height):
-                        raise RuntimeError("Out-of-bounds OCR-annotated Illegible plate: "
-                                           + cand["source_image"] + " "
-                                           + str(cand["annotation_index"]))
+                        raise RuntimeError("Bounding box failed the geometry preflight")
                     crop = img[y1:y2, x1:x2]
                     ok, encoded = cv2.imencode(".png", crop)
                     if not ok:
@@ -283,7 +375,10 @@ def build(args):
                         "camera_id": cand["cam"], "time": cand["time"],
                         "day": cand["day"], "rain": cand["rain"],
                         "faulty": cand["faulty"], "xy": cand["xy"],
-                        "crop_box_xyxy": cand["bbox"],
+                        "raw_annotation_box_xyxy": cand["bbox"],
+                        "crop_box_xyxy": [x1, y1, x2, y2],
+                        "bbox_clipped_to_image": originally_outside,
+                        "annotation_area_inside_image": round(cand["inside_fraction"], 6),
                         "source_width": width, "source_height": height,
                         "crop_width": crop.shape[1],
                         "crop_height": crop.shape[0],
@@ -305,7 +400,11 @@ def build(args):
             "duplicate_ocr_and_source_image_allowed": True,
             "excluded_known_motorcycles": bool(args.exclude_known_motorcycles),
             "includes_occluded": True,
-            "crop": "original bbox pixels; lossless PNG; evaluator resizes to 96x32",
+            "geometry_policy": ("explicit clip partially out-of-bounds" if args.clip_out_of_bounds
+                                else "strict no clipping"),
+            "min_annotation_area_inside_image": args.min_inside_fraction,
+            "geometry_preflight_counts": geometric["counts"],
+            "crop": "original visible bbox pixels; lossless PNG; evaluator resizes to 96x32",
             "samples": items,
         }
         manifest_path = stage / "selection_manifest.json"
@@ -325,6 +424,8 @@ def build(args):
             "known_motorcycles_included": sum(x["known_motorcycle"] for x in items),
             "unknown_vehicle_types_included": sum(not x["vehicle_type"] for x in items),
             "occluded_included": sum(x["occluded"] for x in items),
+            "partially_outside_and_clipped": sum(x["bbox_clipped_to_image"] for x in items),
+            "geometry_preflight": geometric["counts"],
             "vehicle_types": dict(Counter(x["vehicle_type"] or "MISSING" for x in items)),
             "native_crop_width": [min(x["crop_width"] for x in items),
                                   max(x["crop_width"] for x in items)],
@@ -351,7 +452,15 @@ def main():
     p.add_argument("--output", type=Path,
                    help="New LMDB directory; must not already exist")
     p.add_argument("--audit-only", action="store_true",
-                   help="Only count Illegible OCR annotations, no output")
+                   help="Count all Illegible OCR annotations and check all image box bounds")
+    p.add_argument("--audit-report", type=Path,
+                   help="Save complete geometry issue report as JSON (new file only)")
+    p.add_argument("--clip-out-of-bounds", action="store_true",
+                   help="Explicitly clip intersecting out-of-frame boxes to image bounds; "
+                        "preserve raw coordinates and mark clipped items")
+    p.add_argument("--min-inside-fraction", type=float, default=0.95,
+                   help="When clipping, require at least this proportion of original "
+                        "annotation bbox area within image (default: 0.95)")
     p.add_argument("--verify-only", action="store_true",
                    help="Revalidate the existing output without modifying it")
     p.add_argument("--expect-all", type=int, default=1189,
@@ -364,6 +473,8 @@ def main():
     args = p.parse_args()
     if args.contact_sheet < 0:
         p.error("--contact-sheet must be >= 0")
+    if not 0 < args.min_inside_fraction <= 1:
+        p.error("--min-inside-fraction must be in (0, 1]")
     if args.verify_only:
         if args.output is None:
             p.error("--verify-only requires --output")
