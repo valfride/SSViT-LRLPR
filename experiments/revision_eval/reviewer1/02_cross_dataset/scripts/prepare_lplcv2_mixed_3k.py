@@ -185,6 +185,22 @@ def verify(folder, expected_hash=None):
     kinds = Counter(row["source_legibility"] for row in rows)
     if kinds != {"Illegible": 905, "Poor": 2095}:
         raise RuntimeError(f"Wrong class counts: {kinds}")
+    if len({(row["source_image"], row["annotation_index"]) for row in rows}) != 3000:
+        raise RuntimeError("Duplicate annotated plate identity in assembled test")
+    if len({row["track_id"] for row in rows}) != 3000:
+        raise RuntimeError("Duplicate virtual track identifiers")
+    sources = {
+        cls: {r["source_image"] for r in rows if r["source_legibility"] == cls}
+        for cls in ("Illegible", "Poor")
+    }
+    labels = {
+        cls: {r["ocr"] for r in rows if r["source_legibility"] == cls}
+        for cls in ("Illegible", "Poor")
+    }
+    if sources["Illegible"] & sources["Poor"] or labels["Illegible"] & labels["Poor"]:
+        raise RuntimeError("Mixed set has cross-class source or OCR label overlap")
+    if any(PLATE.fullmatch(r["ocr"]) is None for r in rows):
+        raise RuntimeError("Mixed set contains invalid/placeholder OCR transcription")
     with (folder / "metadata.pkl").open("rb") as inp:
         metadata = pickle.load(inp)
     if len(metadata) != len(rows):
@@ -199,8 +215,10 @@ def verify(folder, expected_hash=None):
                 if not isinstance(key, bytes) or key is None:
                     raise RuntimeError("Bad LMDB key")
                 dest = folder / row["crop_path"]
-                if Path(meta["original_path"]) != dest:
-                    raise RuntimeError("Unexpected virtual track path")
+                # During atomic staging metadata already points to the
+                # FINAL output directory, not its temporary staging name.
+                if Path(meta["original_path"]).parts[-3:] != Path(row["crop_path"]).parts[-3:]:
+                    raise RuntimeError("Unexpected virtual track suffix")
                 raw = txn.get(key)
                 if raw is None:
                     raise RuntimeError("Missing source crop bytes in mixed LMDB")
