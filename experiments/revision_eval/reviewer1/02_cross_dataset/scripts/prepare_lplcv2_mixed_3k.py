@@ -194,6 +194,96 @@ def sample_mix(illegible, poor, poor_needed, seed):
     return tagged, excluded, len(candidate_poor)
 
 
+def original_aspect(row):
+    height = int(row["crop_height"])
+    width = int(row["crop_width"])
+    if height <= 0 or width <= 0:
+        raise ValueError("Invalid native crop dimensions")
+    return width / height
+
+
+def aspect_filter_and_refill(base_tagged, all_illegible, all_poor,
+                             seed, threshold, refill_min, refill_max):
+    """Separate post-hoc variant: reject low-aspect crops and add unused Poor.
+
+    Begin with EXACTLY the default seeded 905+2095 selection. Retain every
+    originally selected item at or above threshold. Never use predictions.
+    Replacement candidates must be in the frozen Poor LMDB, never already
+    selected, not overlapping an Illegible source/label, and near 3:1.
+    """
+    if threshold is None:
+        return base_tagged, None, set()
+    initial_selected_poor = {
+        (r["source_image"], r["annotation_index"])
+        for cls, r in base_tagged if cls == "Poor"
+    }
+    illegible_source_names = {r["source_image"] for r in all_illegible}
+    illegible_ocr = {r["ocr"] for r in all_illegible}
+    removed = [(cls, row) for cls, row in base_tagged
+               if original_aspect(row) < threshold]
+    retained = [(cls, row) for cls, row in base_tagged
+                if original_aspect(row) >= threshold]
+    unused_near_ideal_poor = sorted(
+        (row for row in all_poor
+         if (row["source_image"], row["annotation_index"]) not in initial_selected_poor
+         and row["source_image"] not in illegible_source_names
+         and row["ocr"] not in illegible_ocr
+         and refill_min <= original_aspect(row) <= refill_max),
+        key=lambda row: (row["source_image"], row["annotation_index"]),
+    )
+    required = len(removed)
+    if len(unused_near_ideal_poor) < required:
+        raise RuntimeError(
+            f"Cannot produce the promised aspect-controlled 3000: "
+            f"must replace {required} crops, but only "
+            f"{len(unused_near_ideal_poor)} unused Poor crops have native "
+            f"aspect ratio in [{refill_min}, {refill_max}]. "
+            "No automatic relaxation or changed proportions is permitted.")
+    replacement_poor = random.Random(seed + 17).sample(
+        unused_near_ideal_poor, required)
+    final_tagged = retained + [("Poor", row) for row in replacement_poor]
+    random.Random(seed + 41).shuffle(final_tagged)
+    if len(final_tagged) != 3000:
+        raise RuntimeError("Aspect-controlled population does not have 3000 records")
+
+    def identity(cls, row):
+        return {
+            "source_legibility": cls,
+            "source_track_id": row["track_id"],
+            "source_image": row["source_image"],
+            "annotation_index": row["annotation_index"],
+            "original_aspect_ratio": round(original_aspect(row), 6),
+        }
+
+    report = {
+        "enabled": True,
+        "min_native_crop_aspect_ratio_inclusive": threshold,
+        "refill_native_aspect_ratio_inclusive": [refill_min, refill_max],
+        "base_pool": "905 Illegible + 2095 seeded Poor; fixed seed 2026",
+        "sampling_policy": (
+            "Remove base-pool records below minimum ratio, then uniformly "
+            "sample exactly that many unused, collision-free, near-3:1 Poor "
+            "records with Random(seed+17); reshuffle using Random(seed+41)."
+        ),
+        "original_pool_counts": {"Illegible": 905, "Poor": 2095},
+        "removed_counts": dict(Counter(cls for cls, _ in removed)),
+        "removed_total": required,
+        "unused_near_ideal_poor_candidates": len(unused_near_ideal_poor),
+        "added_near_ideal_poor": required,
+        "retained_original_samples": len(retained),
+        "final_counts": dict(Counter(cls for cls, _ in final_tagged)),
+        "removed_records": [identity(cls, row) for cls, row in removed],
+        "replacement_records": [identity("Poor", row) for row in replacement_poor],
+        "note": ("This is an intentionally post-hoc geometry-controlled variant, "
+                 "not the original all-Illegible mixed dataset. Illegible cases "
+                 "removed cannot be replenished from another known-labelled "
+                 "Illegible pool; the final category proportions therefore change.")
+    }
+    replacement_ids = {(row["source_image"], row["annotation_index"])
+                       for row in replacement_poor}
+    return final_tagged, report, replacement_ids
+
+
 def layout(gt):
     if re.fullmatch(r"[A-Z]{3}[0-9]{4}", gt):
         return "old"
@@ -202,12 +292,17 @@ def layout(gt):
     raise ValueError(f"Unexpected OCR syntax: {gt}")
 
 
-def report_mix(tagged, excluded, candidate_count, seed, parents, model_geometry):
+def report_mix(tagged, excluded, candidate_count, seed, parents, model_geometry,
+               aspect_selection=None):
     if len(tagged) != 3000:
         raise RuntimeError("Mixed test must contain exactly 3000 crops")
     classes = Counter(kind for kind, _ in tagged)
-    if classes != {"Illegible": 905, "Poor": 2095}:
-        raise RuntimeError(f"Unexpected mix: {classes}")
+    if aspect_selection is None:
+        expected = {"Illegible": 905, "Poor": 2095}
+    else:
+        expected = aspect_selection["final_counts"]
+    if dict(classes) != expected:
+        raise RuntimeError(f"Unexpected mix: {classes} vs {expected}")
     seen_ids = set()
     by_class_sources, by_class_labels = {}, {}
     formats = Counter()
@@ -226,7 +321,12 @@ def report_mix(tagged, excluded, candidate_count, seed, parents, model_geometry)
         seen_ids.add(identity)
         formats[f"{kind}_{layout(item['ocr'])}"] += 1
     return {
-        "selection": "All original 905 Illegible + 2095 uniformly sampled from original frozen 3000 Poor",
+        "selection": (
+            "Post-hoc native aspect-ratio controlled replacement from frozen Poor"
+            if aspect_selection is not None else
+            "All original 905 Illegible + 2095 uniformly sampled from original frozen 3000 Poor"
+        ),
+        "native_aspect_selection": aspect_selection,
         "seed": seed,
         "selection_used_model_predictions": False,
         "source_manifest_sha256": parents,
@@ -261,8 +361,30 @@ def verify(folder, expected_hash=None):
     if len(rows) != 3000:
         raise RuntimeError("Expected mixed 3000 crops")
     kinds = Counter(row["source_legibility"] for row in rows)
-    if kinds != {"Illegible": 905, "Poor": 2095}:
-        raise RuntimeError(f"Wrong class counts: {kinds}")
+    selection_policy = manifest["selection_policy"]
+    native_aspect_selection = selection_policy.get("native_aspect_selection")
+    expected = (
+        native_aspect_selection["final_counts"] if native_aspect_selection else
+        {"Illegible": 905, "Poor": 2095}
+    )
+    if dict(kinds) != expected:
+        raise RuntimeError(f"Wrong class counts: {kinds}, expected {expected}")
+    if native_aspect_selection:
+        threshold = float(native_aspect_selection["min_native_crop_aspect_ratio_inclusive"])
+        lower, upper = native_aspect_selection["refill_native_aspect_ratio_inclusive"]
+        if any(original_aspect(row) < threshold for row in rows):
+            raise RuntimeError("Native aspect-ratio filter was violated")
+        replacements = [r for r in rows if r.get("selection_origin") == "near_ideal_poor_refill"]
+        required = int(native_aspect_selection["removed_total"])
+        if len(replacements) != required:
+            raise RuntimeError("Replacement-record count mismatch")
+        if any(row["source_legibility"] != "Poor" or
+               not lower <= original_aspect(row) <= upper for row in replacements):
+            raise RuntimeError("Replacement was not a near-ideal original Poor crop")
+        if native_aspect_selection["added_near_ideal_poor"] != required:
+            raise RuntimeError("Replenishment accounting differs from removed population")
+    elif any(r.get("selection_origin") == "near_ideal_poor_refill" for r in rows):
+        raise RuntimeError("Unexpected replacement in unfiltered mixed LMDB")
     if len({(row["source_image"], row["annotation_index"]) for row in rows}) != 3000:
         raise RuntimeError("Duplicate annotated plate identity in assembled test")
     if len({row["track_id"] for row in rows}) != 3000:
@@ -338,9 +460,12 @@ def build(args):
         args.illegible, EXPECTED_ILLEGIBLE_SHA, 905, 0)
     poor_dir, poor, poor_meta, poor_sha = read_source(
         args.poor, EXPECTED_POOR_SHA, 3000, 1)
-    tagged, excluded, available = sample_mix(ill, poor, 2095, args.seed)
+    base_tagged, excluded, available = sample_mix(ill, poor, 2095, args.seed)
+    tagged, aspect_selection, replacement_ids = aspect_filter_and_refill(
+        base_tagged, ill, poor, args.seed, args.min_native_aspect,
+        args.refill_aspect_min, args.refill_aspect_max)
     preview = report_mix(tagged, excluded, available, args.seed, {
-        "Illegible": ill_sha, "Poor": poor_sha}, model_geometry)
+        "Illegible": ill_sha, "Poor": poor_sha}, model_geometry, aspect_selection)
     print(json.dumps(preview, indent=2), flush=True)
     if args.dry_run:
         return
@@ -395,6 +520,11 @@ def build(args):
                         "track_id": new_track, "crop_path": relpath,
                         "source_legibility": cls,
                         "source_track_id": src["track_id"],
+                        "selection_origin": (
+                            "near_ideal_poor_refill" if
+                            (src["source_image"], src["annotation_index"]) in replacement_ids
+                            else "original_seeded_mix"
+                        ),
                         "source_dataset_directory": str(
                             ill_dir if cls == "Illegible" else poor_dir),
                     })
@@ -443,11 +573,23 @@ def main():
     p.add_argument("--svtrv2-config", type=Path, default=Path(DEFAULT_SVTRV2_CONFIG),
                    help="Frozen SVTRv2-AR config to validate 96x32 evaluation geometry")
     p.add_argument("--seed", type=int, default=2026)
+    p.add_argument("--min-native-aspect", type=float, default=None,
+                   help="Create a DISTINCT aspect-controlled variant: remove all original "
+                        "selected crops with native width/height below this value (e.g. 1.7)")
+    p.add_argument("--refill-aspect-min", type=float, default=2.5,
+                   help="Minimum native aspect ratio for replacement Poor crops (default 2.5)")
+    p.add_argument("--refill-aspect-max", type=float, default=3.5,
+                   help="Maximum native aspect ratio for replacement Poor crops (default 3.5)")
     p.add_argument("--dry-run", action="store_true",
                    help="Report planned selection/collisions without writing")
     p.add_argument("--verify-only", action="store_true",
                    help="Verify already-built output against metadata and LMDB bytes")
     args = p.parse_args()
+    if args.min_native_aspect is not None:
+        if not 1.0 <= args.min_native_aspect < args.refill_aspect_min:
+            p.error("--min-native-aspect must be >=1.0 and below --refill-aspect-min")
+        if args.refill_aspect_max < args.refill_aspect_min:
+            p.error("--refill-aspect-max must be >= --refill-aspect-min")
     if args.verify_only:
         verify_model_geometry({"CNN-ViT": args.cnnvit_config,
                                "SVTRv2-AR": args.svtrv2_config})
