@@ -188,6 +188,32 @@ print('EMA tensors byte-equivalent:',
 PY
 ```
 
+Before evaluating a different file, verify it uses the same frozen
+architecture and recognition configuration as the submitted checkpoint:
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+import yaml
+root = Path('experiments')
+paths = [
+    root/'revision_eval/submitted_model/config_snapshot.yaml',
+    root/'ablations/ce_sfb/ce_sfb_13-05-2026-final/config_snapshot.yaml'
+]
+configs = [yaml.safe_load(p.read_text()) for p in paths]
+for key in ('model_g', 'cls_loss', 'alphabet'):
+    same = configs[0].get(key) == configs[1].get(key)
+    print(f'{key}: {"MATCH" if same else "DIFFERENT"}')
+    if not same:
+        raise SystemExit(f'STOP: mismatch in {key}')
+print('Architecture/classifier configuration confirmed.')
+PY
+```
+
+Other training-only YAML fields may differ; this check protects
+against evaluating different network architectures with the same
+checkpoint loader's permissive `strict=False` setting.
+
 If the EMA weights are identical, **no new inference is required**;
 keep the existing 26.4% result. If different, run the candidate on
 the **same frozen LPLCv2 dataset with a new directory**:
