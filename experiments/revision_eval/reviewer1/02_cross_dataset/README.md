@@ -1,8 +1,9 @@
 # Reviewer 1.2 — frozen LPLCv2 Poor-only cross-dataset experiment
 
-**Status:** dataset preparation script ready; external sample selection, crop QA,
-and inference remain to be executed on daugman. This protocol must be frozen
-before model predictions are examined.
+**Status:** the initial 3,000-sample selection was prepared on daugman, but
+contact-sheet QA revealed motorcycle plates. A stricter **vehicle-type-filtered**
+protocol is now implemented; the revised selection must be audited and prepared
+again before any frozen-model inference. The older LMDB remains intact.
 
 ## Scientific scope
 
@@ -11,6 +12,10 @@ before model predictions are examined.
 - Valid labels: **exactly seven** uppercase ASCII alphanumeric characters.
 - Exclude occluded annotations (occ = true), missing source images, malformed
   annotations, invalid/out-of-bounds bounding boxes, undecodable images.
+- Require a recognized non-motorcycle `anns[].car.type`. Motorcycle variants,
+  missing types, and unrecognized types are excluded; the script reports each
+  normalized type and exclusion count before selection. This is a strict
+  metadata-based class filter, not a learned motorcycle detector.
 - Enforce one distinct **OCR plate label** and one distinct **source image**
   per selected test example. Select with a fixed seed **2026**, drawing random
   distinct OCR labels first and then picking a random viable image per label
@@ -36,11 +41,21 @@ From the evaluation code checkout:
     git switch revision/reviewer-eval-tooling
     git pull --ff-only
 
-Run the new script against the existing *local* dataset:
+First, **audit available vehicle categories**, without writing data:
 
     python3 experiments/revision_eval/reviewer1/02_cross_dataset/scripts/prepare_lplcv2_poor.py \
       --dataset-root ~/doc2025/LMDB-Datasets/LPLC_dataset \
-      --output ~/doc2025/LMDB-Datasets/LPLCv2_PoorUnique_TEST_3k \
+      --audit-only
+
+Inspect `type_*` entries, `motorcycle_excluded`, `missing_vehicle_type`,
+`unrecognized_vehicle_type`, and `unique_labels_before_image_decode`.
+There must be at least 3,000 valid unique labels before we proceed.
+
+Then create the **new**, separate filtered dataset:
+
+    python3 experiments/revision_eval/reviewer1/02_cross_dataset/scripts/prepare_lplcv2_poor.py \
+      --dataset-root ~/doc2025/LMDB-Datasets/LPLC_dataset \
+      --output ~/doc2025/LMDB-Datasets/LPLCv2_PoorNonMotoUnique_TEST_3k \
       --seed 2026 \
       --count 3000
 
@@ -83,7 +98,7 @@ Verify the already-prepared set without modifying it:
 
     python3 experiments/revision_eval/reviewer1/02_cross_dataset/scripts/prepare_lplcv2_poor.py \
       --dataset-root ~/doc2025/LMDB-Datasets/LPLC_dataset \
-      --output ~/doc2025/LMDB-Datasets/LPLCv2_PoorUnique_TEST_3k \
+      --output ~/doc2025/LMDB-Datasets/LPLCv2_PoorNonMotoUnique_TEST_3k \
       --count 3000 \
       --verify-only
 
@@ -95,7 +110,7 @@ checkpoint (do not train, retune, or change data augmentation):
     python3 experiments/revision_eval/shared/scripts/run_eval_matrix.py \
       --config experiments/revision_eval/submitted_model/config_snapshot.yaml \
       --checkpoints experiments/revision_eval/submitted_model \
-      --split ~/doc2025/LMDB-Datasets/LPLCv2_PoorUnique_TEST_3k \
+      --split ~/doc2025/LMDB-Datasets/LPLCv2_PoorNonMotoUnique_TEST_3k \
       --output-dir experiments/revision_eval/reviewer1/02_cross_dataset/results/lplcv2_poor_ours \
       --frames 1 --fusions bayes
 
@@ -104,7 +119,7 @@ Run the SVTRv2-AR baseline from its actual frozen checkpoint directory:
     python3 experiments/revision_eval/shared/scripts/run_eval_matrix.py \
       --config baselines_configs/SVTRV2_AR_BASELINE.yaml \
       --checkpoints /PATH/TO/FROZEN/SVTRV2_AR/CHECKPOINT_DIRECTORY \
-      --split ~/doc2025/LMDB-Datasets/LPLCv2_PoorUnique_TEST_3k \
+      --split ~/doc2025/LMDB-Datasets/LPLCv2_PoorNonMotoUnique_TEST_3k \
       --output-dir experiments/revision_eval/reviewer1/02_cross_dataset/results/lplcv2_poor_svtrv2_ar \
       --frames 1 --fusions bayes
 
@@ -123,10 +138,15 @@ Then replace the explicit pending R1.2 placeholder in the response letter.
 
 Do not assert overall LPLCv2 generalization beyond the eligible Poor subset.
 
-## Local preparation outcome — 12 October 2026
+## Historical unfiltered preparation outcome — 12 October 2026
 
-The preparation script was successfully executed on `daugman` against
-`~/doc2025/LMDB-Datasets/LPLC_dataset/annotations_v2.json`:
+Before the vehicle-type exclusion was added, the preparation script was
+successfully executed on `daugman` against
+`~/doc2025/LMDB-Datasets/LPLC_dataset/annotations_v2.json`.
+**These numbers and the manifest SHA-256 refer to the old, unfiltered selection**,
+which is preserved at
+`~/doc2025/LMDB-Datasets/LPLCv2_PoorUnique_TEST_3k`.
+The old selection should **not** be used for the motorcycle-excluded evaluation:
 
 | Audit field | Value |
 | --- | ---: |
@@ -161,7 +181,9 @@ audit does not automatically invalidate a cross-dataset evaluation, but it
 changes the claims that may be made. Do not silently change the frozen
 selection after inspecting predictions.
 
-**Pending:** visually inspect the contact sheet, run independent label-overlap
-audit, verify local frozen checkpoints, run F=1 inference and record measured
-RR, character accuracy and CER. Dataset crops and annotation manifests stay
-outside the public repository.
+**Pending:** run the updated vehicle-type candidate audit; create the new
+`LPLCv2_PoorNonMotoUnique_TEST_3k` set; record its new audit counts and
+manifest SHA-256; visually inspect its contact sheet, audit label overlap,
+then run F=1 frozen-model inference. No predictions were used in choosing
+the motorcycle exclusion criterion. Dataset crops and annotation manifests
+stay outside the public repository.
