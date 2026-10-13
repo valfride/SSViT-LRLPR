@@ -300,6 +300,99 @@ share exactly the **same annotation identities**, trained
 weights, input tensor sizes and evaluation protocol.
 No McNemar test is planned.
 
+## Broader 2.1–3.5 acquisition-style full-cohort audit (confirmed on daugman)
+
+The user ran the read-only original-source audit on the SAME source
+annotation SHA256 `2da194f7393970b7ddf11085a9bb5adb3d6780eca49d9d7389eed0ca06d49a49`,
+with tight-box native aspect **[2.1,3.5]** and minimum
+tight width/height **24x8**, following the acquisition camera's
+public default `lp_type()` car-candidate geometry.
+
+| Filter | Poor | Illegible | All |
+| --- | ---: | ---: | ---: |
+| Valid original OCR and fully in-frame native box | 6,934 | 905 | 7,839 |
+| Native ratio [2.1,3.5], size >=24x8 | 6,360 | 803 | **7,163** |
+| 20%-each-side padded bbox would not clip | 6,248 | 784 | 7,032 |
+| Padded box keeps **>=2 px** source-image margin | **6,240** | **783** | **7,023** |
+| Geometry-eligible rejected by strict 2px padded margin | 120 | 20 | 140 |
+
+Of 7,163 native-eligible crops, **7,023 (98.05%)** survive
+the strict padded ROI margin rule. The strict cohort comprises
+**6,240 Poor (88.85%) and 783 Illegible (11.15%)**.
+The broad native-eligible cohort comprises 6,360 Poor and 803
+Illegible. Compared to [2.5,3.5], broadening the lower
+bound to **2.1** increases the strict-margin count from
+5,923 to **7,023** (+1,100).
+
+**Chosen clean-geometry acquisition-style primary cohort: 7,023.**
+This is a selection decision based on acquisition-related
+geometry and the read-only population inventory, **not on
+recognizer accuracy**. It is an explicitly selected subset,
+not the full original LPLCv2 dataset nor an exact reconstruction
+of every source in LRLPR-26. The 2-pixel requirement matches
+the user's intended curator configuration, but the accessible
+`selection.py` did not clearly enforce it as an exclusion.
+
+**Paired image-framing sensitivity experiment:** build the
+identical 7,023 original annotation identities twice:
+(1) unmodified tight floor/ceil box (lossless PNG) and
+(2) expand the tight box by **20% of its width/height on
+each side**, floor/ceil to integer bounds, and crop from the
+same original source frame (lossless PNG). All padded boxes
+in this strict cohort fit the source image with >=2px margin.
+Each pair uses matching label, order, track ID and exact
+source image. The same eight original validation-selected
+checkpoints and 96x32 bicubic F=1 evaluation are then applied.
+
+These paired corpora do **not** make the cross-dataset
+experiment fully domain-matched: native source distributions,
+label uncertainty, detector vs annotation box definitions,
+historical acquisition/curation variants and JPEG versus
+lossless source encoding still differ.
+
+### Frozen dataset builder committed (run locally; no evaluation yet)
+
+[`scripts/build_lplcv2_acquisition_pair.py`](scripts/build_lplcv2_acquisition_pair.py)
+pins the original annotation SHA and the expected
+**6,240+783** identities. It will **fail** rather than silently
+continue if source annotations or cohort counts change.
+It writes two separate F=1-compatible LMDBs only after all
+inputs pass preflight. It writes the *same frozen
+`selection_manifest.json`* to both, records lossless
+crop-byte hashes in local metadata, verifies crop dimensions
+and LMDB/crop byte identity, and refuses to overwrite
+existing output paths. Restricted crop pixels, labels,
+per-sample filenames and manifests remain on daugman.
+
+From `~/doc2025/project1` after `git pull --ff-only`:
+
+~~~bash
+BUILDER=experiments/revision_eval/reviewer1/02_cross_dataset/scripts/build_lplcv2_acquisition_pair.py
+
+# Source SHA + exact all-eligible cohort counts. No files written.
+python3 -m py_compile "$BUILDER"
+python3 "$BUILDER" --preflight
+
+# Run ONLY after successful preflight; new directories, never overwrite.
+python3 "$BUILDER" --build
+
+# Repeat independently after the first successful build.
+python3 "$BUILDER" --verify-only
+~~~
+
+Default user-local outputs:
+
+- `~/doc2025/LMDB-Datasets/LPLCv2_AcqStrict_Tight_7023`
+- `~/doc2025/LMDB-Datasets/LPLCv2_AcqStrict_Padded20pct_7023`
+
+**Important:** the previously committed
+`run_lplcv2_all_models.py` deliberately asserts the
+**old 3,000-crop SHA and sample count**, and its result paths
+must not be reused. We need a distinct **7,023-crop**
+evaluation runner / checkpoint-lock context after the user
+verifies both new LMDBs. Never directly point the old
+`--run` command at these new directories.
+
 ## After reviewing the audit
 
 1. Freeze the population definition (native ratio 2.5–3.5; approved minimum width/height; exact original annotation file SHA-256).
