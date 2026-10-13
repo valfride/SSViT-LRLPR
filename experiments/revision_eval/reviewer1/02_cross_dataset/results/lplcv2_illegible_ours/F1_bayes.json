@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "mode": "val",
+  "fusion": "bayes",
+  "frames": 1,
+  "tta": false,
+  "swa": false,
+  "num_swa": 1,
+  "cls_loss": "CE",
+  "reproducibility": {
+    "seed": 42,
+    "cudnn_benchmark": false,
+    "cudnn_deterministic": true
+  },
+  "config": "experiments/revision_eval/submitted_model/config_snapshot.yaml",
+  "checkpoint_directory": "experiments/revision_eval/submitted_model",
+  "checkpoint_files": [
+    "experiments/revision_eval/submitted_model/last.pth"
+  ],
+  "dataset": "/home/vwnascimento/doc2025/LMDB-Datasets/LPLCv2_IllegibleBrazilianOCR_TEST",
+  "metrics": {
+    "sequence_accuracy_percent": 26.629834254143645,
+    "sequence_correct": 241,
+    "sequence_total": 905,
+    "character_accuracy_percent": 68.47671665351223,
+    "character_correct": 4338,
+    "character_total": 6335,
+    "cer_percent": 31.444356748224152,
+    "edit_errors": 1992,
+    "ground_truth_characters": 6335,
+    "partial_6_percent": 46.96132596685083,
+    "partial_6_correct": 425,
+    "partial_5_percent": 63.20441988950276,
+    "partial_5_correct": 572,
+    "old_brazilian_accuracy_percent": 26.19047619047619,
+    "old_brazilian_correct": 44,
+    "old_brazilian_total": 168,
+    "mercosur_accuracy_percent": 26.72998643147897,
+    "mercosur_correct": 197,
+    "mercosur_total": 737,
+    "mean_confidence_correct": 0.9418527377381576,
+    "mean_confidence_incorrect": 0.7360995399122475,
+    "confidence_gap": 0.20575319782591006
+  }
+}

@@ -92,3 +92,6 @@ venv/
 
 # Local LMDB dataset link
 /competition_dataset_lmdb
+# Restricted LPLCv2 predictions and evaluation logs
+# Only explicitly selected aggregate JSON metrics may be committed.
+/experiments/revision_eval/reviewer1/02_cross_dataset/results/
