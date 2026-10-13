@@ -15,13 +15,13 @@ import json
 import math
 import os
 import pickle
-import shutil
 import tempfile
 from collections import Counter
 from pathlib import Path
 
 import cv2
 import lmdb
+import numpy as np
 
 from audit_lplcv2_full_cohort_geometry import FORMATS, bbox, fingerprint
 
@@ -232,8 +232,10 @@ def build_one(root, destination, variant, manifest):
     }, indent=2) + "\n", encoding="utf-8")
 
 
-def verify_one(folder, variant, expected_manifest_sha=None):
+def verify_one(folder, variant, expected_manifest_sha=None, intended_final_dir=None):
     folder = folder.expanduser().resolve(strict=True)
+    final_root = (Path(intended_final_dir).expanduser().absolute()
+                  if intended_final_dir is not None else folder)
     info = json.loads((folder / "dataset_info.json").read_text())
     manifest_path = folder / "selection_manifest.json"
     manifest = json.loads(manifest_path.read_text())
@@ -259,15 +261,16 @@ def verify_one(folder, variant, expected_manifest_sha=None):
                 key = f"image-{i:08d}".encode("ascii")
                 relpath = f"crops/{r['track_id']}/lr-001.png"
                 target = folder / relpath
+                virtual_path = final_root / relpath
                 if (meta["lmdb_key"] != key or meta["gt"] != r["ocr"] or
-                    meta["split"] != "test" or Path(meta["original_path"]) != target):
+                    meta["split"] != "test" or Path(meta["original_path"]) != virtual_path):
                     raise RuntimeError(f"Metadata mismatch at index {i}")
                 data = txn.get(key)
                 if data is None or not target.is_file() or target.read_bytes() != data:
                     raise RuntimeError(f"Crop/LMDB byte mismatch at index {i}")
                 if hashlib.sha256(data).hexdigest() != meta["crop_sha256"]:
                     raise RuntimeError(f"Crop hash mismatch at index {i}")
-                img = cv2.imdecode(__import__("numpy").frombuffer(data, dtype="uint8"),
+                img = cv2.imdecode(np.frombuffer(data, dtype=np.uint8),
                                    cv2.IMREAD_COLOR)
                 dims = (r["padded_height"], r["padded_width"]) if variant == "padded" else (
                     r["tight_height"], r["tight_width"])
@@ -323,8 +326,9 @@ def main():
         stage = Path(td)
         build_one(stage, paths, "tight", manifest)
         build_one(stage, paths, "padded", manifest)
-        first = verify_one(stage / "tight", "tight")
-        verify_one(stage / "padded", "padded", expected_manifest_sha=first)
+        first = verify_one(stage / "tight", "tight", intended_final_dir=paths["tight"])
+        verify_one(stage / "padded", "padded", expected_manifest_sha=first,
+                   intended_final_dir=paths["padded"])
         # Both complete and independently verified before publishing either.
         os.replace(stage / "tight", paths["tight"])
         os.replace(stage / "padded", paths["padded"])
