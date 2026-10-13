@@ -549,3 +549,45 @@ Do not combine the Illegible score with Poor without clearly reporting
 which ground truths are verifiable and the different inclusion rules.
 This is supplementary; it does not replace or change the 3,000-plate
 Poor benchmark or its 24.57% as-annotated CNN–ViT result.
+
+
+## Frozen CNN–ViT F=1 exploratory evaluation (requested)
+
+After successful source-image automated QA (905/905 decoded, 300
+heuristically flagged, 605 unflagged), the user requested an
+**exploratory** frozen CNN–ViT F=1 evaluation. The manual annotation
+review has **not** been completed; this experiment is therefore
+strictly *as-annotated*, not a quality-verified measure of
+human-legible LP recognition.
+
+Frozen dataset manifest SHA-256:
+
+`7e74f46d991db9835739e7b99b5c01f1be6da7b21ba1b50b2c9bef848b7dfb0e`
+
+Command to run on daugman:
+
+```bash
+cd ~/doc2025/project1
+
+python3 experiments/revision_eval/shared/scripts/run_eval_matrix.py \
+  --config experiments/revision_eval/submitted_model/config_snapshot.yaml \
+  --checkpoints experiments/revision_eval/submitted_model \
+  --split ~/doc2025/LMDB-Datasets/LPLCv2_IllegibleBrazilianOCR_TEST \
+  --output-dir experiments/revision_eval/reviewer1/02_cross_dataset/results/lplcv2_illegible_ours \
+  --frames 1 --fusions bayes
+```
+
+Record the actual output `F1_bayes.json`,
+`F1_bayes_predictions.csv`, `F1_bayes.txt` and
+`matrix_manifest.json` locally. **No accuracy numbers have been
+obtained yet.** Do not conflate this result with Poor (n=3000,
+24.57% RR) because native scale, subjective legibility, known
+vehicle-type exclusions and label reliability differ. The
+905 Illegible samples include 25 known motorcycles and 318
+vehicle-type-unknown cases, whereas the prior Poor sample
+excluded known motorcycles and missing vehicle types.
+
+A descriptive comparison may be explored, but must note that
+Illegible labels may be impossible to validate in-frame. Do
+not treat these test results as evidence the model should
+have deciphered ground truths unrecoverable from the image.
