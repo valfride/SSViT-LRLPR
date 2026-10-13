@@ -215,3 +215,26 @@ manifest SHA-256; visually inspect its contact sheet, audit label overlap,
 then run F=1 frozen-model inference. No predictions were used in choosing
 the motorcycle exclusion criterion. Dataset crops and annotation manifests
 stay outside the public repository.
+
+## Confirmed motorcycle-excluded eligibility audit — 13 October 2026
+
+The corrected vehicle-type filter was run on daugman with `--audit-only`.
+Observed counts (before final image decoding/crop construction):
+
+| Count | Value |
+| --- | ---: |
+| Poor plate annotations | 7,520 |
+| Valid seven-character labels | 6,943 |
+| Accepted annotated non-motorcycle plates | 3,354 |
+| Unique accepted OCR labels | 3,236 |
+| Unique accepted source images | 3,296 |
+| Motorcycle types excluded | 137 |
+| `MOTOCICLETA` / `MOTONETA` | 124 / 13 |
+| Missing vehicle types excluded | 3,450 |
+| Microbuses (`MICRO ONIBUS`) now accepted | 23 |
+| Motorhomes (`MOTOR CASA`) now accepted | 1 |
+
+**Next step:** generate the new `LPLCv2_PoorNonMotoUnique_TEST_3k` with
+seed 2026, inspect its contact sheet, and record its new SHA-256 before
+inference. The count of eligible items is not the count finally selected.
+Do not use the older unfiltered manifest hash for this dataset.
