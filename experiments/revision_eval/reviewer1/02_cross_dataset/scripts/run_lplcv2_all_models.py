@@ -320,6 +320,74 @@ def character_table(dataset):
     )
 
 
+def legibility_table(dataset):
+    """Verify every F=1 prediction against the frozen manifest; print only aggregates.
+
+    No inference, new sample selection, checkpoint changes, or per-image output.
+    Uses the existing, independently audited track-ID/GT matching code.
+    """
+    from summarize_mixed_legibility_predictions import summarize
+
+    reports = []
+    for entry in MODELS:
+        model, slug, _, _ = entry
+        if completed(entry, dataset) is None:
+            raise RuntimeError(
+                f"{model}: missing complete F=1 evaluation. "
+                "Cannot compare legibility groups until all eight models are evaluated."
+            )
+        folder = output_dir(slug)
+        report = summarize(
+            dataset,
+            folder / "F1_bayes_predictions.csv",
+            folder / "F1_bayes.json",
+            EXPECTED,
+        )
+        cohorts = report["cohorts"]
+        if cohorts["Poor"]["samples"] != 2158 or cohorts["Illegible"]["samples"] != 842:
+            raise ValueError(f"{model}: unexpected legibility sample counts")
+
+        # The existing summarizer independently validates the raw predictions,
+        # every manifest GT, every per-sample position/edit count, and the
+        # recomputed global totals. Verify subcohort additivity explicitly too.
+        all_stats = cohorts["All"]
+        poor, illegible = cohorts["Poor"], cohorts["Illegible"]
+        for key in (
+            "samples", "sequence_correct", "character_correct", "character_total",
+            "edit_errors", "ground_truth_characters", "partial_6_correct",
+            "partial_5_correct",
+        ):
+            if poor[key] + illegible[key] != all_stats[key]:
+                raise ValueError(f"{model}: Poor + Illegible mismatch for {key}")
+        reports.append((model, cohorts))
+
+    def render(kind, total):
+        print(f"\n### {kind} (n={total:,} crops; same frozen mixed LPLCv2 subset)")
+        print("| Model | 7/7 (%) | >=6 (%) | >=5 (%) | Char. acc. (%) | CER (%) | Exact plates |")
+        print("|---|---:|---:|---:|---:|---:|---:|")
+        for model, cohorts in reports:
+            s = cohorts[kind]
+            n = s["samples"]
+            if n != total or s["character_total"] != 7 * n or s["ground_truth_characters"] != 7 * n:
+                raise ValueError(f"{model}: bad denominators for {kind}")
+            f6 = 100.0 * s["partial_6_correct"] / n
+            f5 = 100.0 * s["partial_5_correct"] / n
+            print(
+                f"| {model} | {s['sequence_accuracy_percent']:.2f} | "
+                f"{f6:.2f} | {f5:.2f} | "
+                f"{s['character_accuracy_percent']:.2f} | {s['cer_percent']:.2f} | "
+                f"{s['sequence_correct']}/{n} |"
+            )
+
+    render("Poor", 2158)
+    render("Illegible", 842)
+    print("\nVerified: 8/8 models; all 3,000 predictions per model match the frozen "
+          "manifest and original global results.")
+    print("Caution: as-annotated post-hoc groups; 'Illegible' is a dataset label, "
+          "not proof that its OCR GT is visually recoverable. "
+          "Subgroup comparisons are descriptive, not paired significance tests.")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     operations = parser.add_mutually_exclusive_group(required=True)
@@ -329,6 +397,7 @@ def main():
     operations.add_argument("--run", action="store_true")
     operations.add_argument("--table", action="store_true")
     operations.add_argument("--character-table", action="store_true")
+    operations.add_argument("--legibility-table", action="store_true")
     parser.add_argument("--dataset", type=Path, default=(
         Path.home() / "doc2025/LMDB-Datasets/LPLCv2_MixedAspect1p7to4p0_TEST_3k"))
     parser.add_argument("--lock", type=Path,
@@ -347,6 +416,8 @@ def main():
             preflight(dataset, args.lock)
         elif args.character_table:
             character_table(dataset)
+        elif args.legibility_table:
+            legibility_table(dataset)
         else:
             table(dataset)
 
