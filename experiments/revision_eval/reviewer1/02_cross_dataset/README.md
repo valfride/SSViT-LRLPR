@@ -387,3 +387,35 @@ report both models consistently in the manuscript and response letter.
 The 19/3000 overlap with LRLPR-26 test labels (0.63%) was audited but
 did not change the frozen selection. Report the restriction to
 vehicle-type-annotated non-motorcycle Poor samples.
+
+## Brazilian/Mercosur layout-composition check — 13 October 2026
+
+The canonical V1/LRLPR-26 3,000-tracklet F=1 evaluation JSON at
+`experiments/revision_eval/submitted_model/results/F1_bayes.json`
+records **600 old Brazilian plates (20.00%)** and **2,400 Mercosur
+plates (80.00%)**. In comparison, the current frozen external 3,000
+LPLCv2 Poor plate crops comprise **595 Brazilian (19.83%)** and
+**2,405 Mercosur (80.17%)**. The class composition differs by
+only **five plates** (0.17 percentage points for either class).
+
+The observed external CNN–ViT RR is **737/3000 = 24.5667% (24.57%)**.
+A two-stratum prevalence-standardized RR, weighting the *observed*
+LPLCv2 per-layout accuracy by the **exact V1 20%/80% layout mix**, is:
+
+`0.20 * (202/595) + 0.80 * (535/2405) = 0.24586174`
+(or **24.59% RR**).
+
+This is only **0.02 percentage points** above the
+observed **24.57%**; neither metric requires changing any
+individual sample. Given the near-identical layout mix, no
+post-inference re-sampling/replacement of five plates is warranted.
+The standardization corrects only layout proportions, *not* other
+dataset or difficulty differences. Maintain the original SHA-256 and
+the original per-format and overall metrics as primary outcomes.
+
+Note the layout-specific performance reversal: the original LRLPR-26
+F=1 RR was **41.33%** old Brazilian (248/600), **65.42%** Mercosur
+(1570/2400); the external Poor subset was **33.95%** old Brazilian
+(202/595), **22.25%** Mercosur (535/2405). Interpret cautiously as
+legibility, acquisition conditions, crop scale, and plate format may be
+confounded; no isolated format-causal conclusion follows.
