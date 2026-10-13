@@ -37,22 +37,88 @@ Do **not** turn LPLCv2 crops into JPEG 95, enforce HR/LR median-area ratios, or 
 
 Before freezing the new dataset we should inspect the **actual LRLPR-26 original LR crop native dimension/aspect histogram** if available; it is more relevant for cross-domain matching than extrapolating the `CompetitionDatasetV2` example configuration.
 
+## Actual production configuration supplied by the user (13 October 2026)
+
+The production config from peixoto has `images_per_role=5`,
+`temporal_edge_skip=2`, `require_fully_in_bounds=true`,
+`minimum_visible_fraction=1.0`, `minimum_border_margin_px=2`,
+`minimum_crop_width=8`, `minimum_crop_height=4`,
+`require_crop_matches_requested_roi=true`,
+`maximum_sequence_gap=3`, `maximum_frame_gap=30`,
+`minimum_window_separation=0`, and
+`minimum_hr_lr_area_ratio=1.1`. The label policy is
+`mode=unique_only`. No native aspect-ratio bounds were supplied.
+
+**Critical code/config verification gap:** in the current public
+`DatasetAcquisition/main` implementation,
+`select_lr_hr()` reads
+`minimum_hr_lr_median_area_ratio` instead of the production
+`minimum_hr_lr_area_ratio` key. The latter is not found as an
+enforced key in the public implementation. Likewise, the actual
+selection path does not appear to read `require_fully_in_bounds`,
+`minimum_visible_fraction`, `require_crop_matches_requested_roi`,
+`maximum_sequence_gap`, `maximum_frame_gap`, or
+`minimum_window_separation`. The
+`minimum_border_margin_px=2` field **is** passed to
+`compute_roi_geometry()` and affects its `roi_in_bounds`
+flag, but the selector does not itself reject based on that
+flag. ROI warning flags in the review pipeline should not be
+confused with mandatory exclusion.
+
+This analysis concerns the public branch currently accessible in
+GitHub; the user's installed production revision on peixoto has
+**not** been examined. Thus do **not** claim that all configured
+ROI, temporal-gap, or HR/LR-area checks were enforced on the
+frozen LRLPR-26 crops without confirming the deployed code and
+review workflow. Matching configuration fields alone is
+insufficient to establish matched dataset curation.
+
+A safe read-only check on peixoto, without printing credentials:
+
+~~~bash
+cd ~/doc2025/DatasetAcquisition
+git rev-parse HEAD
+rg -n 'minimum_hr_lr_area_ratio|minimum_hr_lr_median_area_ratio|require_fully_in_bounds|minimum_visible_fraction|require_crop_matches_requested_roi|maximum_sequence_gap|maximum_frame_gap|minimum_window_separation|minimum_border_margin_px' lrlpr_curator scripts
+~~~
+
+### What this means for the new LPLCv2 eligibility audit
+
+Apply **8x4** as the confirmed production minimum-size values
+and **fully in-frame original annotation rectangles** as
+reasonable, symmetric crop-integrity requirements. Treat native
+**2.5–3.5** aspect ratio as a *new*, explicitly defined external
+geometry-control rule, not an acquisition criterion. The audit
+reports how many original LPLCv2 bounding rectangles have less
+than **2 pixels between their axis-aligned crop rectangle and
+the full image edge**, but does **not discard them**:
+the LPLCv2 polygon-annotation rectangle and DatasetAcquisition's
+detector-requested ROI are not equivalent objects, and
+enforcement of the production margin is not confirmed.
+
+No temporal-gap or HR/LR-separation restrictions are imposed
+on individual F=1 annotated images. We continue to count
+repeated source photos and OCR labels instead of silently
+applying global uniqueness to LPLCv2; this is needed to report
+all eligible annotations, not to recreate a globally unique
+track training set. Keep unchanged source crops and frozen
+96x32 bicubic preprocessing for each architecture.
+
 ## Read-only audit on daugman (no inference or crops written)
 
 ```bash
-cd `/doc2025/project1
+cd ~/doc2025/project1
 git pull --ff-only
 AUDIT=experiments/revision_eval/reviewer1/02_cross_dataset/scripts/audit_lplcv2_full_cohort_geometry.py
 python3 -m py_compile "$AUDIT"
 python3 "$AUDIT" \
-  --dataset-root `/doc2025/LMDB-Datasets/LPLC_dataset \
+  --dataset-root ~/doc2025/LMDB-Datasets/LPLC_dataset \
   --min-aspect 2.5 --max-aspect 3.5 \
   --min-width 8 --min-height 4
 ```
 
 The script reads the **original full annotation source**; it accepts `leg=1` Poor and `leg=0` Illegible, **old Brazilian or Mercosur 7-character OCR format**, a decoded source image and a fully in-bounds original axis-aligned crop, then applies inclusive native aspect and minimum native width/height. It does **not** exclude motorcycles, occlusion, unknown vehicle types, repeated source images, or repeated OCR labels. It never reads recognizer predictions. All included plate crops will receive the unchanged frozen 96x32 bicubic resize during later evaluation (no padding).
 
-The audit prints **only aggregates**, including totals before and after geometry filtering, exclusion counts, original-annotation SHA-256, source/label repeat counts, native width and height percentiles, native aspect percentiles, and how many selected annotations survive progressively stronger width/height cutoffs (24x8, 30x10, 36x12, 42x14, 48x16).
+The audit prints **only aggregates**, including totals before and after geometry filtering, exclusion counts, original-annotation SHA-256, source/label repeat counts, native width and height percentiles, native aspect percentiles, zero/under-2px source-image border margin counts, and how many selected annotations survive progressively stronger width/height cutoffs (24x8, 30x10, 36x12, 42x14, 48x16).
 
 The optional `--output-json` should point **outside the public Git checkout** or be kept excluded from Git.
 
