@@ -29,9 +29,16 @@ LEG_POOR = 1
 # unknown and missing classes rather than risk including unlabelled motorcycles.
 ALLOWED_NON_MOTORCYCLE_TYPES = frozenset({
     "AUTOMOVEL", "CAMINHONETE", "CAMIONETA", "CAMINHAO",
-    "CAMINHAO TRATOR", "ONIBUS", "MICROONIBUS", "UTILITARIO",
-    "JIPE", "VAN", "FURGAO", "PICAPE", "SUV", "MISTO",
-    "REBOQUE", "SEMI REBOQUE",
+    "CAMINHAO TRATOR", "ONIBUS", "MICROONIBUS", "MICRO ONIBUS",
+    "UTILITARIO", "JIPE", "VAN", "FURGAO", "PICAPE", "SUV",
+    "MISTO", "REBOQUE", "SEMI REBOQUE", "MOTOR CASA",
+})
+
+# Exact normalized classes: a blanket "MOTO" substring check would
+# incorrectly classify the valid MOTOR CASA motorhome type as a motorcycle.
+MOTORCYCLE_TYPES = frozenset({
+    "MOTOCICLETA", "MOTONETA", "MOTO", "CICLOMOTOR",
+    "SCOOTER", "TRICICLO", "QUADRICICLO",
 })
 
 
@@ -49,8 +56,7 @@ def vehicle_type_status(ann):
     normalized = normalize_vehicle_type(value)
     if not normalized:
         return "missing_vehicle_type", normalized
-    if any(token in normalized for token in (
-            "MOTO", "CICLOMOTOR", "SCOOTER", "TRICICLO", "QUADRICICLO")):
+    if normalized in MOTORCYCLE_TYPES:
         return "motorcycle_excluded", normalized
     if normalized not in ALLOWED_NON_MOTORCYCLE_TYPES:
         return "unrecognized_vehicle_type", normalized
