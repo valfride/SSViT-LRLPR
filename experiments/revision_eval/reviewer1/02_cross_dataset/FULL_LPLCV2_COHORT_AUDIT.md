@@ -186,6 +186,82 @@ The optional `--output-json` should point **outside the public Git checkout** or
 
 First compare `retained_after_ratio_and_size_filters` and `joint_size_thresholds_after_aspect` for Poor and Illegible. This lets us decide whether 8x4 is too permissive **based on coverage and original crop resolution**, before running models. A stricter native size minimum would define **a separately named population**; never quietly change the original frozen 3,000-crop dataset.
 
+## Observed full-source LPLCv2 geometry audit on daugman (13 October 2026)
+
+The user ran the local read-only audit on the **original**
+`~/doc2025/LMDB-Datasets/LPLC_dataset/annotations_v2.json`
+with native aspect range **[2.5,3.5]** and minimum **8x4**.
+The source JSON SHA-256 was:
+
+```text
+2da194f7393970b7ddf11085a9bb5adb3d6780eca49d9d7389eed0ca06d49a49
+```
+
+No dataset has yet been built from this cohort and no model inference
+has been run. These are prediction-blind *eligibility counts*.
+
+| Measure | Poor (`leg=1`) | Illegible (`leg=0`) | Both |
+|---|---:|---:|---:|
+| All source legibility annotations | 7,520 | 5,362 | 12,882 |
+| Rejected by Brazilian/Mercosur OCR format (including unknown OCR) | 586 | 4,457 | 5,043 |
+| Valid seven-character plate-format + full in-bounds crop | 6,934 | 905 | 7,839 |
+| Outside native aspect [2.5,3.5] | 1,534 | 263 | 1,797 |
+| Eligible with original tight size >=8x4 and aspect in range | **5,400** | **642** | **6,042** |
+| Eligible additionally requiring tight size >=24x8 | **5,400** | **634** | **6,034** |
+| Eligible additionally requiring tight size >=30x10 | 5,398 | 586 | 5,984 |
+| Eligible additionally requiring tight size >=36x12 | 5,013 | 425 | 5,438 |
+| Eligible additionally requiring tight size >=42x14 | 3,519 | 198 | 3,717 |
+| Eligible additionally requiring tight size >=48x16 | 1,717 | 80 | 1,797 |
+
+Within the 2.5–3.5 / >=8x4 filtered set:
+Poor includes 5,204 distinct source photographs, 5,293
+distinct OCR strings, and 2 cases annotated as occluded;
+Illegible includes 635 distinct photos and 630 OCR labels,
+without annotated occlusion. Repeated identities **must be
+retained and disclosed** for the full-eligible case.
+
+The ratio/size filter retains **5,400/6,934 (77.88%)** of
+otherwise-valid Poor annotations and **642/905 (70.94%)**
+of otherwise-valid Illegible annotations. This does **not**
+cover all Poor/Illegible *raw* source annotations; OCR
+placeholders/nonmatching plate formats were excluded.
+The size threshold is especially consequential for
+Illegible: >=36x12 would remove 217 of the 642
+aspect-filtered Illegible instances, whereas >=24x8
+removes only eight, and none of the 5,400 Poor instances.
+
+**Candidate policy after seeing the prediction-blind inventory:**
+native **tight-box** aspect ratio **[2.5,3.5]** and
+minimum native **24x8** (area >=192), borrowing the initial
+camera `valid_crop` defaults before its `lp_type()`
+classification. This yields **6,034** annotation entries
+before any further ROI-padding/border policy decision.
+This is the recommended *candidate*, not a completed
+or officially frozen image dataset.
+
+**Unresolved revision discrepancy:** the user's local audit
+output lacks `border_2px_rule`,
+`padding_20pct_each_side` and
+`acquisition_20pct_each_side_padding_diagnostic` fields
+that exist in the latest GitHub script on
+`revision/reviewer-eval-tooling`. The installed local
+script revision may differ, or the output may predate that
+update; verify local branch/HEAD before making decisions
+about padding/clipping. Re-run the latest read-only script
+to quantify padded ROI edge interactions before freezing
+the new tight/padded paired-LMDB cohort.
+
+**Causal caution:** a sample-selection band of 2.5–3.5
+can change difficulty proportions; the acquisition pipeline
+also adds **20% detector-box padding per side**, not present
+in the earlier LPLCv2 tight bounding crops. The exact
+LPLCv2 label polygon envelope is a proxy for the acquisition
+detector's bounding box, not identical by definition.
+If two padded and unpadded cohorts are built, they must
+share exactly the **same annotation identities**, trained
+weights, input tensor sizes and evaluation protocol.
+No McNemar test is planned.
+
 ## After reviewing the audit
 
 1. Freeze the population definition (native ratio 2.5–3.5; approved minimum width/height; exact original annotation file SHA-256).
