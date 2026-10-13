@@ -273,6 +273,53 @@ def table(dataset):
             print(f"{model} & 1 & " + " & ".join(body) + " \\\\")
 
 
+
+def character_table(dataset):
+    """Aggregate diagnostic metrics already computed by test.py; no inference."""
+    print("| Model | RR (7/7, %) ↑ | Character accuracy (%) ↑ | CER (%) ↓ |")
+    print("|---|---:|---:|---:|")
+    complete = 0
+    for entry in MODELS:
+        model = entry[0]
+        m = completed(entry, dataset)
+        if m is None:
+            print(f"| {model} | pending | pending | pending |")
+            continue
+
+        # Every frozen source annotation has seven positions.
+        # Check denominators and independently recompute all three rates
+        # from their integer numerators before reporting.
+        n_plates = int(m["sequence_total"])
+        n_chars = int(m["character_total"])
+        n_gt_chars = int(m["ground_truth_characters"])
+        if (n_plates, n_chars, n_gt_chars) != (3000, 21000, 21000):
+            raise ValueError(
+                f"{model}: unexpected character-count denominators "
+                f"{(n_plates, n_chars, n_gt_chars)}"
+            )
+        values = (
+            ("sequence_accuracy_percent", "sequence_correct", n_plates),
+            ("character_accuracy_percent", "character_correct", n_chars),
+            ("cer_percent", "edit_errors", n_gt_chars),
+        )
+        calculated = []
+        for rate_key, count_key, denominator in values:
+            numerator = int(m[count_key])
+            measured = 100.0 * numerator / denominator
+            if abs(float(m[rate_key]) - measured) > 1e-7:
+                raise ValueError(f"{model}: inconsistent {rate_key}")
+            calculated.append(measured)
+        rr, character_accuracy, cer = calculated
+        print(f"| {model} | {rr:.2f} | {character_accuracy:.2f} | {cer:.2f} |")
+        complete += 1
+    print(f"\nCompleted: {complete}/8")
+    print(
+        "Character accuracy uses seven fixed positions; "
+        "CER is Levenshtein edit errors / GT characters. "
+        "They are not mathematical complements."
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     operations = parser.add_mutually_exclusive_group(required=True)
@@ -281,6 +328,7 @@ def main():
     operations.add_argument("--preflight", action="store_true")
     operations.add_argument("--run", action="store_true")
     operations.add_argument("--table", action="store_true")
+    operations.add_argument("--character-table", action="store_true")
     parser.add_argument("--dataset", type=Path, default=(
         Path.home() / "doc2025/LMDB-Datasets/LPLCv2_MixedAspect1p7to4p0_TEST_3k"))
     parser.add_argument("--lock", type=Path,
@@ -297,6 +345,8 @@ def main():
             run(dataset, args.lock)
         elif args.preflight:
             preflight(dataset, args.lock)
+        elif args.character_table:
+            character_table(dataset)
         else:
             table(dataset)
 
