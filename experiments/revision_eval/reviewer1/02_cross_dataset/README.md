@@ -883,13 +883,17 @@ Poor-only cross-dataset result.
 
 ## Full Table-I cross-dataset matrix (eight models)
 
-See [ALL_MODELS_LPLCV2_F1.md](ALL_MODELS_LPLCV2_F1.md) for the new
-checkpoint-locked F=1 runner. Frozen CNN–ViT and SVTRv2-AR results
-are complete on the identical independently verified 3,000-crop
-mixed-aspect LMDB; MDiff4STR, CPPD, IGTR, LISTER, SVTRv2 (CTC),
-and OTE are pending on daugman. The runner first inventories
-candidate local checkpoints, requires an explicit local lock for
-all eight prior LRLPR-26 validation-selected weights, skips
-completed runs without overwriting them, and prints a Table-I-style
-7/7, >=6, >=5 summary when requested. Do not commit restricted
-crop records or per-image predictions.
+See [ALL_MODELS_LPLCV2_F1.md](ALL_MODELS_LPLCV2_F1.md) for the
+checkpoint-locked F=1 runner and the **complete 8/8 external comparison**
+on the independently verified 3,000-crop mixed-aspect LMDB.
+CPPD leads in 7/7 exact-match Recognition Rate (27.17%);
+IGTR leads in character accuracy (75.11%) and CER (24.86%);
+the frozen, best-validation EMA CNN–ViT reaches
+26.40%, 72.80%, and 27.17%, respectively.
+Run `--table` for the main 7/7, >=6, >=5 manuscript table and
+`--character-table` for the secondary character-accuracy/CER table;
+neither command requires new inference.
+The runner inventories candidate local checkpoints and requires an
+explicit local checkpoint lock. Do not commit restricted crop records
+or per-image predictions. Paired significance and legibility subgroup
+analyses remain outstanding.
