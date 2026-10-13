@@ -765,7 +765,13 @@ The corrected `--require-plate-format` LMDB
 `--verify-only` succeeded: **905 decodable records, 905 unique
 annotation IDs, 890 unique labels, 891 source photographs, 25
 known motorcycles, 318 missing vehicle types, zero occluded and
-zero clipped crops**. Independent source-image/target QA remains
-pending before inference. Do not present visually
+zero clipped crops**. The automated source-image annotation
+QA has now also run successfully on all 905: **300 flagged** (33.15%)
+and **605 unflagged**; flags comprise 184 low-contrast, 74
+frame-boundary, and 63 aspect-ratio occurrences with overlaps.
+The audit manifest SHA-256 is
+`7e74f46d991db9835739e7b99b5c01f1be6da7b21ba1b50b2c9bef848b7dfb0e`.
+**Human review of annotation targets remains pending** before
+using these labels as verified OCR ground truth. Do not present visually
 unverifiable labels as confirmed OCR ground truth or revise the
 original frozen Poor benchmark after observing these samples.
