@@ -406,9 +406,7 @@ VERIFIED padded 7023 crops; manifest SHA256 107d53e3c2f48ecfe118bb222a828080f675
 PAIRED COHORT VERIFIED: identical manifest and sample order
 ```
 
-The 7,023-sample selected population and its immutable pair of image
-conditions are now **ready for inference**. No new model inference has
-yet been reported.
+The 7,023-sample selected population and the identical manifests for both crop variants were verified independently on daugman. **The eight padded-only model evaluations have now completed; see the verified aggregate results below.** The tight version was not used for model inference.
 
 ### Padded-only eight-model frozen evaluation (user decision)
 
@@ -468,5 +466,110 @@ Completed valid runs are skipped; partially written result
 directories must be examined before any retry. Do not commit
 checkpoints, local lock, per-plate strings, manifests, CSVs
 or inference logs.
+
+## Completed 8/8: acquisition-aligned padded-crop LPLCv2 evaluation (13 October 2026)
+
+The user ran `run_lplcv2_acq7023_all_models.py --report --variant padded` and reported
+**`padded fully verified: 8/8 models`**. The auditor verifies the per-sample
+prediction-to-manifest joins, recomputes the overall integer metrics and checks
+that Poor+Illegible totals add exactly to All; the eight exact-correct
+subgroup counts also independently add to the overall numerator. These
+are **completed inference results**, not extrapolated estimates.
+
+The same frozen cohort of **7,023 original annotation instances** (6,240 Poor
+and 783 Illegible), frozen selection-manifest SHA256
+`107d53e3c2f48ecfe118bb222a828080f6750632b7c9b51a523ef186347ffb48`,
+was processed at F=1, identical 96x32 bicubic resizing, using only the
+**20%-per-side padded** LPLCv2 crops, without retraining, augmentation,
+TTA, SWA, or target-data checkpoint tuning. The crop selection
+was fixed before the reported inference. The verified **tight** LMDB
+was **not evaluated** and is not used to make padding-effect claims.
+
+### Overall (n=7,023)
+
+| Model | 7/7 (%) | >=6 (%) | >=5 (%) | Character accuracy (%) | CER (%) | Exact plates |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| MDiff4STR | 19.41 | 45.35 | 67.65 | 71.44 | 28.51 | 1363/7023 |
+| CPPD | 34.56 | 62.47 | 79.05 | 79.17 | 20.82 | 2427/7023 |
+| IGTR | 32.83 | 62.82 | 81.40 | 80.06 | 19.93 | 2306/7023 |
+| LISTER | 24.75 | 49.57 | 68.12 | 71.95 | 27.87 | 1738/7023 |
+| SVTRv2 | 34.22 | 62.51 | 79.13 | 78.56 | 19.79 | 2403/7023 |
+| OTE | 19.78 | 45.92 | 68.39 | 71.62 | 28.33 | 1389/7023 |
+| SVTRv2-AR | 36.45 | 63.75 | 79.31 | 79.78 | 20.19 | 2560/7023 |
+| **Ours (frozen EMA)** | **54.44** | **80.45** | **91.39** | **88.39** | **11.60** | **3823/7023** |
+
+### Poor-labelled (n=6,240)
+
+| Model | 7/7 (%) | >=6 (%) | >=5 (%) | Character accuracy (%) | CER (%) | Exact plates |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| MDiff4STR | 20.10 | 46.62 | 68.72 | 72.09 | 27.88 | 1254/6240 |
+| CPPD | 35.90 | 64.46 | 80.58 | 80.15 | 19.84 | 2240/6240 |
+| IGTR | 33.77 | 64.13 | 82.50 | 80.78 | 19.21 | 2107/6240 |
+| LISTER | 25.19 | 50.02 | 68.97 | 72.33 | 27.49 | 1572/6240 |
+| SVTRv2 | 34.82 | 63.41 | 79.95 | 78.98 | 19.29 | 2173/6240 |
+| OTE | 19.95 | 46.60 | 69.17 | 72.07 | 27.89 | 1245/6240 |
+| SVTRv2-AR | 37.79 | 65.71 | 80.67 | 80.76 | 19.21 | 2358/6240 |
+| **Ours (frozen EMA)** | **55.80** | **81.78** | **92.50** | **89.15** | **10.84** | **3482/6240** |
+
+### Illegible-labelled (n=783)
+
+| Model | 7/7 (%) | >=6 (%) | >=5 (%) | Character accuracy (%) | CER (%) | Exact plates |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| MDiff4STR | 13.92 | 35.25 | 59.13 | 66.34 | 33.59 | 109/783 |
+| CPPD | 23.88 | 46.62 | 66.92 | 71.36 | 28.64 | 187/783 |
+| IGTR | 25.42 | 52.36 | 72.67 | 74.31 | 25.65 | 199/783 |
+| LISTER | 21.20 | 45.98 | 61.30 | 68.97 | 30.89 | 166/783 |
+| SVTRv2 | 29.37 | 55.30 | 72.54 | 75.21 | 23.79 | 230/783 |
+| OTE | 18.39 | 40.49 | 62.20 | 68.09 | 31.86 | 144/783 |
+| SVTRv2-AR | 25.80 | 48.15 | 68.45 | 71.98 | 27.97 | 202/783 |
+| **Ours (frozen EMA)** | **43.55** | **69.86** | **82.50** | **82.32** | **17.66** | **341/783** |
+
+All eight integer numerator checks pass: MDiff4STR 1254+109=1363;
+CPPD 2240+187=2427; IGTR 2107+199=2306; LISTER 1572+166=1738;
+SVTRv2 2173+230=2403; OTE 1245+144=1389;
+SVTRv2-AR 2358+202=2560; Ours 3482+341=3823.
+All three exact-match percentages from integer correct counts
+match their two-decimal reported values.
+
+**Descriptive findings:** the proposed CNN–ViT leads all eight models
+on every reported metric, both in the combined sample and in
+each of the two annotated legibility categories.
+On all 7,023 instances it reaches **54.44% exact RR (3,823)**,
+versus runner-up **SVTRv2-AR at 36.45% (2,560)**,
+**+17.98 percentage points and 1,263 extra correctly recognized
+plates**. On Poor, the margin is **+18.01 pp** over SVTRv2-AR
+(55.80% vs 37.79%; +1,124 correct plates). On Illegible-labelled
+records, **+14.18 pp** over SVTRv2
+(43.55% vs 29.37%; +111 correct plates).
+The strongest other overall character accuracy is
+IGTR's 80.06% (vs Ours 88.39%);
+the lowest other overall CER is SVTRv2's 19.79%
+(vs Ours 11.60%). These are observed margins only;
+**no significance tests are claimed**.
+
+**Important limits for the journal:** this is the acquisition-aligned
+20%-padded, fully-in-frame and >=2px-margin, native-aspect
+[2.1,3.5], tight-minimum 24x8 **selected** LPLCv2 subgroup;
+it is **not the complete LPLCv2 data** or an official
+representative public benchmark. Illegible is an annotation label,
+not verified human readability. Original LPLCv2 annotations
+with OCR placeholders/invalid Brazilian-format labels were
+ineligible, especially many Illegible entries. The sample includes
+repeated source images and plate labels; observations are not
+all independent. No synthetic augmentation or target adaptation
+was applied.
+
+**Never attribute the change versus the earlier 3,000-image results
+to 20% padding alone.** The new evaluation also changes source
+pool inclusion, native aspect ratio limits, minimum dimensions,
+padded-margin inclusion and class mix
+(6,240/783 versus 2,158/842). Since no models were evaluated
+on the verified 7,023-image tight variant, there is no
+controlled paired crop-padding effect estimate.
+The appropriate paper statement is **superior descriptive
+recognition on this predeclared acquisition-aligned cohort**,
+without unverified causal robustness explanations.
+Do not silently overwrite the older 3,000-image diagnostic
+results or their historical claims.
 
 **Dataset restrictions:** never commit images, annotation JSON, crops, per-annotation manifests, checkpoints or prediction CSVs to public GitHub.
