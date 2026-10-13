@@ -789,7 +789,7 @@ verifiable. They also cross-validated OCR against vehicle data.
 This is independent documentary support for the intentional
 presence of text annotations in the Illegible category.
 
-The new mixed subset is **exploratory and pending preparation**:
+The new mixed subset is **exploratory; the deterministic dry-run has completed, but the LMDB build is still pending**:
 retain all 905 Brazilian-format OCR-labelled Illegible annotations
 and draw 2,095 from the **previously frozen** 3,000-image Poor test
 LMDB with fixed seed 2026, after excluding cross-class duplicate
@@ -799,7 +799,14 @@ and has distinct inclusion criteria by class. Parent LMDBs and
 frozen results remain unchanged. The builder validates parent
 selection SHA-256s and will refuse the build if insufficient
 Poor candidates remain. Run the dry-run from the linked protocol
-and inspect counts *before* construction or inference.
+and inspect counts *before* construction or inference. The dry-run
+confirmed 905+2,095 plate crops, 2,986 distinct source photos,
+2,985 OCR strings, and zero cross-subset photo/label overlaps.
+Native crop aspect-ratio medians were 2.6667 for Illegible,
+2.75 for Poor and 2.7222 combined. Of 3,000 crops, 1,419
+(47.3%) deviate more than 10% from 3:1 and 438 (14.6%)
+deviate more than 20%. These original crop ratios do not
+alter the frozen 96×32 (3:1) model-input protocol.
 
 
 ### Frozen model-input aspect-ratio consistency
