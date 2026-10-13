@@ -280,6 +280,20 @@ This hash replaces the old **unfiltered** sample's hash as the intended
 external evaluation set. The old selection and its hash are preserved above
 only to document why the vehicle-type filter was introduced.
 
+**LMDB integrity verification (13 October 2026): PASS.** The
+`--verify-only` command reported:
+
+- `verified_samples: 3000`
+- `unique_labels: 3000`
+- `unique_source_images: 3000`
+- `all_legibility: "Poor (leg=1)"`
+- `lmdb_decoded: 3000`
+- `split: "test"`, `frames: 1`
+
+This verifies LMDB decoding and manifest uniqueness, **not** visual crop
+completeness. Crop contact-sheet inspection and LRLPR-26 label-overlap
+audit remain pending before frozen-model inference.
+
 **Pending checks:** inspect `contact_sheet.jpg`, especially the original
 9-pixel-high plates and atypical aspect ratios, to make sure the annotations
 contain complete plate regions. Verify the generated LMDB if needed with
