@@ -259,7 +259,7 @@ def aspect_filter_and_refill(base_tagged, all_illegible, all_poor,
         "enabled": True,
         "min_native_crop_aspect_ratio_inclusive": threshold,
         "refill_native_aspect_ratio_inclusive": [refill_min, refill_max],
-        "base_pool": "905 Illegible + 2095 seeded Poor; fixed seed 2026",
+        "base_pool": f"905 Illegible + 2095 seeded Poor; fixed seed {seed}",
         "sampling_policy": (
             "Remove base-pool records below minimum ratio, then uniformly "
             "sample exactly that many unused, collision-free, near-3:1 Poor "
@@ -383,6 +383,35 @@ def verify(folder, expected_hash=None):
             raise RuntimeError("Replacement was not a near-ideal original Poor crop")
         if native_aspect_selection["added_near_ideal_poor"] != required:
             raise RuntimeError("Replenishment accounting differs from removed population")
+        removal_rows = native_aspect_selection["removed_records"]
+        reported_removals = Counter(r["source_legibility"] for r in removal_rows)
+        if dict(reported_removals) != native_aspect_selection["removed_counts"]:
+            raise RuntimeError("Removal record provenance/count mismatch")
+        if sum(reported_removals.values()) != required:
+            raise RuntimeError("Removed count inconsistent with per-record log")
+        expected_from_base = {
+            "Illegible": 905 - reported_removals["Illegible"],
+            "Poor": 2095 + reported_removals["Illegible"],
+        }
+        if dict(kinds) != expected_from_base:
+            raise RuntimeError("Final category counts inconsistent with replacements")
+        replacement_log_ids = {
+            (r["source_image"], r["annotation_index"])
+            for r in native_aspect_selection["replacement_records"]
+        }
+        actual_refill_ids = {
+            (r["source_image"], r["annotation_index"]) for r in replacements
+        }
+        if replacement_log_ids != actual_refill_ids or len(replacement_log_ids) != required:
+            raise RuntimeError("Replacement records differ from recorded decision log")
+        removed_log_ids = {
+            (r["source_image"], r["annotation_index"]) for r in removal_rows
+        }
+        present_ids = {
+            (r["source_image"], r["annotation_index"]) for r in rows
+        }
+        if removed_log_ids & present_ids:
+            raise RuntimeError("A supposedly removed low-aspect record remains in test")
     elif any(r.get("selection_origin") == "near_ideal_poor_refill" for r in rows):
         raise RuntimeError("Unexpected replacement in unfiltered mixed LMDB")
     if len({(row["source_image"], row["annotation_index"]) for row in rows}) != 3000:
@@ -540,7 +569,11 @@ def build(args):
             pickle.dump(metadata, f, protocol=4)
         final_manifest = {
             "dataset": "LPLCv2",
-            "subset": "Illegible 905 + Poor 2095 mixed fixed-seed F1 test",
+            "subset": (
+                "Native-aspect-controlled Illegible/Poor mixed 3k F1 test"
+                if aspect_selection else
+                "Illegible 905 + Poor 2095 mixed fixed-seed F1 test"
+            ),
             "count": 3000, "frames": 1,
             "selection_policy": preview,
             "samples": written_rows,
