@@ -54,6 +54,25 @@ def distribution(rows, kind):
     return result
 
 
+def subgroup_breakdown(rows, field):
+    """Compute size-bin distributions per subgroup, preserving sample counts."""
+    labels = sorted({str(row[field]) for row in rows})
+    subgroups = {}
+    for label in labels:
+        subset = [row for row in rows if str(row[field]) == label]
+        n = len(subset)
+        subgroups[label] = {
+            "count": n,
+            "correct": sum(r["correct"] for r in subset),
+            "rr_percent": round(100 * sum(r["correct"] for r in subset) / n, 3),
+            "width_groups": distribution(subset, "width"),
+            "height_groups": distribution(subset, "height"),
+        }
+    if sum(result["count"] for result in subgroups.values()) != len(rows):
+        raise RuntimeError("Subgroup breakdown did not cover all samples")
+    return subgroups
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--manifest", required=True, type=Path)
@@ -122,6 +141,8 @@ def main():
         "overall": overview,
         "width_groups": distribution(aligned, "width"),
         "height_groups": distribution(aligned, "height"),
+        "by_layout": subgroup_breakdown(aligned, "layout"),
+        "by_time_of_day": subgroup_breakdown(aligned, "time"),
         "caveat": ("Original crop dimensions are not proof of sensor-native resolution; "
                    "different legibility, layout, camera, and lighting conditions "
                    "can confound these descriptive size-stratified results."),
