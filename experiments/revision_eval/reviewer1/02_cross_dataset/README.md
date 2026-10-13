@@ -138,6 +138,34 @@ Then replace the explicit pending R1.2 placeholder in the response letter.
 
 Do not assert overall LPLCv2 generalization beyond the eligible Poor subset.
 
+## Vehicle-type audit and classification correction — 13 October 2026
+
+The first type-filter audit (before the two corrections below) reported
+3,330 accepted Poor annotations with 3,214 unique OCR labels and 3,273
+unique source images. It also reported 3,450 missing vehicle types and
+138 motorcycle-flagged annotations.
+
+This revealed two classification errors in the script's strict
+non-motorcycle allowlist:
+
+- `MICRO ONIBUS` (23 annotations): should be accepted as a microbus,
+  alongside `MICROONIBUS`.
+- `MOTOR CASA` (1 annotation): should be accepted as a motorhome, not
+  rejected by a naive substring search for `MOTO`.
+
+Both cases are now corrected: the motorcycle check matches explicit normalized
+vehicle-type values, not arbitrary substrings. Genuine `MOTOCICLETA` (124
+annotations) and `MOTONETA` (13) remain excluded. Unknown/missing types still
+remain excluded rather than guessed.
+
+**Rerun `--audit-only` with the updated script before generating the new
+LMDB.** Expected preliminary accepted annotation count is 3,354, assuming the
+listed type counts describe all otherwise eligible cases; verify the actual
+unique-label count from the new audit output. The 3,450 missing types represent
+a substantial selection restriction, so the results must be described as
+recognition on the *vehicle-type-annotated, non-motorcycle Poor subset* rather
+than on all Poor LPLCv2 plates.
+
 ## Historical unfiltered preparation outcome — 12 October 2026
 
 Before the vehicle-type exclusion was added, the preparation script was
