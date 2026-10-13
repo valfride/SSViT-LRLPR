@@ -393,6 +393,76 @@ evaluation runner / checkpoint-lock context after the user
 verifies both new LMDBs. Never directly point the old
 `--run` command at these new directories.
 
+## Paired LMDB dataset build and verification completed (daugman)
+
+The user independently ran `build_lplcv2_acquisition_pair.py --verify-only`
+after the original build found that the target output directories
+already existed. Both directories were populated and passed the
+builder's complete LMDB/crop-byte/metadata revalidation:
+
+```text
+VERIFIED tight 7023 crops; manifest SHA256 107d53e3c2f48ecfe118bb222a828080f6750632b7c9b51a523ef186347ffb48
+VERIFIED padded 7023 crops; manifest SHA256 107d53e3c2f48ecfe118bb222a828080f6750632b7c9b51a523ef186347ffb48
+PAIRED COHORT VERIFIED: identical manifest and sample order
+```
+
+The 7,023-sample selected population and its immutable pair of image
+conditions are now **ready for inference**. No new model inference has
+yet been reported.
+
+### Separate eight-model/dual-crop frozen evaluation runner
+
+[\`scripts/run_lplcv2_acq7023_all_models.py\`](scripts/run_lplcv2_acq7023_all_models.py)
+is separate from the previous **3,000-image** runner and checks
+both frozen dataset manifest hashes before every operation.
+It uses the existing LOCAL checkpoint-selection lock
+\`FROZEN_LPLCV2_CHECKPOINTS.local.json\`, which is already tied to
+the original models' LRLPR-26 validation checkpoint selection
+(no reselection based on LPLCv2). It verifies 96x32 F=1
+preprocessing configs, no TTA/SWA, loss-specific config and
+checkpoint identity. It writes a separate ignored result folder
+per **crop variant x architecture** (16 independent outputs).
+
+All commands below must be executed on daugman, after pulling
+the project branch. Never commit the local lock, individual
+predictions, GT labels, manifest rows, or full logs.
+
+```bash
+cd `/doc2025/project1
+git pull --ff-only
+
+RUNNER=experiments/revision_eval/reviewer1/02_cross_dataset/scripts/run_lplcv2_acq7023_all_models.py
+
+# First: pure preflight, no inference or outputs written.
+python3 -m py_compile "$RUNNER"
+python3 "$RUNNER" --preflight
+
+# Only after the preflight validates both datasets and checkpoints:
+# all eight frozen models on tight, then the same eight on padded.
+python3 "$RUNNER" --run
+
+# Verify every per-image CSV record against the frozen GT/identity
+# manifest, recalculate all metrics, and print only 8-model aggregate
+# tables for All, Poor, Illegible, plus padded-minus-tight changes.
+python3 "$RUNNER" --report
+```
+
+The \`--variant tight\` and \`--variant padded\` flags may be
+used to do separate complete eight-model passes; the default
+\`both\` processes tight then padded. Completed and verified
+runs are skipped safely; nonempty incomplete results trigger
+a deliberate failure instead of silent overwrite.
+
+**Important:** the runner is not the previously published
+3,000-image script. Both manifest SHA-256 values are frozen to
+\`107d53e3c2f48ecfe118bb222a828080f6750632b7c9b51a523ef186347ffb48\`,
+with the same source annotations SHA-256
+\`2da194f7393970b7ddf11085a9bb5adb3d6780eca49d9d7389eed0ca06d49a49\`.
+The report uses the existing exact-match, fixed-slot character
+accuracy, partial >=5/>=6 and edit-distance CER definitions,
+and validates original metric counts. It does **not**
+calculate McNemar or any paired significance tests.
+
 ## After reviewing the audit
 
 1. Freeze the population definition (native ratio 2.5–3.5; approved minimum width/height; exact original annotation file SHA-256).
