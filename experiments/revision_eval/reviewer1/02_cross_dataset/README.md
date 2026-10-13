@@ -12,7 +12,9 @@ before model predictions are examined.
 - Exclude occluded annotations (occ = true), missing source images, malformed
   annotations, invalid/out-of-bounds bounding boxes, undecodable images.
 - Enforce one distinct **OCR plate label** and one distinct **source image**
-  per selected test example. Select with a fixed seed **2026**.
+  per selected test example. Select with a fixed seed **2026**, drawing random
+  distinct OCR labels first and then picking a random viable image per label
+  (without reusing source images).
 - Keep the plate crop from the supplied bounding rectangle, losslessly as PNG.
   Do not synthetically degrade, fine-tune, or manually cherry-pick hard/easy
   examples. Evaluator provides the original bicubic 96x32 resize.
