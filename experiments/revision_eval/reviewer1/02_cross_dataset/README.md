@@ -775,3 +775,28 @@ The audit manifest SHA-256 is
 using these labels as verified OCR ground truth. Do not present visually
 unverifiable labels as confirmed OCR ground truth or revise the
 original frozen Poor benchmark after observing these samples.
+
+
+## Planned LPLCv2 mixed-difficulty F=1 set (905 Illegible + 2095 Poor)
+
+See [MIXED_POOR_ILLEGIBLE_3K.md](MIXED_POOR_ILLEGIBLE_3K.md).
+The authors explicitly say in Section III of
+[Wojcik et al. (IJCNN 2026)](https://arxiv.org/pdf/2604.08741)
+that OCR labels were automatically proposed and manually reviewed,
+that plate text is omitted where human validation is unreliable,
+and that camera zoom made some otherwise Illegible plates
+verifiable. They also cross-validated OCR against vehicle data.
+This is independent documentary support for the intentional
+presence of text annotations in the Illegible category.
+
+The new mixed subset is **exploratory and pending preparation**:
+retain all 905 Brazilian-format OCR-labelled Illegible annotations
+and draw 2,095 from the **previously frozen** 3,000-image Poor test
+LMDB with fixed seed 2026, after excluding cross-class duplicate
+source photographs/plate strings. The mixture is exactly 3,000
+**plate crops**, potentially fewer distinct source photographs,
+and has distinct inclusion criteria by class. Parent LMDBs and
+frozen results remain unchanged. The builder validates parent
+selection SHA-256s and will refuse the build if insufficient
+Poor candidates remain. Run the dry-run from the linked protocol
+and inspect counts *before* construction or inference.
