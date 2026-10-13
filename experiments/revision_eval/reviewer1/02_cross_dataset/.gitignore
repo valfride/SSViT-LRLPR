@@ -1,0 +1,3 @@
+# Keep frozen checkpoint selection and restricted LPLCv2 outputs on daugman.
+FROZEN_LPLCV2_CHECKPOINTS.local.json
+results/
