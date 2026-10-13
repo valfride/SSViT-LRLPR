@@ -136,9 +136,9 @@ The output has the exact manuscript columns **Model / Frames / 7/7 / >=6 / >=5**
 | SVTRv2-AR | 1 | 20.1 | 40.3 | 59.9 | Complete |
 | Ours (best EMA) | 1 | 26.4 | 48.7 | 67.3 | Complete |
 
-**Scientific limitations:** This is a post-hoc geometry-controlled exploratory subset, not an official LPLCv2 recognition distribution. Some OCR-labelled Illegible crops may not be visually decipherable. Original crop ratios still vary; all models receive a direct aspect-distorting 96x32 bicubic resize to match their **frozen** LRLPR-26 protocol. Individual annotations do not guarantee fully independent source photographs. Before a final manuscript conclusion, obtain Poor/Illegible-stratified metrics, the per-track paired McNemar comparison, and ideally source/annotation quality review; do not treat a difference between marginal accuracies alone as a significance test.
+**Scientific limitations:** This is a post-hoc geometry-controlled exploratory subset, not an official LPLCv2 recognition distribution. Some OCR-labelled Illegible crops may not be visually decipherable. Original crop ratios still vary; all models receive a direct aspect-distorting 96x32 bicubic resize to match their **frozen** LRLPR-26 protocol. Individual annotations do not guarantee fully independent source photographs. Poor/Illegible-stratified descriptive metrics are now available below; the per-track paired McNemar comparison, crop-size sensitivity analysis, and ideally source/annotation quality review remain outstanding. Do not treat differences between marginal accuracies alone as significance tests.
 
-The manuscript's dedicated `Cross-Dataset Experimental Results` subsection lives in `valfride/CNN-ViT-LRLPR-paper` on `revision/ojits-major-revision`. Its eight-model table is populated with these values, pending additional character-level and legibility analyses.
+The manuscript's dedicated `Cross-Dataset Experimental Results` subsection lives in `valfride/CNN-ViT-LRLPR-paper` on `revision/ojits-major-revision`. Its three cross-dataset tables are populated with the eight-model exact/partial-recognition, character-level, and Poor/Illegible-stratified results. Paired significance and native-crop-size conditioning remain outstanding.
 
 
 ## Submitted EMA checkpoint identity confirmed on daugman
@@ -255,3 +255,80 @@ inference on the same local prediction identities, preferably
 accounting for duplicate source photographs. The main manuscript
 table remains frozen until real subgroup aggregate outputs
 are available.
+
+
+## Completed 8/8 Poor versus Illegible analysis (13 October 2026)
+
+The user ran `python3 "$RUNNER" --legibility-table` after a
+fast-forward pull. The command printed
+`Verified: 8/8 models; all 3,000 predictions per model match the frozen
+manifest and original global results.` The original frozen selection-manifest
+SHA-256 was `3d64cb68c98732fc5803a3de40950efa1da1cb9421c0c653ba18b915bed30d05`.
+No models were retrained or re-evaluated: these are derived from
+the original eight per-image predictions, grouped by source
+`source_legibility` in the manifest.
+
+### Poor-labelled cohort (n=2,158)
+
+| Model | 7/7 (%) | >=6 (%) | >=5 (%) | Char. acc. (%) | CER (%) | Exact correct |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| MDiff4STR | 12.28 | 29.98 | 50.60 | 63.27 | 36.66 | 265/2158 |
+| CPPD | **28.04** | 52.59 | 70.30 | 74.59 | 25.39 | 605/2158 |
+| IGTR | 26.27 | **52.78** | **73.77** | **76.16** | **23.82** | 567/2158 |
+| LISTER | 17.52 | 37.26 | 54.17 | 64.70 | 34.75 | 378/2158 |
+| SVTRv2 | 14.87 | 33.55 | 54.08 | 64.25 | 31.99 | 321/2158 |
+| OTE | 11.35 | 26.83 | 42.91 | 57.66 | 42.22 | 245/2158 |
+| SVTRv2-AR | 20.02 | 41.01 | 61.58 | 69.54 | 30.35 | 432/2158 |
+| Ours (best EMA) | 25.58 | 48.10 | 67.10 | 72.87 | 27.09 | 552/2158 |
+
+### Illegible-labelled cohort (n=842)
+
+| Model | 7/7 (%) | >=6 (%) | >=5 (%) | Char. acc. (%) | CER (%) | Exact correct |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| MDiff4STR | 11.40 | 28.27 | 45.84 | 59.38 | 40.55 | 96/842 |
+| CPPD | 24.94 | 46.67 | 61.76 | 69.27 | 30.64 | 210/842 |
+| IGTR | 27.91 | **50.59** | 65.91 | 72.45 | 27.52 | 235/842 |
+| LISTER | 19.71 | 36.34 | 50.95 | 62.33 | 37.00 | 166/842 |
+| SVTRv2 | 20.78 | 37.29 | 55.58 | 64.93 | 31.93 | 175/842 |
+| OTE | 15.32 | 30.76 | 46.20 | 58.36 | 41.52 | 129/842 |
+| SVTRv2-AR | 20.19 | 38.36 | 55.58 | 65.86 | 34.07 | 170/842 |
+| Ours (best EMA) | **28.50** | 50.36 | **67.70** | **72.62** | **27.37** | 240/842 |
+
+The existing direct-subgroup totals cross-check the original
+global exact correct counts: MDiff4STR 265+96=361, CPPD
+605+210=815, IGTR 567+235=802, LISTER 378+166=544,
+SVTRv2 321+175=496, OTE 245+129=374, SVTRv2-AR
+432+170=602, and Ours 552+240=792.
+
+**Descriptive ranking reversal:** On Poor, CPPD leads in 7/7
+RR (28.04%), followed by IGTR (26.27%) and Ours (25.58%).
+On Illegible-labelled crops, Ours leads in 7/7 RR (28.50%),
+followed by IGTR (27.91%) and CPPD (24.94%).
+Relative to CPPD, Ours has **53 fewer** exact plates on Poor
+and **30 more** on Illegible, yielding an overall difference
+of **23 fewer**. Relative to IGTR, the differences are **15 fewer**
+and **5 more**, yielding **10 fewer** overall.
+
+On Poor, IGTR leads in character accuracy (76.16%) and lowest
+CER (23.82%); on Illegible-labelled crops, Ours narrowly leads
+in character accuracy (72.62% versus IGTR's 72.45%) and CER
+(27.37% versus 27.52%). On Illegible, IGTR still leads in the
+>=6 partial metric (50.59% versus Ours 50.36%).
+
+**Avoid overinterpretation:** several models exhibit higher
+exact-match RR in the *Illegible*-labelled cohort than in the
+*Poor* cohort; this is not proof that visually illegible plates
+are intrinsically easier. The original Illegible and Poor pools
+have different sourcing/selection paths, post-hoc aspect filtering
+removes unusual shapes, and some Illegible GT strings have
+unverified visual recoverability. The reported labels are
+annotation categories, not a controlled ordinal difficulty axis.
+Differences of five plates between Ours and IGTR within
+Illegible are particularly small; paired tests and source-level
+dependency handling are needed before significance claims.
+
+**Next diagnostic work:** paired correctness-discordance McNemar
+comparisons for Ours/CPPD and Ours/IGTR within each subgroup,
+and optional source-crop-height/area-conditioned performance.
+Neither should require running the neural networks again,
+provided the local manifests and eight prediction CSVs are retained.
