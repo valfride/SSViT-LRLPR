@@ -100,7 +100,7 @@ def inventory():
             continue
         relative = CANDIDATE_CHECKPOINTS[model]
         folder = (base / relative).parent
-        print(f"\\n{model}: {folder.relative_to(ROOT)}")
+        print(f"\n{model}: {folder.relative_to(ROOT)}")
         if not folder.is_dir():
             print("    DIRECTORY MISSING")
             continue
@@ -110,7 +110,7 @@ def inventory():
             print(f"    {name}{flag}")
         if not (base / relative).is_file():
             print("    WARNING: expected candidate checkpoint MISSING")
-    print("\\nTied top accuracies: LISTER epochs 103/113, SVTRv2 epochs "
+    print("\nTied top accuracies: LISTER epochs 103/113, SVTRv2 epochs "
           "146/156, SVTRv2-AR epochs 52/85/94.")
     print("The candidate follows test.py's stable alphabetical tie order; "
           "confirm the original LRLPR-26 Table-I checkpoint-selection logs "
@@ -136,7 +136,7 @@ def write_template(path):
             "Do not select using LPLCv2 performance."
         ),
         "checkpoints": choices,
-    }, indent=2) + "\\n")
+    }, indent=2) + "\n")
     print(f"Created {path} with all eight local candidate checkpoints.")
     print("Review tied validation selections and confirm paths before --run.")
 
@@ -209,7 +209,7 @@ def preflight(dataset, lock):
         model, slug, conf, loss = entry
         preflight_config(config_for(conf), loss)
         current = completed(entry, dataset, checkpoints[model])
-        print(f"  {model}: {checkpoints[model].relative_to(ROOT)}", flush=True)
+        print(f"  {model}: {checkpoints[model]}", flush=True)
         print(f"    SHA256: {sha256(checkpoints[model])}", flush=True)
         print(f"    Status: {'complete, will skip' if current is not None else 'pending'}", flush=True)
         if current is None:
