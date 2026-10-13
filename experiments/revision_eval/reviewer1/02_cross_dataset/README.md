@@ -303,3 +303,25 @@ selection. Proceed to F=1 frozen-checkpoint inference only after geometric
 QA passes. Since missing car.type records were excluded, only claim
 performance for the type-annotated non-motorcycle Poor subset, not all Poor
 LPLCv2 plates.
+
+## Label-overlap audit — 13 October 2026
+
+A read-only comparison of OCR labels in the final frozen LPLCv2
+`LPLCv2_PoorNonMotoUnique_TEST_3k/selection_manifest.json` with
+`CompetitionDataset_LMDB_TEST_3k/metadata.pkl` found:
+
+- External unique OCR labels: **3,000**
+- Original LRLPR-26 test unique OCR labels: **3,000**
+- Labels occurring in both test sets: **19 (0.63% of external)**
+
+The overlap refers to **matching seven-character strings**, not confirmed
+duplicated images, capture sessions, or physical vehicles. The frozen
+external selection is **not being changed** in response to this audit.
+The manuscript must not claim label-disjoint generalization or verified
+absence of all source-image overlap; instead describe the independently
+acquired external dataset, the within-set uniqueness constraints, and the
+observed 0.63% cross-test-label overlap.
+
+**Still pending before inference:** visual crop QA using the new
+`contact_sheet.jpg`; no model predictions have been used to select
+or remove external samples.
