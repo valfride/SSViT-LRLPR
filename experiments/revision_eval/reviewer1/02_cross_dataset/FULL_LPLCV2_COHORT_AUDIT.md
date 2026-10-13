@@ -410,65 +410,63 @@ The 7,023-sample selected population and its immutable pair of image
 conditions are now **ready for inference**. No new model inference has
 yet been reported.
 
-### Separate eight-model/dual-crop frozen evaluation runner
+### Padded-only eight-model frozen evaluation (user decision)
 
-[\`scripts/run_lplcv2_acq7023_all_models.py\`](scripts/run_lplcv2_acq7023_all_models.py)
-is separate from the previous **3,000-image** runner and checks
-both frozen dataset manifest hashes before every operation.
-It uses the existing LOCAL checkpoint-selection lock
-\`FROZEN_LPLCV2_CHECKPOINTS.local.json\`, which is already tied to
-the original models' LRLPR-26 validation checkpoint selection
-(no reselection based on LPLCv2). It verifies 96x32 F=1
-preprocessing configs, no TTA/SWA, loss-specific config and
-checkpoint identity. It writes a separate ignored result folder
-per **crop variant x architecture** (16 independent outputs).
+**Decision, 13 October 2026:** run **ONLY** on the
+20%-per-side padded LPLCv2 cohort of **7,023 images**
+(**6,240 Poor; 783 Illegible**). The verified tight
+version remains preserved on daugman for provenance and
+paired identity checks, but **no recognizer inference is
+planned on the tight version**. This is **8 model evaluations**,
+not 16. No McNemar test or other paired significance analysis.
 
-All commands below must be executed on daugman, after pulling
-the project branch. Never commit the local lock, individual
-predictions, GT labels, manifest rows, or full logs.
+[`scripts/run_lplcv2_acq7023_all_models.py`](scripts/run_lplcv2_acq7023_all_models.py)
+has been updated so `--variant padded` is the **default**;
+preflight checks evaluation status only for the selected variant,
+while both frozen manifests are still inspected to confirm paired
+cohort provenance. The script reuses the old, local
+validation-selected checkpoint lock; it does NOT reselect
+weights using LPLCv2 data. All results go to new ignored
+`results/lplcv2_acq7023_padded_*` directories.
+Existing 3,000-image predictions are untouched.
 
-```bash
-cd `/doc2025/project1
+Run on daugman:
+
+~~~bash
+cd ~/doc2025/project1
 git pull --ff-only
 
 RUNNER=experiments/revision_eval/reviewer1/02_cross_dataset/scripts/run_lplcv2_acq7023_all_models.py
 
-# First: pure preflight, no inference or outputs written.
+# No inference: verify frozen datasets, F=1 configs, locked checkpoints.
 python3 -m py_compile "$RUNNER"
-python3 "$RUNNER" --preflight
+python3 "$RUNNER" --preflight --variant padded
 
-# Only after the preflight validates both datasets and checkpoints:
-# all eight frozen models on tight, then the same eight on padded.
-python3 "$RUNNER" --run
+# Eight original-validation-selected recognizers on the padded set ONLY.
+python3 "$RUNNER" --run --variant padded
 
-# Verify every per-image CSV record against the frozen GT/identity
-# manifest, recalculate all metrics, and print only 8-model aggregate
-# tables for All, Poor, Illegible, plus padded-minus-tight changes.
-python3 "$RUNNER" --report
-```
+# Recompute/validate all aggregate scores against each prediction CSV.
+# Prints All / Poor / Illegible; no tight-vs-padded comparison.
+python3 "$RUNNER" --report --variant padded
+~~~
 
-The \`--variant tight\` and \`--variant padded\` flags may be
-used to do separate complete eight-model passes; the default
-\`both\` processes tight then padded. Completed and verified
-runs are skipped safely; nonempty incomplete results trigger
-a deliberate failure instead of silent overwrite.
+The model evaluation format is frozen 96x32 bicubic, F=1,
+no augmentation/TTA/SWA, with all eight checkpoints selected
+from original LRLPR-26 validation, and no post-hoc adaptation.
+Reported metrics: full-plate exact RR 7/7; partial >=6/7
+and >=5/7; positional character accuracy; Levenshtein CER;
+plus separate legibility-group counts and rates.
+The source annotation SHA256 is
+`2da194f7393970b7ddf11085a9bb5adb3d6780eca49d9d7389eed0ca06d49a49`
+and the shared frozen manifest SHA256 is
+`107d53e3c2f48ecfe118bb222a828080f6750632b7c9b51a523ef186347ffb48`.
 
-**Important:** the runner is not the previously published
-3,000-image script. Both manifest SHA-256 values are frozen to
-\`107d53e3c2f48ecfe118bb222a828080f6750632b7c9b51a523ef186347ffb48\`,
-with the same source annotations SHA-256
-\`2da194f7393970b7ddf11085a9bb5adb3d6780eca49d9d7389eed0ca06d49a49\`.
-The report uses the existing exact-match, fixed-slot character
-accuracy, partial >=5/>=6 and edit-distance CER definitions,
-and validates original metric counts. It does **not**
-calculate McNemar or any paired significance tests.
-
-## After reviewing the audit
-
-1. Freeze the population definition (native ratio 2.5–3.5; approved minimum width/height; exact original annotation file SHA-256).
-2. Build a **new** full-cohort F=1 LMDB from the selected original images/labels, without a 3,000-item cap or predictions in selection. Atomically stage and independently validate every crop and metadata entry. Keep an untracked local manifest and count repeated photos/labels.
-3. Run all eight **original-validation-selected checkpoints** on the same new LMDB with frozen 96x32 bicubic resizing.
-4. Summarize overall, Poor and Illegible full-plate accuracy, partial accuracy, character accuracy and CER. Repeated photo/label records imply some non-independent observations.
-5. Treat this as a **separate exploratory diagnostic**. Do not replace the manuscript's existing cross-dataset tables without reviewing new findings. No McNemar test is planned, per user instruction.
+The user has verified both LMDBs via the independent
+`build_lplcv2_acquisition_pair.py --verify-only`
+validator. Do **not** invoke the old 3,000-crop runner here.
+Completed valid runs are skipped; partially written result
+directories must be examined before any retry. Do not commit
+checkpoints, local lock, per-plate strings, manifests, CSVs
+or inference logs.
 
 **Dataset restrictions:** never commit images, annotation JSON, crops, per-annotation manifests, checkpoints or prediction CSVs to public GitHub.
