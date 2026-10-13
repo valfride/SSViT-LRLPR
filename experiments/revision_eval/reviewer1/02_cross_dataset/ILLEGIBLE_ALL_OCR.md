@@ -1,12 +1,60 @@
 # LPLCv2 Illegible — complete OCR-labelled subset (supplementary study)
 
-**Status:** the second local audit established that 284 of the 1,189
-seven-character Illegible OCR fields contain the placeholder `UNKNOWN`.
-The usable *plate-format-validated* population is **905 annotations**
-(168 old Brazilian, 737 Mercosur), with **890 distinct strings**.
-All 905 retained annotations have in-bounds bounding boxes, based on
-the completed preflight. **Dataset build and visual target QA are pending.**
-The previous Poor subset is unchanged.
+**Status:** the corrected, format-validated Illegible F=1 LMDB has
+been built locally on daugman and **verified successfully**:
+905 entries, 905 distinct annotation identities, 890 distinct OCR
+labels, 891 distinct source photographs, 25 known motorcycles,
+318 missing vehicle types, zero `occ` flags and zero clipped boxes.
+All samples have `leg=0` and test split. Source-image/target
+visual QA and inference are still pending. The 3,000-sample frozen
+Poor benchmark and its 24.57% as-annotated result remain unchanged.
+
+## Verified local LMDB build — 13 October 2026
+
+The user ran `--verify-only` on
+`~/doc2025/LMDB-Datasets/LPLCv2_IllegibleBrazilianOCR_TEST` with
+the following validated summary:
+
+| Verification field | Value |
+| --- | ---: |
+| Decodable LMDB images and matching metadata | **905** |
+| Unique source-image + annotation-index identities | **905** |
+| Unique OCR labels | 890 |
+| Unique source photographs | 891 |
+| Known motorcycles retained | 25 |
+| Missing vehicle types retained | 318 |
+| Annotated occlusions | 0 |
+| Crops clipped to frame | 0 |
+| Legibility / split / frames | Illegible / test / F=1 |
+
+The 14 fewer distinct source photographs than sample records are
+intentional: a single photograph can contain multiple separately
+annotated plates. There are 15 repeated label *instances*
+relative to the 890 unique strings, not necessarily 15 repeated
+identities. No model predictions or OCR correctness claims
+follow from LMDB validation alone.
+
+**Next:** independently audit all plate targets in the source images
+without using model predictions. After the source/crop inspection,
+use the frozen single-frame CNN–ViT only if the evaluation is
+clearly described as *as-annotated*, and retain all annotations
+in the primary supplementary result unless an independently
+defined sensitivity analysis is warranted.
+
+```bash
+cd ~/doc2025/project1
+python3 experiments/revision_eval/reviewer1/02_cross_dataset/scripts/audit_lplcv2_annotation_quality.py \
+  --dataset-root ~/doc2025/LMDB-Datasets/LPLC_dataset \
+  --manifest ~/doc2025/LMDB-Datasets/LPLCv2_IllegibleBrazilianOCR_TEST/selection_manifest.json \
+  --output-dir ~/doc2025/LMDB-Datasets/LPLCv2_IllegibleBrazilianOCR_annotation_QA
+```
+
+This creates **38** `all_pages` contact sheets at the default
+24 samples/page, along with priority pages, a 905-row review CSV,
+and a JSON summary. Flag counts will not be known until the script
+actually runs. The presence of a valid ground-truth string does
+not make an Illegible annotation readable in the photographed crop.
+
 
 ## Confirmed Illegible OCR-label audit — 13 October 2026
 
