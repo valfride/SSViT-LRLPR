@@ -1,9 +1,9 @@
 # Reviewer 1.2 — frozen LPLCv2 Poor-only cross-dataset experiment
 
-**Status:** the initial 3,000-sample selection was prepared on daugman, but
-contact-sheet QA revealed motorcycle plates. A stricter **vehicle-type-filtered**
-protocol is now implemented; the revised selection must be audited and prepared
-again before any frozen-model inference. The older LMDB remains intact.
+**Status:** the revised vehicle-type-filtered 3,000-sample LMDB was
+successfully prepared on daugman (13 October 2026). The motorcycle-excluded
+selection and SHA-256 are now recorded below. **Visual crop QA, overlap audit,
+and frozen-model inference are still pending**. The previous LMDB is retained.
 
 ## Scientific scope
 
@@ -238,3 +238,54 @@ Observed counts (before final image decoding/crop construction):
 seed 2026, inspect its contact sheet, and record its new SHA-256 before
 inference. The count of eligible items is not the count finally selected.
 Do not use the older unfiltered manifest hash for this dataset.
+
+
+## Frozen non-motorcycle test set — 13 October 2026
+
+**Status:** successful 3,000-sample preparation from the corrected type
+filter. Inference has **not** yet been run or used to revise selection.
+
+- LMDB: `~/doc2025/LMDB-Datasets/LPLCv2_PoorNonMotoUnique_TEST_3k`
+- Seed: `2026`
+- Selected: **3,000** plate crops, **3,000** distinct OCR strings,
+  **3,000** distinct source images
+- Source-image conflicts skipped: **35**
+- Cameras: **383**
+- Time: morning **799**, afternoon **890**, evening **927**, night **384**
+- Acquisition day: 0: **610**, 1: **1,310**, 2: **1,080**
+- Rain-flagged: **14**; faulty-camera flagged: **151**
+- Crop dimensions (native pixels): width **24–283**, height **9–104**
+
+Selected annotation vehicle-type distribution:
+
+| Normalized vehicle type | Selected plates |
+| --- | ---: |
+| AUTOMOVEL | 2,420 |
+| CAMINHONETE | 201 |
+| CAMIONETA | 182 |
+| UTILITARIO | 101 |
+| ONIBUS | 38 |
+| CAMINHAO | 28 |
+| MICRO ONIBUS | 21 |
+| SEMI REBOQUE | 5 |
+| CAMINHAO TRATOR | 3 |
+| MOTOR CASA | 1 |
+| **Total** | **3,000** |
+
+**Frozen selection manifest SHA-256:**
+
+`8a08180604d88b652c6d915853830b4b1fd0a9ff6bcceace597d8a57f199d408`
+
+This hash replaces the old **unfiltered** sample's hash as the intended
+external evaluation set. The old selection and its hash are preserved above
+only to document why the vehicle-type filter was introduced.
+
+**Pending checks:** inspect `contact_sheet.jpg`, especially the original
+9-pixel-high plates and atypical aspect ratios, to make sure the annotations
+contain complete plate regions. Verify the generated LMDB if needed with
+`--verify-only`, and audit OCR-label overlap with the LRLPR-26 canonical
+test set. Overlap checking should **not** silently alter this already frozen
+selection. Proceed to F=1 frozen-checkpoint inference only after geometric
+QA passes. Since missing car.type records were excluded, only claim
+performance for the type-annotated non-motorcycle Poor subset, not all Poor
+LPLCv2 plates.
