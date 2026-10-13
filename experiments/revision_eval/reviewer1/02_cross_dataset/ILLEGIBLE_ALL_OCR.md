@@ -620,7 +620,7 @@ else
   RESULT_DIR="$PWD/experiments/revision_eval/reviewer1/02_cross_dataset/results/lplcv2_illegible_svtrv2_ar"
   LINK_DIR="$RESULT_DIR/frozen_checkpoint_only"
   mkdir -p "$LINK_DIR"
-  ln -s "$SVTR_CKPT" "$LINK_DIR/student_acc_0.7500_ep_52.pth"
+  ln -sfn "$SVTR_CKPT" "$LINK_DIR/student_acc_0.7500_ep_52.pth"
   sha256sum "$SVTR_CKPT"
   python3 experiments/revision_eval/shared/scripts/run_eval_matrix.py \
     --config baselines_configs/SVTRV2_AR_BASELINE.yaml \
