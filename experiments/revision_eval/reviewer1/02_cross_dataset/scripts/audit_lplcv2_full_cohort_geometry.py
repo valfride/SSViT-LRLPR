@@ -66,6 +66,8 @@ def describe(rows):
     heights = [r["height"] for r in rows]
     ratios = [r["ratio"] for r in rows]
     border_margins = [r["border_margin"] for r in rows]
+    padded_widths = [r["padded_width"] for r in rows]
+    padded_heights = [r["padded_height"] for r in rows]
     sources = Counter(r["source"] for r in rows)
     labels = Counter(r["label"] for r in rows)
     return {
@@ -97,6 +99,30 @@ def describe(rows):
         "annotations_at_source_image_border": sum(v == 0 for v in border_margins),
         "annotations_below_2px_source_image_margin": sum(v < 2 for v in border_margins),
         "annotations_at_least_2px_source_image_margin": sum(v >= 2 for v in border_margins),
+        # These audit counts model the *acquisition* expanded detector crop:
+        # floor(x1 - 0.2*w), ceil(x2 + 0.2*w), analogously for y.
+        # This is NOT applied to LPLCv2 pixels during the audit.
+        "acquisition_20pct_each_side_padding_diagnostic": {
+            "unclipped_count": sum(r["padded_not_clipped"] for r in rows),
+            "would_clip_at_source_frame_count": sum(not r["padded_not_clipped"] for r in rows),
+            "fully_in_bounds_with_2px_image_margin_count": sum(
+                r["padded_border_margin"] >= 2 for r in rows
+            ),
+            "padded_crop_width_min_p10_median_p90_max": [
+                min(padded_widths), percentile(padded_widths, 10),
+                percentile(padded_widths, 50), percentile(padded_widths, 90),
+                max(padded_widths),
+            ],
+            "padded_crop_height_min_p10_median_p90_max": [
+                min(padded_heights), percentile(padded_heights, 10),
+                percentile(padded_heights, 50), percentile(padded_heights, 90),
+                max(padded_heights),
+            ],
+            "original_tight_box_meets_acquisition_24x8_area192": sum(
+                r["width"] >= 24 and r["height"] >= 8
+                and r["width"] * r["height"] >= 192 for r in rows
+            ),
+        },
         "height_at_least_px": {
             str(value): sum(r["height"] >= value for r in rows)
             for value in HEIGHT_BANDS
@@ -170,9 +196,22 @@ def inventory(args):
                 ctr["excluded_out_of_bounds_bbox"] += 1
                 continue
             w, h = x2 - x1, y2 - y1
+            # Camera crop_xywh(..., padding_ratio=0.2) adds 20% of
+            # each tight-box dimension on EACH side; clipping is to
+            # the source frame. Only audit its geometry here.
+            pad_x, pad_y = 0.2 * w, 0.2 * h
+            px1, py1 = math.floor(x1 - pad_x), math.floor(y1 - pad_y)
+            px2, py2 = math.ceil(x2 + pad_x), math.ceil(y2 + pad_y)
+            padded_margin = min(px1, py1, iw - px2, ih - py2)
+            cx1, cy1 = max(0, px1), max(0, py1)
+            cx2, cy2 = min(iw, px2), min(ih, py2)
             row = {
                 "width": w, "height": h, "ratio": w / h,
                 "border_margin": min(x1, y1, iw - x2, ih - y2),
+                "padded_border_margin": padded_margin,
+                "padded_not_clipped": padded_margin >= 0,
+                "padded_width": cx2 - cx1,
+                "padded_height": cy2 - cy1,
                 "source": filename, "label": label,
                 "occluded": bool(ann.get("occ", False)),
                 "missing_type": not (
@@ -202,6 +241,7 @@ def inventory(args):
             "ocr": "old Brazilian or Mercosur seven-character structure",
             "bbox": "floor/ceil axis-aligned envelope of original four corners, fully in bounds",
             "border_2px_rule": "reported diagnostically, NOT an exclusion filter",
+            "padding_20pct_each_side": "audit geometry only; output LMDB NOT changed",
             "vehicle_types": "all, including motorcycles and missing vehicle types",
             "occlusion": "retained",
             "duplicates": "annotation instances retained; source/label repeats counted",
