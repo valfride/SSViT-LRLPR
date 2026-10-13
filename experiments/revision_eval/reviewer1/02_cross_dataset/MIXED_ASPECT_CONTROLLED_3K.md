@@ -358,6 +358,40 @@ for both models. Do not retune models or select datasets based
 on the observed SVTRv2-AR predictions. This benchmark remains
 exploratory and as-annotated due to Illegible annotation QA caveats.
 
+### Reproducible local Poor / Illegible stratification
+
+The `test.py` evaluator writes `F1_bayes_predictions.csv` with
+virtual test-set track IDs plus `correct`, `positional_matches`
+and `edit_distance` fields. This has been cross-checked against
+its implementation. The new
+`scripts/summarize_mixed_legibility_predictions.py` script joins
+tracks against the original frozen selection manifest (rather than
+assuming CSV ordering), verifies OCR GT identities, recomputes slot
+and edit-distance metrics and checks that recomputed totals match
+the corresponding `F1_bayes.json` global counts. It prints only
+aggregate Poor/Illegible/All statistics.
+
+SVTRv2-AR (now ready to analyze):
+
+```bash
+cd ~/doc2025/project1
+D=~/doc2025/LMDB-Datasets/LPLCv2_MixedAspect1p7to4p0_TEST_3k
+R=experiments/revision_eval/reviewer1/02_cross_dataset/results/lplcv2_mixed_aspect_svtrv2_ar
+
+python3 experiments/revision_eval/reviewer1/02_cross_dataset/scripts/summarize_mixed_legibility_predictions.py \
+  --dataset "$D" \
+  --predictions "$R/F1_bayes_predictions.csv" \
+  --metrics "$R/F1_bayes.json" \
+  --expected-manifest-sha256 3d64cb68c98732fc5803a3de40950efa1da1cb9421c0c653ba18b915bed30d05 \
+  --output-json "$R/legibility_aggregates.json"
+```
+
+Run the same script for CNN–ViT after its evaluation, changing
+`R` to `experiments/revision_eval/reviewer1/02_cross_dataset/results/lplcv2_mixed_aspect_ours`.
+The `legibility_aggregates.json` file contains only aggregated
+numeric metrics, not source plate strings or per-sample identities.
+Keep the underlying restricted prediction CSV local.
+
 ## Frozen F=1 recognition invocations (after successful verification)
 
 CNN–ViT (the submitted checkpoint and configuration snapshot):
