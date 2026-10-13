@@ -591,3 +591,58 @@ A descriptive comparison may be explored, but must note that
 Illegible labels may be impossible to validate in-frame. Do
 not treat these test results as evidence the model should
 have deciphered ground truths unrecoverable from the image.
+
+
+## SVTRv2-AR frozen baseline — requested Illegible F=1 comparison
+
+Use **exactly the same** format-validated 905-sample Illegible LMDB
+as the CNN–ViT exploratory evaluation. Reuse the frozen SVTRv2-AR
+validation-selected checkpoint
+`student_acc_0.7500_ep_52.pth` from the LRLPR-26 baseline
+experiment; do not use an unrelated `svtrv2.pth` file. The actual
+local checkpoint directory is **not stored in this repository**.
+
+A robust local invocation can locate the checkpoint under
+`~/doc2025/project1`, fail if absent or ambiguous, and make a
+temporary symlink-only directory containing exactly the identified
+checkpoint (the evaluator otherwise auto-selects the highest
+`*acc_*.pth` in a directory):
+
+```bash
+cd ~/doc2025/project1
+
+mapfile -t CKPTS < <(find "$PWD" -type f -name 'student_acc_0.7500_ep_52.pth' -print)
+if (( ${#CKPTS[@]} != 1 )); then
+  printf 'Expected exactly 1 frozen SVTRv2-AR checkpoint, found %s\n' "${#CKPTS[@]}"
+  printf '%s\n' "${CKPTS[@]}"
+else
+  SVTR_CKPT="${CKPTS[0]}"
+  RESULT_DIR="$PWD/experiments/revision_eval/reviewer1/02_cross_dataset/results/lplcv2_illegible_svtrv2_ar"
+  LINK_DIR="$RESULT_DIR/frozen_checkpoint_only"
+  mkdir -p "$LINK_DIR"
+  ln -s "$SVTR_CKPT" "$LINK_DIR/student_acc_0.7500_ep_52.pth"
+  sha256sum "$SVTR_CKPT"
+  python3 experiments/revision_eval/shared/scripts/run_eval_matrix.py \
+    --config baselines_configs/SVTRV2_AR_BASELINE.yaml \
+    --checkpoints "$LINK_DIR" \
+    --split ~/doc2025/LMDB-Datasets/LPLCv2_IllegibleBrazilianOCR_TEST \
+    --output-dir "$RESULT_DIR" \
+    --frames 1 --fusions bayes
+fi
+```
+
+This is a **planned** command; SVTRv2-AR inference has not been
+confirmed as run, and no external baseline score is yet available.
+It uses the codepath `cls_loss: SVTRV2_AR` and
+`bjp_decode()` for single-frame prediction, matching the
+config/protocol. Keep TTA and SWA disabled, and log the actual
+selected checkpoint and hash. At F=1 there is no temporal
+fusion benefit to infer.
+
+Outputs: `F1_bayes.json`, `F1_bayes_predictions.csv`,
+`F1_bayes.txt`, and `matrix_manifest.json` under
+`results/lplcv2_illegible_svtrv2_ar`. Do not commit restricted
+annotations/metadata or per-image prediction records without
+checking LPLCv2's request-based use conditions. This evaluation
+remains exploratory and *as-annotated* until source-target
+manual QA is complete.
