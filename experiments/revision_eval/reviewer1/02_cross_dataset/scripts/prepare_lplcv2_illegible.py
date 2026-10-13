@@ -27,6 +27,17 @@ import lmdb
 import numpy as np
 
 ALPHANUMERIC_7 = re.compile(r"^[A-Z0-9]{7}$")
+OLD_BRAZILIAN = re.compile(r"^[A-Z]{3}[0-9]{4}$")
+MERCOSUR_BRAZILIAN = re.compile(r"^[A-Z]{3}[0-9][A-Z][0-9]{2}$")
+
+
+def plate_format(text):
+    if OLD_BRAZILIAN.fullmatch(text):
+        return "old_brazilian"
+    if MERCOSUR_BRAZILIAN.fullmatch(text):
+        return "mercosur"
+    return "nonplate_or_unrecognized_format"
+
 LEG_ILLEGIBLE = 0
 MOTORCYCLE_TYPES = frozenset({
     "MOTOCICLETA", "MOTONETA", "MOTO", "CICLOMOTOR",
@@ -79,6 +90,7 @@ def bounding_box(xy):
 def inventory(annotations, exclude_known_motorcycles):
     stats = Counter()
     selected = []
+    text_frequencies = Counter()
     for filename, info in sorted(annotations.items()):
         if not isinstance(info, dict):
             continue
@@ -93,6 +105,10 @@ def inventory(annotations, exclude_known_motorcycles):
                 stats["non_7char_ocr"] += 1
                 continue
             stats["valid_7char_ocr"] += 1
+            text_frequencies[label] += 1
+            stats["format_" + plate_format(label)] += 1
+            if label == "UNKNOWN":
+                stats["literal_UNKNOWN_placeholder"] += 1
             typ = vehicle_type(ann)
             is_moto = typ in MOTORCYCLE_TYPES
             if is_moto:
@@ -123,7 +139,8 @@ def inventory(annotations, exclude_known_motorcycles):
         {x["source_image"] for x in selected})
     stats["repeated_labels"] = len(selected) - stats["unique_candidate_labels"]
     stats["repeated_source_images"] = len(selected) - stats["unique_candidate_source_images"]
-    return selected, stats
+    stats["largest_ocr_label_multiplicity"] = max(text_frequencies.values(), default=0)
+    return selected, stats, text_frequencies
 
 
 def preflight_geometry(candidates, photos):
@@ -280,8 +297,10 @@ def build(args):
     if not json_path.is_file() or not photos.is_dir():
         raise FileNotFoundError("Dataset root must contain annotations_v2.json and images/")
     annotations = json.loads(json_path.read_text(encoding="utf-8"))
-    candidates, stats = inventory(annotations, args.exclude_known_motorcycles)
+    candidates, stats, frequencies = inventory(annotations, args.exclude_known_motorcycles)
     print("Illegible annotation inventory:\n" + json.dumps(stats, indent=2))
+    print("Most frequent 7-character OCR fields (inspect for placeholders):")
+    print(json.dumps(frequencies.most_common(15), indent=2))
     geometric = preflight_geometry(candidates, photos)
     print("Image/annotation geometry preflight:")
     print(json.dumps({**geometric, "problems": geometric["problems"][:30]},
@@ -306,6 +325,22 @@ def build(args):
         raise RuntimeError(
             f"Local annotation version has {stats['valid_7char_ocr']} seven-character "
             f"Illegible labels, expected {args.expect_all}. Re-audit before proceeding.")
+    nonplate = [x for x in candidates if plate_format(x["ocr"]) == "nonplate_or_unrecognized_format"]
+    if nonplate and not args.require_plate_format:
+        raise RuntimeError(
+            f"{len(nonplate)} of the selected OCR fields do NOT match either "
+            "Brazilian seven-character plate pattern (old LLLNNNN or "
+            "Mercosur LLLNLNN). Some may be placeholders such as UNKNOWN. "
+            "Refusing to build them as ground-truth labels. Inspect "
+            "--audit-only label frequencies, then choose --require-plate-format "
+            "to build ALL structurally valid Brazilian plate OCR annotations.")
+    if args.require_plate_format:
+        candidates = [x for x in candidates if plate_format(x["ocr"]) !=
+                      "nonplate_or_unrecognized_format"]
+        print(f"Explicit plate-format filtering: {len(nonplate)} nonmatching "
+              f"records excluded; {len(candidates)} remain.")
+        if len(candidates) == 0:
+            raise RuntimeError("No annotations with recognized Brazilian plate formats")
     # Preflight every instance BEFORE staging an LMDB. No candidate is silently
     # discarded. An explicitly requested clipping policy is permitted only
     # for intersecting boxes above the chosen retained-area threshold.
@@ -396,7 +431,12 @@ def build(args):
             "dataset": "LPLCv2", "subset": "all OCR-labelled Illegible annotations",
             "legibility": "Illegible", "legibility_id": LEG_ILLEGIBLE,
             "annotations": str(json_path), "annotations_sha256": digest(json_path),
-            "selection": "all exact [A-Z0-9]{7} OCR annotations; deterministic file/index order",
+            "selection": ("all exact [A-Z0-9]{7} OCR annotations matching "
+                          "old Brazilian or Mercosur syntax" if args.require_plate_format
+                          else "all exact [A-Z0-9]{7} OCR fields"),
+            "require_plate_format": bool(args.require_plate_format),
+            "raw_valid_7char_ocr_count": stats["valid_7char_ocr"],
+            "nonplate_format_fields_excluded": len(nonplate),
             "duplicate_ocr_and_source_image_allowed": True,
             "excluded_known_motorcycles": bool(args.exclude_known_motorcycles),
             "includes_occluded": True,
@@ -419,6 +459,7 @@ def build(args):
         summary = {
             "inventory": dict(stats),
             "selected": len(items),
+            "nonplate_format_fields_excluded": len(nonplate),
             "unique_ocr_labels": len({x["ocr"] for x in items}),
             "unique_source_images": len({x["source_image"] for x in items}),
             "known_motorcycles_included": sum(x["known_motorcycle"] for x in items),
@@ -467,6 +508,9 @@ def main():
                    help="Expected total of seven-character Illegible annotations")
     p.add_argument("--exclude-known-motorcycles", action="store_true",
                    help="Optional DISTINCT sensitivity version, not the all-available set")
+    p.add_argument("--require-plate-format", action="store_true",
+                   help="Explicitly keep all OCR annotations matching either Brazilian "
+                        "LLLNNNN or Mercosur LLLNLNN pattern; report excluded placeholders")
     p.add_argument("--contact-sheet", type=int, default=60)
     p.add_argument("--seed", type=int, default=2026,
                    help="Only controls randomized QA contact-sheet examples")
