@@ -1,10 +1,12 @@
 # LPLCv2 mixed Poor/Illegible: native aspect-controlled 3,000-crop F=1 test
 
-**Status:** previous **minimum-only** (`native aspect >=1.7`) dry-run completed
-on daugman with 844 Illegible and 2,156 Poor plate crops.
-**The revised [1.7, 4.0] two-sided variant has NOT been dry-run
-or built yet.** Its final counts and hash remain unknown.
-The old minimum-only preview is retained below as historical evidence.
+**Status:** the revised **two-sided [1.7,4.0] dry-run has completed
+successfully on daugman**, with 842 Illegible and 2,158 Poor plate
+crops (3,000 total), no cross-class source or label overlap, and
+native width/height inside the accepted bounds. **The LMDB has not yet
+been built or verified**, and no final mixed manifest SHA-256 has been
+received. The previous lower-bound-only (844/2,156) dry-run remains
+documented below for historical comparison.
 This is an explicitly post-hoc, new test **variant**. Never overwrite
 the previous mixed 905 Illegible + 2,095 Poor dataset, or replace
 the earlier frozen Poor-only 3,000-case external evaluation.
@@ -69,6 +71,63 @@ reported as the same dataset or as an unbiased improvement of OCR
 performance. Any comparison to the unfiltered mixed set is a
 **post-hoc geometry sensitivity analysis**, and the prior
 Poor-only external RR of 24.57% remains unchanged.
+
+## Successful two-sided [1.7, 4.0] dry-run — 13 October 2026
+
+The user ran the fixed-seed [1.7,4.0] selection on daugman and
+provided the full geometry summary. This describes a selected
+population, **not yet a built or verified LMDB**.
+
+| Property | Observed |
+| --- | ---: |
+| Total plate crops / distinct annotation identities | **3,000 / 3,000** |
+| Illegible | **842 (28.07%)** |
+| Poor | **2,158 (71.93%)** |
+| Unique source photographs | 2,986 |
+| Unique OCR labels | 2,985 |
+| Cross-class overlapping source photographs | **0** |
+| Cross-class overlapping OCR labels | **0** |
+| Candidate Poor after original Illegible overlap exclusion | 2,929 |
+| Original Poor overlaps removed by image / label | 45 / 26 |
+| Minimum / maximum original crop aspect ratio | **1.7059 / 4.0** |
+| Median original crop aspect ratio | 2.7333 |
+| Exact native 3:1 crops | 160 |
+| Crops with native ratio >10% from 3:1 | 1,365 |
+| Crops with native ratio >20% from 3:1 | 359 |
+
+Final plate formats: Poor Mercosur 1,732, Poor old Brazilian
+426, Illegible Mercosur 687, Illegible old Brazilian 155:
+**2,419 Mercosur, 581 old Brazilian**.
+
+| Native crop measurement | Illegible (842) | Poor (2,158) |
+| --- | ---: | ---: |
+| Width p10 / median / p90 (px) | 29 / 38 / 48 | 36 / 45 / 74 |
+| Height p10 / median / p90 (px) | 11 / 14 / 19 | 13 / 16 / 27 |
+| Aspect min / max | 1.7059 / 3.8824 | 1.75 / 4.0 |
+| Aspect p10 / median / p90 | 2.3082 / 2.6667 / 3.0 | 2.4 / 2.75 / 3.0323 |
+| Aspect exactly 3:1 | 41 | 119 |
+| Aspect >10% off 3:1 | 452 | 913 |
+| Aspect >20% off 3:1 | 134 | 225 |
+
+Compared with the initial no-geometry-filter 905/2095 mixture,
+63 Illegible annotations were removed (905 → 842), offset by a
+net increase of 63 Poor crops. The **total number** of narrow and
+wide removals (including Poor-to-Poor replacements) is unknown
+from this excerpt; the complete run reports `removed_below_min`,
+`removed_above_max`, `removed_counts` and `removed_total`.
+Do not equate the net Poor increase with the total replacement count.
+
+Both frozen configuration checks passed with **96×32 bicubic input,
+no padding**, SHA-256
+`9db50ded91aabfff67d2863057e51bd4ef6a8dd8da5ce7a67c61fe3626fd7673`
+(CNN–ViT) and
+`f8c656f5486018553c88746678de842d7dd5ff3ebb30f1697ad48a3e8dc0a31f`
+(SVTRv2-AR).
+
+**Next:** build the isolated `LPLCv2_MixedAspect1p7to4p0_TEST_3k`
+directory with precisely the same parameters, independently run
+`--verify-only`, and record the resulting selection-manifest hash.
+Do not alter the already frozen Poor-only or prior mixed selection.
 
 ## Historical lower-bound-only dry-run — 13 October 2026
 
@@ -174,10 +233,11 @@ Inspect `native_aspect_selection`:
 `removed_counts`, `removed_total`,
 `unused_near_ideal_poor_candidates`,
 `added_near_ideal_poor`, and `final_counts`.
-It will report `removed_below_min` and `removed_above_max`,
-the actual candidate inventory and all removal/replacement identities.
-Every retained crop must fall within **[1.7, 4.0]**; exactly
-3,000 crops must remain. The new Illegible count is unknown.
+The successful dry-run yielded 842 Illegible and 2,158 Poor
+crops, with all native ratios within **[1.7, 4.0]** and zero
+cross-class source/label overlap. Keep the complete per-sample
+removal/replacement report for provenance, and ensure the
+non-dry build uses the same flags and seed.
 
 If the shortage safeguard triggers, inspect the actual inventory
 before negotiating a documented alternative. Do NOT silently
