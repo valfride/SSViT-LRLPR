@@ -13,7 +13,6 @@ dataset, annotation file, selection manifest or model predictions.
 import argparse
 import hashlib
 import json
-import os
 import pickle
 import random
 import re
@@ -24,7 +23,15 @@ from pathlib import Path
 import cv2
 import lmdb
 import numpy as np
+import yaml
 
+
+INPUT_WIDTH = 96
+INPUT_HEIGHT = 32
+INPUT_ASPECT = INPUT_WIDTH / INPUT_HEIGHT
+
+DEFAULT_CNNVIT_CONFIG = "experiments/revision_eval/submitted_model/config_snapshot.yaml"
+DEFAULT_SVTRV2_CONFIG = "baselines_configs/SVTRV2_AR_BASELINE.yaml"
 
 EXPECTED_ILLEGIBLE_SHA = "7e74f46d991db9835739e7b99b5c01f1be6da7b21ba1b50b2c9bef848b7dfb0e"
 EXPECTED_POOR_SHA = "8a08180604d88b652c6d915853830b4b1fd0a9ff6bcceace597d8a57f199d408"
@@ -38,6 +45,73 @@ def sha256(path):
         for block in iter(lambda: f.read(1024 * 1024), b""):
             h.update(block)
     return h.hexdigest()
+
+
+def verify_model_geometry(configs):
+    """Read real frozen validation wrappers and enforce identical F=1 resize.
+
+    Image aspect-ratio metadata is checked, but the actual wrapper uses
+    cv2.resize(raw, (imgW,imgH), interpolation=cv2.INTER_CUBIC), i.e.,
+    the raw source aspect ratio is *not* preserved by padding.
+    """
+    details = {}
+    for name, path in configs.items():
+        config_file = Path(path)
+        if not config_file.is_file():
+            raise FileNotFoundError(f"{name} config not found: {config_file}")
+        cfg = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+        val = cfg["val_dataset"]["wrapper"]
+        if val.get("name") != "VSR_Sequence_collate_fn":
+            raise RuntimeError(f"{name}: wrong eval wrapper {val.get('name')}")
+        opts = val["args"]
+        width, height = int(opts["imgW"]), int(opts["imgH"])
+        declared = float(opts["image_aspect_ratio"])
+        if (width, height) != (INPUT_WIDTH, INPUT_HEIGHT):
+            raise RuntimeError(f"{name}: expected 96x32 input; got {width}x{height}")
+        if abs(declared - INPUT_ASPECT) > 1e-6:
+            raise RuntimeError(f"{name}: declared input aspect ratio {declared}, expected 3")
+        if opts.get("test") is not True or opts.get("aug") is not False:
+            raise RuntimeError(f"{name}: unexpected validation augmentation/test settings")
+        details[name] = {
+            "config": str(config_file),
+            "config_sha256": sha256(config_file),
+            "validation_wrapper": val["name"],
+            "declared_image_aspect_ratio": declared,
+            "imgW": width,
+            "imgH": height,
+            "resize": "cv2.resize(raw_rgb, (96, 32), interpolation=cv2.INTER_CUBIC)",
+            "padding": False,
+            "warning": "Raw crops are anisotropically resized if their source aspect differs from 3:1",
+        }
+    return details
+
+
+def geometry_stats(tagged):
+    """Describe original *unaltered* crop dimensions before the model resize."""
+    report = {}
+    for cls in ("All", "Illegible", "Poor"):
+        subset = [r for kind, r in tagged if cls == "All" or kind == cls]
+        heights = np.array([int(r["crop_height"]) for r in subset], dtype=np.float64)
+        widths = np.array([int(r["crop_width"]) for r in subset], dtype=np.float64)
+        if (widths <= 0).any() or (heights <= 0).any():
+            raise ValueError(f"{cls} has non-positive native crop dimensions")
+        ratios = widths / heights
+        rel_deviation = np.abs(ratios / INPUT_ASPECT - 1)
+        report[cls] = {
+            "samples": len(subset),
+            "native_width_px_p10_median_p90": [round(float(np.percentile(widths, q)), 2)
+                                               for q in (10, 50, 90)],
+            "native_height_px_p10_median_p90": [round(float(np.percentile(heights, q)), 2)
+                                                for q in (10, 50, 90)],
+            "native_aspect_ratio_min": round(float(ratios.min()), 4),
+            "native_aspect_ratio_p10_median_p90": [
+                round(float(np.percentile(ratios, q)), 4) for q in (10, 50, 90)],
+            "native_aspect_ratio_max": round(float(ratios.max()), 4),
+            "native_aspect_ratio_exactly_3_to_1": int((widths == 3 * heights).sum()),
+            "native_aspect_ratio_deviation_over_10pct": int((rel_deviation > 0.1).sum()),
+            "native_aspect_ratio_deviation_over_20pct": int((rel_deviation > 0.2).sum()),
+        }
+    return report
 
 
 def read_source(folder, expected_hash, expected_total, legibility):
@@ -128,7 +202,7 @@ def layout(gt):
     raise ValueError(f"Unexpected OCR syntax: {gt}")
 
 
-def report_mix(tagged, excluded, candidate_count, seed, parents):
+def report_mix(tagged, excluded, candidate_count, seed, parents, model_geometry):
     if len(tagged) != 3000:
         raise RuntimeError("Mixed test must contain exactly 3000 crops")
     classes = Counter(kind for kind, _ in tagged)
@@ -156,6 +230,10 @@ def report_mix(tagged, excluded, candidate_count, seed, parents):
         "seed": seed,
         "selection_used_model_predictions": False,
         "source_manifest_sha256": parents,
+        "model_input_geometry": model_geometry,
+        "model_input_shape_c_h_w": [3, INPUT_HEIGHT, INPUT_WIDTH],
+        "model_input_aspect_ratio": INPUT_ASPECT,
+        "native_crop_aspect_ratio_audit": geometry_stats(tagged),
         "counts": dict(classes),
         "total_plate_crops": len(tagged),
         "unique_source_photographs": len({r["source_image"] for _, r in tagged}),
@@ -227,6 +305,12 @@ def verify(folder, expected_hash=None):
                 if decoded is None or list(decoded.shape[:2]) != [
                         row["crop_height"], row["crop_width"]]:
                     raise RuntimeError("Source-crop dimension mismatch")
+                # Exercise exactly the image geometry used by both frozen
+                # validation wrappers; preserve raw bytes in LMDB.
+                model_input = cv2.resize(
+                    decoded, (INPUT_WIDTH, INPUT_HEIGHT), interpolation=cv2.INTER_CUBIC)
+                if model_input.shape != (INPUT_HEIGHT, INPUT_WIDTH, 3):
+                    raise RuntimeError("Model preprocessing failed to yield 3:1 RGB input")
                 if not dest.is_file() or dest.read_bytes() != raw:
                     raise RuntimeError("Mixed saved crop differs from LMDB bytes")
     finally:
@@ -239,18 +323,24 @@ def verify(folder, expected_hash=None):
         "unique_plate_labels": len({r["ocr"] for r in rows}),
         "all_test_split": True,
         "all_crops_lmdb_match": True,
+        "all_model_inputs_96x32_bicubic": True,
+        "model_input_aspect_ratio": INPUT_ASPECT,
+        "native_crop_aspect_ratio_audit": geometry_stats([
+            (r["source_legibility"], r) for r in rows]),
     }
     return summary
 
 
 def build(args):
+    configs = {"CNN-ViT": args.cnnvit_config, "SVTRv2-AR": args.svtrv2_config}
+    model_geometry = verify_model_geometry(configs)
     ill_dir, ill, ill_meta, ill_sha = read_source(
         args.illegible, EXPECTED_ILLEGIBLE_SHA, 905, 0)
     poor_dir, poor, poor_meta, poor_sha = read_source(
         args.poor, EXPECTED_POOR_SHA, 3000, 1)
     tagged, excluded, available = sample_mix(ill, poor, 2095, args.seed)
     preview = report_mix(tagged, excluded, available, args.seed, {
-        "Illegible": ill_sha, "Poor": poor_sha})
+        "Illegible": ill_sha, "Poor": poor_sha}, model_geometry)
     print(json.dumps(preview, indent=2), flush=True)
     if args.dry_run:
         return
@@ -348,6 +438,10 @@ def main():
     p.add_argument("--illegible", type=Path, required=True)
     p.add_argument("--poor", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--cnnvit-config", type=Path, default=Path(DEFAULT_CNNVIT_CONFIG),
+                   help="Frozen CNN–ViT config to validate 96x32 evaluation geometry")
+    p.add_argument("--svtrv2-config", type=Path, default=Path(DEFAULT_SVTRV2_CONFIG),
+                   help="Frozen SVTRv2-AR config to validate 96x32 evaluation geometry")
     p.add_argument("--seed", type=int, default=2026)
     p.add_argument("--dry-run", action="store_true",
                    help="Report planned selection/collisions without writing")
@@ -355,6 +449,8 @@ def main():
                    help="Verify already-built output against metadata and LMDB bytes")
     args = p.parse_args()
     if args.verify_only:
+        verify_model_geometry({"CNN-ViT": args.cnnvit_config,
+                               "SVTRv2-AR": args.svtrv2_config})
         print(json.dumps(verify(args.output), indent=2))
     else:
         build(args)
