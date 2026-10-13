@@ -66,6 +66,46 @@ official classification-test split. The 905/2095 composition was
 chosen for a supplementary OCR stress test after earlier analyses,
 not a prospectively established test distribution.
 
+## Matching the original CNN–ViT / SVTRv2-AR aspect ratio
+
+**Confirmed from committed code/configs:** both frozen evaluations
+use `VSR_Sequence_collate_fn` with `imgW: 96`,
+`imgH: 32`, `image_aspect_ratio: 3.0`, evaluation
+`aug: false`, `test: true`, and `--frames 1`.
+The actual wrapper calls:
+
+```python
+lr_img = cv2.resize(img_raw, (96, 32), interpolation=cv2.INTER_CUBIC)
+```
+
+So the **model-input aspect ratio** is always **3:1**. Crucially,
+the wrapper does **not** keep native aspect ratio via padding:
+original crops of 2.6:1, 3.2:1, 1.5:1 etc. are
+resized *anisotropically* to 3:1. The `image_aspect_ratio`
+configuration field is metadata in this path, not a signal
+to use an aspect-preserving padding routine.
+
+The mixed-LMDB builder **copies original lossless crop bytes
+unchanged**, preserving the same pipeline as the prior LRLPR-26
+and frozen LPLCv2 Poor/Illegible tests. It now verifies both model
+configs have 96×32/3:1 and the same unaugmented wrapper,
+simulates the exact `cv2.INTER_CUBIC` resizing for **every**
+output image, and records in the preview and validation:
+
+- Original native bounding-box width and height p10/median/p90
+  separately for Poor, Illegible and combined.
+- Original width/height aspect-ratio min, p10/median/p90, max.
+- How many crops are naturally exactly 3:1, and how many
+  differ from 3:1 by over 10% or 20%.
+- The required 3×32×96 model-input tensor geometry, 3:1
+  aspect, config hashes, bicubic resampling and no padding.
+
+This allows us to measure geometric-warping risk without changing
+our test distribution. If we later want **aspect-preserving padding**,
+that must be a **different, clearly labelled sensitivity experiment**
+applying the same new preprocessing to both models, not a
+quiet change to this frozen protocol.
+
 ## Frozen parent manifests
 
 Illegible 905:
