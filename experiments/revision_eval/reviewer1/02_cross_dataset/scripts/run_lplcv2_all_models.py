@@ -54,38 +54,91 @@ def validate_dataset(path):
     return path
 
 
+# Candidate files listed by the user from experiments/baselines on daugman.
+# For tied validation accuracies, test.py sorts paths alphabetically first,
+# then stably sorts descending by the score after '*acc_*'.
+# Therefore the lower-numbered epoch filename wins an exact score tie.
+CANDIDATE_CHECKPOINTS = {
+    "MDiff4STR": (
+        "MDIFF_BASELINE/MDIFF_BASELINE_14-04-2026/"
+        "model_acc_0.6040_ep_21.pth"
+    ),
+    "CPPD": (
+        "CPPD_BASELINE/CPPD_BASELINE_14-04-2026/"
+        "model_acc_0.6880_ep_77.pth"
+    ),
+    "IGTR": (
+        "IGTR_BASELINE/IGTR_BASELINE_14-04-2026/"
+        "model_acc_0.6600_ep_61.pth"
+    ),
+    "LISTER": (
+        "LISTER_BASELINE/LISTER_BASELINE_14-04-2026/"
+        "model_acc_0.6830_ep_103.pth"
+    ),
+    "SVTRv2": (
+        "SVTRV2_BASELINE/SVTRV2_BASELINE_14-04-2026/"
+        "model_acc_0.7030_ep_146.pth"
+    ),
+    "OTE": (
+        "OTE_BASELINE/OTE_BASELINE_14-04-2026/"
+        "model_acc_0.7430_ep_88.pth"
+    ),
+    "SVTRv2-AR": (
+        "SVTRV2_AR_BASELINE_svtrv2_ar/student_weights/"
+        "student_acc_0.7500_ep_52.pth"
+    ),
+}
+
+
 def inventory():
     base = ROOT / "experiments/baselines"
     if not base.exists():
         raise FileNotFoundError(base)
-    print("Candidate checkpoint directories (NOT automatically selected):")
-    for folder in sorted(base.rglob("student_weights")):
-        if not folder.is_dir():
+    print("Available baseline checkpoints (from local daugman directory):")
+    for model, _, _, _ in MODELS:
+        if model == "Ours":
             continue
-        names = [p.name for p in folder.glob("*acc_*.pth") if p.is_file()]
-        if (folder / "last.pth").is_file():
-            names.append("last.pth")
-        if names:
-            print(f"{folder.relative_to(ROOT)}: {len(names)} checkpoints")
-            print("    " + ", ".join(sorted(names)[:12]))
-    print("\nUse the original LRLPR-26 validation-selected checkpoints from Table I.")
+        relative = CANDIDATE_CHECKPOINTS[model]
+        folder = (base / relative).parent
+        print(f"\\n{model}: {folder.relative_to(ROOT)}")
+        if not folder.is_dir():
+            print("    DIRECTORY MISSING")
+            continue
+        names = sorted(p.name for p in folder.glob("*acc_*.pth") if p.is_file())
+        for name in names:
+            flag = "  <-- candidate" if name == Path(relative).name else ""
+            print(f"    {name}{flag}")
+        if not (base / relative).is_file():
+            print("    WARNING: expected candidate checkpoint MISSING")
+    print("\\nTied top accuracies: LISTER epochs 103/113, SVTRv2 epochs "
+          "146/156, SVTRv2-AR epochs 52/85/94.")
+    print("The candidate follows test.py's stable alphabetical tie order; "
+          "confirm the original LRLPR-26 Table-I checkpoint-selection logs "
+          "before running LPLCv2.")
 
 
 def write_template(path):
     if path.exists():
         raise FileExistsError("Refusing to overwrite an existing local checkpoint lock")
-    choices = {model: "" for model, *_ in MODELS}
+    choices = {
+        model: str(Path("experiments/baselines") / candidate)
+        for model, candidate in CANDIDATE_CHECKPOINTS.items()
+    }
     choices["Ours"] = "experiments/revision_eval/submitted_model/last.pth"
-    choices["SVTRv2-AR"] = (
-        "experiments/baselines/SVTRV2_AR_BASELINE_svtrv2_ar/"
-        "student_weights/student_acc_0.7500_ep_52.pth"
-    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({
-        "schema_version": 1, "dataset_manifest_sha256": EXPECTED,
-        "checkpoints": choices
-    }, indent=2) + "\n")
-    print(f"Created {path}; fill the six blank checkpoint paths before --run.")
+        "schema_version": 1,
+        "dataset_manifest_sha256": EXPECTED,
+        "checkpoint_selection_note": (
+            "Candidates use the existing test.py filename-score selection "
+            "rule. Verify against original LRLPR-26 validation logs, "
+            "particularly tied checkpoints for LISTER, SVTRv2 and SVTRv2-AR. "
+            "Do not select using LPLCv2 performance."
+        ),
+        "checkpoints": choices,
+    }, indent=2) + "\\n")
+    print(f"Created {path} with all eight local candidate checkpoints.")
+    print("Review tied validation selections and confirm paths before --run.")
 
 
 def load_lock(path):
@@ -149,11 +202,27 @@ def completed(entry, dataset, checkpoint=None):
     return doc["metrics"]
 
 
-def run(dataset, lock):
+def preflight(dataset, lock):
     checkpoints = load_lock(lock)
-    for model, slug, conf, loss in MODELS:
+    print("Checkpoint lock preflight (no inference):", flush=True)
+    for entry in MODELS:
+        model, slug, conf, loss = entry
         preflight_config(config_for(conf), loss)
-        completed((model, slug, conf, loss), dataset, checkpoints[model])
+        current = completed(entry, dataset, checkpoints[model])
+        print(f"  {model}: {checkpoints[model].relative_to(ROOT)}", flush=True)
+        print(f"    SHA256: {sha256(checkpoints[model])}", flush=True)
+        print(f"    Status: {'complete, will skip' if current is not None else 'pending'}", flush=True)
+        if current is None:
+            folder = output_dir(slug)
+            if folder.exists() and any(folder.iterdir()):
+                raise RuntimeError(
+                    f"{model}: incomplete nonempty output directory; "
+                    f"inspect before inference: {folder}")
+    return checkpoints
+
+
+def run(dataset, lock):
+    checkpoints = preflight(dataset, lock)
     for entry in MODELS:
         model, slug, conf, loss = entry
         checkpoint = checkpoints[model]
@@ -209,6 +278,7 @@ def main():
     operations = parser.add_mutually_exclusive_group(required=True)
     operations.add_argument("--inventory", action="store_true")
     operations.add_argument("--write-lock-template", action="store_true")
+    operations.add_argument("--preflight", action="store_true")
     operations.add_argument("--run", action="store_true")
     operations.add_argument("--table", action="store_true")
     parser.add_argument("--dataset", type=Path, default=(
@@ -225,6 +295,8 @@ def main():
         print("Verified frozen LPLCv2 manifest:", EXPECTED)
         if args.run:
             run(dataset, args.lock)
+        elif args.preflight:
+            preflight(dataset, args.lock)
         else:
             table(dataset)
 
