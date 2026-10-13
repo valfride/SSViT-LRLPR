@@ -1,8 +1,11 @@
 # LPLCv2 mixed difficulty F=1 external dataset: 905 Illegible + 2095 Poor
 
-**Status:** builder committed; **not yet run on daugman**.
-This is a new, exploratory mixed-difficulty external test subset,
-not the earlier 3,000-sample Poor-only benchmark.
+**Status:** frozen-seed dry-run completed on daugman with expected
+905 Illegible + 2,095 Poor crop composition, zero cross-subset photo or
+OCR-label overlap, and native aspect-ratio statistics recorded below.
+**Full LMDB build and independent verification are not yet confirmed.**
+This is a new exploratory mixed-difficulty test subset, not the
+original 3,000-sample Poor-only benchmark.
 
 ## Scientific motivation and source-paper verification
 
@@ -105,6 +108,61 @@ our test distribution. If we later want **aspect-preserving padding**,
 that must be a **different, clearly labelled sensitivity experiment**
 applying the same new preprocessing to both models, not a
 quiet change to this frozen protocol.
+
+## Observed dry-run sample selection and original-crop geometry
+
+The user provided the actual dry-run output from daugman
+(13 October 2026). These are **pre-build selection statistics**, not
+a completed LMDB validation:
+
+| Sample selection | Count |
+| --- | ---: |
+| Illegible annotated plate crops | 905 |
+| Selected Poor plate crops | 2,095 |
+| Total samples | **3,000** |
+| Distinct original source photographs | 2,986 |
+| Distinct OCR strings | 2,985 |
+| Distinct annotation identities | 3,000 |
+| Poor candidates eligible after cross-subset exclusion | 2,929 |
+| Poor candidates excluded due to Illegible photo overlap | 45 |
+| Poor candidates excluded due to Illegible OCR-string overlap | 26 |
+| Remaining cross-subset photo / OCR-string overlap | **0 / 0** |
+
+Layout distribution: Poor-Mercosur 1,681; Poor-old 414;
+Illegible-Mercosur 737; Illegible-old 168;
+combined Mercosur 2,418 (80.6%) and old Brazilian 582 (19.4%).
+
+**Original lossless crop aspect ratios** (width/height, before 96×32
+bicubic input resizing):
+
+| Measurement | All 3,000 | Illegible 905 | Poor 2,095 |
+| --- | ---: | ---: | ---: |
+| Aspect ratio p10 / median / p90 | 2.30 / 2.7222 / 3.00 | 2.14 / 2.6667 / 3.00 | 2.375 / 2.75 / 3.0343 |
+| Aspect ratio min / max | 0.963 / 4.6176 | 1.0476 / 4.2222 | 0.963 / 4.6176 |
+| Exactly 3:1 | 156 (5.2%) | 41 (4.5%) | 115 (5.5%) |
+| Deviation from 3:1 over 10% | 1,419 (47.3%) | 515 (56.9%) | 904 (43.2%) |
+| Deviation from 3:1 over 20% | 438 (14.6%) | 197 (21.8%) | 241 (11.5%) |
+| Native width p10 / median / p90 | Not supplied | 27.4 / 37 / 48 | 36 / 45 / 74 |
+| Native height p10 / median / p90 | Not supplied | 11 / 14 / 19 | 13 / 16 / 28 |
+
+Interpretation: the **model input** remains rigorously fixed at 96×32
+and 3:1 for both models, but almost half the raw crops are
+more than 10% away from the target aspect ratio. Distortion induced
+by direct resizing may be more consequential for Illegible crops,
+which have both smaller native dimensions and more frequent aspect
+deviation. This does NOT by itself establish wrong annotations or
+causal performance effects.
+
+For a fair frozen-protocol test, preserve all 3,000 selected instances,
+retain their lossless original crop bytes and use the same direct
+bicubic resize as prior evaluations. Do not retroactively discard
+low-aspect/high-aspect instances. Independently examine suspicious
+near-square crops in the QA review; any alternative
+aspect-preserving padding should be a separately named sensitivity
+study applied identically to both models. The actual native
+aspect-ratio distribution of original LRLPR-26 crops has not
+been established by this audit; do not claim a match beyond
+the shared **model-input** geometry.
 
 ## Frozen parent manifests
 
