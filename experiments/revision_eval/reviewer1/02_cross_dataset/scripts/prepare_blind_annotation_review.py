@@ -57,16 +57,23 @@ def prepare(args):
         raise FileExistsError(f"Won't overwrite existing review: {output}")
     summary = json.loads((source / "qa_summary.json").read_text(encoding="utf-8"))
     population = records_from_csv(source / "qa_samples.csv")
-    if len(population) != 3000 or summary["samples"] != 3000:
-        raise ValueError("Expected exactly 3,000 source QA rows")
+    if not population or len(population) != summary["samples"]:
+        raise ValueError("QA CSV count differs from full annotation QA summary")
+    if len({r["track_id"] for r in population}) != len(population):
+        raise ValueError("Duplicate track IDs in QA population")
+    if len({(r["source_image"], r["annotation_index"]) for r in population}) != len(population):
+        raise ValueError("Duplicate source-image annotation identities in QA population")
     if not (root / "images").is_dir():
         raise FileNotFoundError("Expected source photograph images/ directory")
     flagged = [dict(x) for x in population if x["flags"]]
     unflagged = [dict(x) for x in population if not x["flags"]]
     if len(flagged) != summary["unique_flagged_samples"]:
         raise ValueError("Flag-stratum count differs from full QA summary")
-    n_flagged = min(args.flagged, len(flagged))
-    n_unflagged = min(args.unflagged, len(unflagged))
+    if args.flagged > len(flagged) or args.unflagged > len(unflagged):
+        raise ValueError(f"Requested {args.flagged}/{args.unflagged} samples, "
+                         f"only {len(flagged)}/{len(unflagged)} available")
+    n_flagged = args.flagged
+    n_unflagged = args.unflagged
     rng = random.Random(args.seed)
     selected_flagged = rng.sample(flagged, n_flagged)
     selected_unflagged = rng.sample(unflagged, n_unflagged)
@@ -89,18 +96,21 @@ def prepare(args):
     meta = {
         "protocol": "prediction-blind random stratified annotation-quality review",
         "original_manifest_sha256": summary["manifest_sha256"],
+        "qa_sample_count": len(population),
         "seed": args.seed,
         "population": {"flagged": len(flagged), "unflagged": len(unflagged)},
         "draw": {"flagged": n_flagged, "unflagged": n_unflagged},
         "statuses": list(STATUSES),
         "guidance": {
-            "valid_target": "Bounding box contains the intended plate; GT text plausibly matches if visible.",
-            "unverifiable_text": "Plate target/box appears plausible, but original frame cannot verify OCR text.",
-            "wrong_box_or_target": "Bounding box clearly excludes intended plate or encloses a non-plate region.",
-            "wrong_ocr_label": "Visible plate text clearly disagrees with the associated ground truth.",
+            "valid_target": "Box contains the intended plate, AND the OCR transcription is independently plausible/confirmable from the image.",
+            "unverifiable_text": "Plate box is plausibly correct, but characters are too degraded to validate the exact OCR string; not automatically a wrong annotation.",
+            "wrong_box_or_target": "Clearly incorrect target: box excludes annotated plate or encloses a non-plate object; do not confuse with a legitimate secondary/partial vehicle.",
+            "wrong_ocr_label": "Visible in-box plate transcription clearly disagrees with OCR ground truth; must be independently readable.",
             "uncertain": "Insufficient evidence to classify.",
         },
-        "note": "Flags are review priorities, not proof of error. Never alter frozen dataset or predictions.",
+        "note": ("Flags are review priorities, not proof of error. The evaluator's "
+                 "predictions and confidences must not be used to classify cases. "
+                 "Never alter frozen datasets or predictions."),
     }
     (output / "review_protocol.json").write_text(json.dumps(meta, indent=2) + "\n",
                                                     encoding="utf-8")
@@ -129,6 +139,8 @@ def summarize(args):
         tallies[stratum][status or "unreviewed"] += 1
     if any(sum(tallies[s].values()) != expected[s] for s in tallies):
         raise ValueError("Stratum sample counts do not match frozen review protocol")
+    if len(rows) != sum(expected.values()):
+        raise ValueError("Review sample count changed since protocol creation")
     results = {
         "statuses": list(STATUSES),
         "reviewed_by_stratum": {
@@ -139,6 +151,8 @@ def summarize(args):
         "complete": all(tallies[s]["unreviewed"] == 0 for s in tallies),
     }
     if results["complete"]:
+        if any(expected[k] == 0 for k in tallies):
+            raise ValueError("Cannot weight an empty review stratum")
         total_population = sum(protocol["population"].values())
         weighted = {}
         for status in STATUSES:
