@@ -239,17 +239,55 @@ before any further ROI-padding/border policy decision.
 This is the recommended *candidate*, not a completed
 or officially frozen image dataset.
 
-**Unresolved revision discrepancy:** the user's local audit
-output lacks `border_2px_rule`,
-`padding_20pct_each_side` and
-`acquisition_20pct_each_side_padding_diagnostic` fields
-that exist in the latest GitHub script on
-`revision/reviewer-eval-tooling`. The installed local
-script revision may differ, or the output may predate that
-update; verify local branch/HEAD before making decisions
-about padding/clipping. Re-run the latest read-only script
-to quantify padded ROI edge interactions before freezing
-the new tight/padded paired-LMDB cohort.
+**Padding geometry follow-up completed on daugman:**
+the user ran the updated audit on the same frozen
+annotation JSON SHA256 with aspect [2.5,3.5] and tight
+minimum 24x8. It reported:
+
+| Diagnostic | Poor | Illegible | Both |
+| --- | ---: | ---: | ---: |
+| Eligible native tight crops | 5,400 | 634 | 6,034 |
+| 20%-per-side padded box fully in-frame | 5,311 | 619 | 5,930 |
+| 20%-per-side padded box >=2 px from each source-image edge | **5,305** | **618** | **5,923** |
+| Padded box would be clipped at edge | 89 | 15 | 104 |
+| Fully in bounds but padded margin <2 px | 6 | 1 | 7 |
+
+This strict padded-image-margin filter would retain
+**5,923/6,034 = 98.16%** of the tight-box-eligible
+population. It is a defensible image-integrity sensitivity
+cohort but not proof that these 2-pixel margins were
+actually enforced by the public curator.
+
+**Acquisition aspect-range correction:** the camera
+[`cameras/rtsp_pipeline.py`](https://github.com/valfride/DatasetAcquisition/blob/main/cameras/rtsp_pipeline.py)
+supplies default car-classification `min_aspect=2.1` and
+`max_aspect=3.5` in the absence of an override.
+The checked [`config/intelbrasPTZvip.yaml`](https://github.com/valfride/DatasetAcquisition/blob/main/config/intelbrasPTZvip.yaml)
+does not override these fields. The classifier first
+checks **the tight, zero-padded detector crop**, then the
+saved image is **padded 20% per side**.
+Thus the user's 2.5-3.5 geometry control is **stricter**
+than the public acquisition camera's apparent 2.1-3.5
+car-classification defaults. For a closer
+acquisition-style match, run the prediction-blind audit
+again with `--min-aspect 2.1 --max-aspect 3.5` (and
+tight crop 24x8); confirm the deployed acquisition
+arguments before describing this as an exact match.
+
+**Cohort decision not yet frozen:** two distinct,
+scientifically valid questions need clear labels:
+(1) all eligible native images with 2.5-3.5 geometry
+to compare eight models, following acquisition-style
+20% crop padding but faithfully retaining the
+acquisition implementation's boundary clipping, and
+(2) a stricter fully padded, >=2px-margin
+*clean-geometry sensitivity* cohort, which is 5,923
+entries under the current band. A separate, broader
+2.1-3.5 cohort would more closely reproduce the camera's
+car aspect filter. Do not change policies
+based on model inference metrics. Keep the exact
+sample identities fixed between padded and tight
+variants, and do not run any model yet.
 
 **Causal caution:** a sample-selection band of 2.5–3.5
 can change difficulty proportions; the acquisition pipeline
