@@ -56,6 +56,84 @@ actually runs. The presence of a valid ground-truth string does
 not make an Illegible annotation readable in the photographed crop.
 
 
+
+## Completed automatic 905-sample source-image quality audit — 13 October 2026
+
+The user ran the full source-image audit with frozen Illegible
+selection manifest SHA-256
+`7e74f46d991db9835739e7b99b5c01f1be6da7b21ba1b50b2c9bef848b7dfb0e`.
+
+| QA outcome | Samples |
+| --- | ---: |
+| Images decoded without error | 905 / 905 |
+| At least one heuristic flag | 300 / 905 (33.15%) |
+| No heuristic flags | 605 / 905 (66.85%) |
+| Low crop grayscale standard deviation (<16) | 184 |
+| Bounding box near source-image boundary | 74 |
+| Plate aspect ratio outside [1.7,4.0] | 63 |
+| All-sample 24-per-page review sheets | 38 |
+| Flagged priority sheets | 13 |
+
+The three flags overlap (321 occurrences across 300 distinct samples).
+There are **no confirmed annotation-error counts** at this stage.
+The flags refer to image properties, not ground-truth validity.
+For context, the prior Poor set had 501/3000 (16.70%) flagged
+under the same tests, versus 300/905 (33.15%) for Illegible;
+different class compositions preclude a causal comparison.
+
+### Blinded source-target review: 100 flagged, 200 unflagged
+
+The shared `prepare_blind_annotation_review.py` script has been
+generalized to support the 905 Illegible records as well as the 3,000
+Poor records. It validates the manifest-derived population and
+annotation identities, draws from **both** flagged and unflagged
+strata, saves the fixed seed, and shows each box with its original
+source photograph and enlarged in-frame crop. No inference,
+confidence, or prediction data are read.
+
+```bash
+cd ~/doc2025/project1
+git pull --ff-only
+
+python3 experiments/revision_eval/reviewer1/02_cross_dataset/scripts/prepare_blind_annotation_review.py \
+  --qa-dir ~/doc2025/LMDB-Datasets/LPLCv2_IllegibleBrazilianOCR_annotation_QA \
+  --dataset-root ~/doc2025/LMDB-Datasets/LPLC_dataset \
+  --output-dir ~/doc2025/LMDB-Datasets/LPLCv2_IllegibleBrazilianOCR_manualQA_20261013 \
+  --flagged 100 --unflagged 200 --seed 2026
+```
+
+The script outputs `blind_review.csv`, `review_protocol.json`,
+five `flagged_sample_pages` and nine `unflagged_sample_pages`.
+Manually classify in `blind_review.csv` using these categories:
+
+- `valid_target`: bounding box correctly targets the plate and
+  OCR transcription is plausibly confirmed from image
+- `unverifiable_text`: box plausibly targets plate but characters
+  cannot be verified from this image
+- `wrong_box_or_target`: box clearly points to wrong/nonplate region
+- `wrong_ocr_label`: plate is independently readable but OCR string
+  is demonstrably different
+- `uncertain`: insufficient evidence for a confident category
+
+For Illegible plates, expect `unverifiable_text` to be common;
+**do not classify unreadability as annotation error**. Reviewers
+should not look at model predictions before categorizing.
+
+After completing manual review, run:
+
+```bash
+python3 experiments/revision_eval/reviewer1/02_cross_dataset/scripts/prepare_blind_annotation_review.py \
+  --output-dir ~/doc2025/LMDB-Datasets/LPLCv2_IllegibleBrazilianOCR_manualQA_20261013 \
+  --summarize
+```
+
+This produces descriptive stratum-weighted percentages. The
+source images/plates and review sheets are request-restricted:
+keep local unless the dataset terms permit sharing. Reviewing
+300 sampled records does not itself prove the other 605 correct;
+inspect all pages if the error rate is material, and keep
+the frozen 905-sample selection unchanged in all cases.
+
 ## Confirmed Illegible OCR-label audit — 13 October 2026
 
 The complete local `--audit-only` output confirms:
