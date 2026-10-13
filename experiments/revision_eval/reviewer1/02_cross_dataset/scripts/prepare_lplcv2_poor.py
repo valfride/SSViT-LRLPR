@@ -14,6 +14,7 @@ import pickle
 import random
 import re
 import tempfile
+import unicodedata
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -23,9 +24,41 @@ import numpy as np
 
 LABEL_RE = re.compile(r"^[A-Z0-9]{7}$")
 LEG_POOR = 1
+
+# Accept only explicitly labeled non-motorcycle vehicle classes. Exclude
+# unknown and missing classes rather than risk including unlabelled motorcycles.
+ALLOWED_NON_MOTORCYCLE_TYPES = frozenset({
+    "AUTOMOVEL", "CAMINHONETE", "CAMIONETA", "CAMINHAO",
+    "CAMINHAO TRATOR", "ONIBUS", "MICROONIBUS", "UTILITARIO",
+    "JIPE", "VAN", "FURGAO", "PICAPE", "SUV", "MISTO",
+    "REBOQUE", "SEMI REBOQUE",
+})
+
+
+def normalize_vehicle_type(value):
+    if not isinstance(value, str):
+        return ""
+    normalized = unicodedata.normalize("NFKD", value)
+    ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
+    return " ".join(re.sub(r"[^A-Z0-9]+", " ", ascii_text.upper()).split())
+
+
+def vehicle_type_status(ann):
+    car = ann.get("car")
+    value = car.get("type") if isinstance(car, dict) else None
+    normalized = normalize_vehicle_type(value)
+    if not normalized:
+        return "missing_vehicle_type", normalized
+    if any(token in normalized for token in (
+            "MOTO", "CICLOMOTOR", "SCOOTER", "TRICICLO", "QUADRICICLO")):
+        return "motorcycle_excluded", normalized
+    if normalized not in ALLOWED_NON_MOTORCYCLE_TYPES:
+        return "unrecognized_vehicle_type", normalized
+    return "allowed", normalized
+
 FIELDS = (
     "track_id", "source_image", "annotation_index", "ocr", "legibility",
-    "camera_id", "time", "day", "rain", "faulty", "xy",
+    "camera_id", "time", "day", "rain", "faulty", "vehicle_type", "xy",
     "crop_box_xyxy", "source_width", "source_height",
     "crop_width", "crop_height", "crop_path",
 )
@@ -79,6 +112,12 @@ def gather(annotations, image_dir, excluded_labels):
             if bool(ann.get("occ", False)):
                 stats["occluded"] += 1
                 continue
+            status, vehicle_type = vehicle_type_status(ann)
+            stats["type_" + (vehicle_type or "MISSING")] += 1
+            if status != "allowed":
+                stats[status] += 1
+                continue
+            stats["allowed_non_motorcycle_type"] += 1
             if label in excluded_labels:
                 stats["overlap_excluded"] += 1
                 continue
@@ -93,6 +132,7 @@ def gather(annotations, image_dir, excluded_labels):
             pool.append({
                 "source_image": source_name, "annotation_index": idx,
                 "ocr": label, "box": box, "xy": ann["xy"],
+                "vehicle_type": vehicle_type,
                 "cam": info.get("cam"), "time": info.get("time"),
                 "day": info.get("day"), "rain": info.get("rain"),
                 "faulty": info.get("faulty"),
@@ -168,6 +208,8 @@ def validate_prepared(outdir, expected):
         raise RuntimeError("Repeated source image in selection")
     if not all(r["legibility"] == 1 for r in rows):
         raise RuntimeError("Non-Poor sample found")
+    if not all(r.get("vehicle_type") in ALLOWED_NON_MOTORCYCLE_TYPES for r in rows):
+        raise RuntimeError("An unapproved or motorcycle vehicle type was found")
     env = lmdb.open(str(outdir), readonly=True, lock=False, readahead=False,
                     max_readers=4)
     try:
@@ -199,16 +241,24 @@ def prepare(args):
     root = args.dataset_root.expanduser().resolve()
     image_dir = root / "images"
     ann_path = args.annotations.expanduser().resolve() if args.annotations else root / "annotations_v2.json"
-    out = args.output.expanduser().resolve()
+    out = args.output.expanduser().resolve() if args.output else None
     if not ann_path.is_file() or not image_dir.is_dir():
         raise FileNotFoundError("Expected annotation JSON and images/ under --dataset-root")
-    if out.exists():
-        raise FileExistsError(f"Frozen output already exists, refusing to overwrite: {out}")
-    out.parent.mkdir(parents=True, exist_ok=True)
+    if not args.audit_only:
+        if out is None:
+            raise ValueError("--output is required unless --audit-only")
+        if out.exists():
+            raise FileExistsError(f"Frozen output already exists, refusing to overwrite: {out}")
+        out.parent.mkdir(parents=True, exist_ok=True)
 
     anns = load_json(ann_path)
     excluded_labels = read_excluded_labels(args.exclude_labels_metadata)
     candidates, stats = gather(anns, image_dir, excluded_labels)
+    if args.audit_only:
+        print(json.dumps({"candidate_audit": dict(stats),
+                          "allowed_vehicle_types": sorted(ALLOWED_NON_MOTORCYCLE_TYPES)},
+                         indent=2, ensure_ascii=False))
+        return
     if stats["unique_labels_before_image_decode"] < args.count:
         raise RuntimeError(f"Only {stats['unique_labels_before_image_decode']} unique labels available")
 
@@ -285,7 +335,8 @@ def prepare(args):
                             "ocr": row["ocr"],
                             "legibility": LEG_POOR,
                             "camera_id": row["cam"], "time": row["time"],
-                            "day": row["day"], "rain": row["rain"],
+                            "day": row["day"], "vehicle_type": row["vehicle_type"],
+                            "rain": row["rain"],
                             "faulty": row["faulty"], "xy": row["xy"],
                             "crop_box_xyxy": [x1, y1, x2, y2],
                             "source_width": w, "source_height": h,
@@ -312,11 +363,14 @@ def prepare(args):
             "dataset": "LPLCv2", "source_annotations": str(ann_path),
             "source_annotations_sha256": digest(ann_path),
             "legibility": "Poor", "legibility_id": LEG_POOR,
+            "vehicle_type_policy": "strict allowed non-motorcycle types",
+            "allowed_vehicle_types": sorted(ALLOWED_NON_MOTORCYCLE_TYPES),
             "count": args.count, "seed": args.seed,
             "selection_method": "seeded permutation of unique OCR labels; shuffled "
                                 "candidates within each label; first image not already used",
-            "eligibility": "leg=1, exact [A-Z0-9]{7}, non-occluded, valid in-bounds xy, "
-                           "source image decodable; optional training/test label exclusion",
+            "eligibility": "leg=1, exact [A-Z0-9]{7}, non-occluded, allowed "
+                           "non-motorcycle car.type, valid in-bounds xy, source image "
+                           "decodable; optional training/test label exclusion",
             "crop": "axis-aligned min/max envelope of 4 xy points; original pixels; "
                     "lossless PNG; no resizing until evaluator F=1 bicubic preprocessing",
             "excluded_label_sources": [str(Path(s)) for s in args.exclude_labels_metadata],
@@ -338,6 +392,7 @@ def prepare(args):
             "unique_labels": len(selected_labels),
             "unique_source_images": len(selected_sources),
             "distinct_cameras": len({r["camera_id"] for r in final_rows}),
+            "vehicle_types": dict(Counter(r["vehicle_type"] for r in final_rows)),
             "time_of_day": dict(Counter(str(r["time"]) for r in final_rows)),
             "day": dict(Counter(str(r["day"]) for r in final_rows)),
             "faulty_cameras_flagged": sum(bool(r["faulty"]) for r in final_rows),
@@ -374,8 +429,10 @@ def main():
                    help="Existing LPLC_dataset directory (must contain images/)")
     p.add_argument("--annotations", type=Path, default=None,
                    help="Defaults to DATASET_ROOT/annotations_v2.json")
-    p.add_argument("--output", type=Path, required=True,
+    p.add_argument("--output", type=Path,
                    help="New output LMDB directory; must not exist")
+    p.add_argument("--audit-only", action="store_true",
+                   help="Count candidate vehicle types and exclusions without writing anything")
     p.add_argument("--count", type=int, default=3000)
     p.add_argument("--seed", type=int, default=2026)
     p.add_argument("--contact-sheet", type=int, default=60,
@@ -389,6 +446,8 @@ def main():
     if args.count < 1:
         p.error("--count must be >=1")
     if args.verify_only:
+        if args.output is None:
+            p.error("--verify-only requires --output")
         out = args.output.expanduser().resolve()
         result = validate_prepared(out, args.count)
         print(json.dumps(result, indent=2))
