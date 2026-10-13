@@ -6,6 +6,56 @@ bounding box. No completed LMDB was published. The builder now runs a
 **complete decoded-image geometry preflight** before attempting to construct
 a dataset. The previously frozen Poor subset is unchanged.
 
+## Critical OCR placeholder finding — 13 October 2026
+
+The geometry preflight examined all 1,189 seven-character Illegible
+`ocr` fields and found one out-of-bounds annotation:
+
+- Source: `89626413-aa6e-4f7a-91af-ac8c17f2b153.jpg`, index 0
+- OCR string: **`UNKNOWN`**
+- Annotated bbox `[1168,52,1201,63]`, source image `1200×678`
+- In-frame box `[1168,52,1200,63]` (96.97% area retained)
+
+**Important:** `UNKNOWN` matches `[A-Z0-9]{7}` but does NOT match
+the old Brazilian (`LLLNNNN`) or Mercosur (`LLLNLNN`) plate
+patterns. It appears to be a placeholder for unknown text,
+not a valid Brazilian LP ground truth. The audit also found
+1,189 seven-character fields but only **891 distinct strings**;
+that pattern raises concern about repeated placeholders, but
+**does not establish their count**. Do not infer that 1,189
+plates are legitimately OCR-labelled or run recognition
+on `UNKNOWN` as if it were ground truth.
+
+The builder now prints the **15 most frequent seven-character OCR
+fields** and counts the exact `UNKNOWN` string and recognized
+Brazilian plate patterns. The default build **refuses to
+publish an LMDB** if unsupported plate-format labels remain.
+Use this read-only audit first:
+
+```bash
+cd ~/doc2025/project1
+git pull --ff-only
+
+python3 experiments/revision_eval/reviewer1/02_cross_dataset/scripts/prepare_lplcv2_illegible.py \
+  --dataset-root ~/doc2025/LMDB-Datasets/LPLC_dataset \
+  --audit-only
+```
+
+Once the count and label conventions have been reviewed,
+`--require-plate-format` builds **all** annotations matching
+either real Brazilian format, with no random sampling or
+label/source deduplication. This is a different, explicitly
+restricted population from the raw 1,189 seven-character fields;
+report the exclusion counts and use a **new distinct LMDB directory**
+(e.g., `LPLCv2_IllegibleBrazilianOCR_TEST`). The builder
+re-runs bbox preflight on the retained annotations, so the
+discarded `UNKNOWN` annotation cannot block the test.
+
+If any real labels use an unexpected format, investigate their
+annotation provenance before excluding them. Restricting to
+recognized plate syntax establishes structural plausibility,
+**not** independent visual verifiability of OCR labels.
+
 ## Why this is a separate experiment
 
 The annotation audit of local LPLC_dataset/annotations_v2.json found:
