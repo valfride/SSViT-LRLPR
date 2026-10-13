@@ -316,6 +316,48 @@ samples based on predictions; complete the independent
 source-target annotation review when feasible.
 
 
+## First frozen F=1 result: SVTRv2-AR baseline (13 October 2026)
+
+**Inference completed; aggregate metrics supplied by the user**
+from `results/lplcv2_mixed_aspect_svtrv2_ar/F1_bayes.json`.
+Validation mode, F=1, `SVTRV2_AR`, bayes/BJP fusion, **no TTA** and
+**no SWA**; random seed 42, deterministic cuDNN.
+The checkpoint-selection record names exactly
+`student_acc_0.7500_ep_52.pth` through the symlink-only
+checkpoint directory. Its actual source path is
+`experiments/baselines/SVTRV2_AR_BASELINE_svtrv2_ar/student_weights/student_acc_0.7500_ep_52.pth`
+as independently inspected on daugman. **Checkpoint SHA-256 is
+not yet supplied**; do not claim a particular bytes hash.
+
+| Metric | Frozen SVTRv2-AR on verified mixed aspect-controlled LMDB |
+| --- | ---: |
+| Exact-match recognition rate (RR) | **20.07% (602/3,000)** |
+| Character-slot accuracy | **68.51% (14,387/21,000)** |
+| Character error rate (CER) | **31.40% (6,593 edits/21,000 GT chars)** |
+| At least six correct slots | 40.27% (1,208/3,000) |
+| At least five correct slots | 59.90% (1,797/3,000) |
+| Old Brazilian exact-match RR | **26.51% (154/581)** |
+| Mercosur exact-match RR | **18.52% (448/2,419)** |
+| Mean confidence (correct vs incorrect) | 0.84143 vs 0.65510 |
+
+These are exact reported `F1_bayes.json` aggregate results; no
+sample predictions are stored in this tracked documentation. The
+corresponding prediction CSV is maintained locally on daugman.
+The separate 842-case Illegible and 2,158-case Poor recognition
+results **have not yet been calculated or reported**. Plate-layout
+accuracy is not a substitute for legibility-stratified accuracy.
+
+The earlier CNN–ViT 24.57% (737/3,000) **Poor-only** external
+result uses a different test population and cannot be compared
+directly to this 20.07% mixed-result SVTRv2-AR score. To draw a
+fair conclusion, evaluate the **frozen submitted CNN–ViT checkpoint**
+at F=1 on the **identical manifest**
+`3d64cb68c98732fc5803a3de40950efa1da1cb9421c0c653ba18b915bed30d05`
+and calculate the overall and separate Poor/Illegible results
+for both models. Do not retune models or select datasets based
+on the observed SVTRv2-AR predictions. This benchmark remains
+exploratory and as-annotated due to Illegible annotation QA caveats.
+
 ## Frozen F=1 recognition invocations (after successful verification)
 
 CNN–ViT (the submitted checkpoint and configuration snapshot):
