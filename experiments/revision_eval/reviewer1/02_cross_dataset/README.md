@@ -475,3 +475,68 @@ may introduce further selection bias. If we expand evaluation to
 Perfect/Good or geometry-stratified subsets, define it as a clearly
 labeled **supplementary** analysis, preserving the original manifest
 and its 24.57% result without post-hoc editing.
+
+
+## Completed native plate-size and OCR-availability audit — 13 October 2026
+
+Local read-only audit on daugman, using `annotations_v2.json` and the
+unchanged selected manifest SHA-256
+`8a08180604d88b652c6d915853830b4b1fd0a9ff6bcceace597d8a57f199d408`:
+
+| Legibility | LP annotations | Valid seven-character OCR labels | Median bbox width (px) | Median bbox height (px) | Bbox width <=96 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Perfect | 18,425 | 18,416 | 98 | 38 | 8,925 (48.4%) |
+| Good | 10,180 | 10,142 | 68 | 26 | 8,263 (81.2%) |
+| Poor | 7,520 | 6,943 | 44 | 16 | 7,062 (93.9%) |
+| Illegible | 5,362 | 1,189 | 31 | 13 | 5,327 (99.3%) |
+
+**Selected frozen 3,000 non-motorcycle Poor plates:**
+
+- Median original annotated bbox: **45 × 16 px**
+- Native crop width <=96 px: **2,812 / 3,000 = 93.73%**
+- Native crop width <=48 px: **2,106 / 3,000 = 70.20%**
+- Native crop height <=32 px: **2,769 / 3,000 = 92.30%**
+- Width >96 px: **188**; height >32 px: **231**
+- All audit-preview decoding/crop-geometry failure lists were **empty**,
+  but this does **not** replace human visual QA.
+
+These numbers establish that plate bounding boxes are generally
+small in the provided *source photographs*, and the 96×32 inference
+resize therefore enlarges many of them. They do **not**, without
+additional provenance, prove original camera sensor resolution or
+rule out upstream image resampling. Nor does bbox size identify the
+dominant perceptual defect (blur, glare, compression, etc.).
+
+**Important scope:** OCR text is not restricted to Poor. Good has
+10,142 strict seven-character labels and frequently small plate
+crops; a separate, preregistered Good sample or cross-class
+native-size-matched test may be useful as supplementary analysis.
+Do not retroactively substitute one for the already evaluated
+frozen Poor sample.
+
+Dataset-count discrepancy requiring provenance check: the audit
+counted **36,757 nonempty OCR fields** across all four classes,
+versus **36,414** 'LP Text Available' in the public dataset README.
+These counts are not identical definitions and may reflect dataset
+version or filtering. Do not claim they agree without investigation.
+Locally there are **36,690 strict seven-character OCR strings**
+across the four classes.
+
+### Exploratory zero-shot accuracy by native plate dimensions
+
+A read-only script, `scripts/analyze_accuracy_by_native_size.py`,
+joins the unchanged manifest with the existing CNN–ViT prediction CSV
+by track ID. It validates all 3,000 labels and gives exact-match RR,
+character-slot accuracy, and CER in disjoint native-width/native-height
+bins; results are **descriptive post-hoc subgroup analyses**, not
+evidence of causal impact from size alone.
+
+    cd ~/doc2025/project1
+    git pull --ff-only
+    python3 experiments/revision_eval/reviewer1/02_cross_dataset/scripts/analyze_accuracy_by_native_size.py \
+      --manifest ~/doc2025/LMDB-Datasets/LPLCv2_PoorNonMotoUnique_TEST_3k/selection_manifest.json \
+      --predictions experiments/revision_eval/reviewer1/02_cross_dataset/results/lplcv2_poor_ours/F1_bayes_predictions.csv \
+      --output ~/doc2025/LMDB-Datasets/LPLCv2_quality_audit_20261013/accuracy_by_native_size.json
+
+The original frozen test selection and predictions are read-only.
+Keep the output within the restricted local dataset workspace.
