@@ -347,16 +347,53 @@ The separate 842-case Illegible and 2,158-case Poor recognition
 results **have not yet been calculated or reported**. Plate-layout
 accuracy is not a substitute for legibility-stratified accuracy.
 
-The earlier CNN–ViT 24.57% (737/3,000) **Poor-only** external
-result uses a different test population and cannot be compared
-directly to this 20.07% mixed-result SVTRv2-AR score. To draw a
-fair conclusion, evaluate the **frozen submitted CNN–ViT checkpoint**
-at F=1 on the **identical manifest**
-`3d64cb68c98732fc5803a3de40950efa1da1cb9421c0c653ba18b915bed30d05`
-and calculate the overall and separate Poor/Illegible results
-for both models. Do not retune models or select datasets based
-on the observed SVTRv2-AR predictions. This benchmark remains
-exploratory and as-annotated due to Illegible annotation QA caveats.
+The previously reported CNN–ViT **24.57% (737/3,000)** on the
+different **Poor-only** external subset is **not** a paired comparator
+for this mixed-difficulty benchmark. CNN–ViT has now also been
+evaluated on the exact **same frozen mixed** dataset (see direct
+comparison below). Do not retune models or select crops based on
+these observed predictions. This remains exploratory and
+as-annotated due to Illegible annotation QA caveats.
+
+## Direct fixed-checkpoint comparison on the SAME 3,000 crops
+
+**Both F=1 inference runs are complete** on the identical verified
+LMDB and frozen manifest SHA-256
+`3d64cb68c98732fc5803a3de40950efa1da1cb9421c0c653ba18b915bed30d05`.
+The following values come from the respective user-supplied local
+`F1_bayes.json` reports, not from unpublished prediction CSV files.
+Both used test mode `val`, F=1, no TTA/SWA, seed 42, and
+deterministic cuDNN. CNN–ViT uses `cls_loss=CE` and
+`experiments/revision_eval/submitted_model/last.pth`
+(submitted frozen checkpoint directory). SVTRv2-AR uses
+`cls_loss=SVTRV2_AR` and frozen
+`student_acc_0.7500_ep_52.pth`.
+
+| Aggregate metric | CNN–ViT | SVTRv2-AR | CNN–ViT minus SVTRv2-AR |
+| --- | ---: | ---: | ---: |
+| Full seven-character exact-match RR | **26.40% (792/3,000)** | 20.07% (602/3,000) | **+6.33 percentage points, +190 exact plates** |
+| Character-position accuracy | **72.80% (15,287/21,000)** | 68.51% (14,387/21,000) | **+4.29 pp, +900 matching positions** |
+| Character error rate (CER, lower is better) | **27.17% (5,705 edits/21,000)** | 31.40% (6,593 edits/21,000) | **−4.23 pp, 888 fewer edits** |
+| At least 6 correct positions | **48.73% (1,462/3,000)** | 40.27% (1,208/3,000) | +8.47 pp, +254 plates |
+| At least 5 correct positions | **67.27% (2,018/3,000)** | 59.90% (1,797/3,000) | +7.37 pp, +221 plates |
+| Old Brazilian RR | **33.56% (195/581)** | 26.51% (154/581) | +7.06 pp, +41 plates |
+| Mercosur RR | **24.68% (597/2,419)** | 18.52% (448/2,419) | +6.16 pp, +149 plates |
+
+CNN–ViT records higher overall exact-match and character-slot
+accuracy, lower CER, and higher observed exact-match accuracy in
+both Brazilian plate formats. This is an **observed external-domain
+advantage over this SVTRv2-AR baseline**, not a demonstrated causal
+benefit of a single CNN–ViT component or guaranteed label validity.
+
+**Pending analysis:** compute the Poor (2,158) versus Illegible
+(842) per-cohort results from the frozen local prediction CSVs
+using the script below; then calculate a **paired McNemar test**
+from per-track discordances, rather than inferring significance
+from aggregate 792/602 alone. A few source photographs contribute
+multiple annotations, so sample dependence should be acknowledged.
+Report this experiment as an **exploratory post-hoc geometry-filtered
+as-annotated benchmark**, not as the previously frozen Poor-only
+3,000-image result or an official representative LPLCv2 OCR test.
 
 ### Reproducible local Poor / Illegible stratification
 
@@ -386,8 +423,10 @@ python3 experiments/revision_eval/reviewer1/02_cross_dataset/scripts/summarize_m
   --output-json "$R/legibility_aggregates.json"
 ```
 
-Run the same script for CNN–ViT after its evaluation, changing
-`R` to `experiments/revision_eval/reviewer1/02_cross_dataset/results/lplcv2_mixed_aspect_ours`.
+Run the same script **now** for the completed CNN–ViT run,
+changing `R` to
+`experiments/revision_eval/reviewer1/02_cross_dataset/results/lplcv2_mixed_aspect_ours`.
+Both F=1 prediction CSVs should already exist on daugman.
 The `legibility_aggregates.json` file contains only aggregated
 numeric metrics, not source plate strings or per-sample identities.
 Keep the underlying restricted prediction CSV local.
