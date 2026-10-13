@@ -14,7 +14,7 @@ import pickle
 import random
 import re
 import tempfile
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import cv2
@@ -212,10 +212,19 @@ def prepare(args):
     if stats["unique_labels_before_image_decode"] < args.count:
         raise RuntimeError(f"Only {stats['unique_labels_before_image_decode']} unique labels available")
 
-    candidates.sort(key=lambda r: (r["source_image"], r["annotation_index"], r["ocr"]))
-    random.Random(args.seed).shuffle(candidates)
+    # Draw plate labels uniformly rather than favoring labels with more images.
+    candidates.sort(key=lambda r: (r["ocr"], r["source_image"], r["annotation_index"]))
+    by_label = defaultdict(list)
+    for row in candidates:
+        by_label[row["ocr"]].append(row)
+    rng = random.Random(args.seed)
+    labels = sorted(by_label)
+    rng.shuffle(labels)
+    for choices in by_label.values():
+        rng.shuffle(choices)
     print("Candidate audit:", json.dumps(stats, indent=2))
-    print(f"Sampling {args.count} with seed={args.seed}, unique OCR and unique source image")
+    print(f"Sampling {args.count} distinct labels with seed={args.seed}; "
+          "also requiring distinct source images")
 
     selected_labels, selected_sources = set(), set()
     final_rows = []
@@ -229,66 +238,65 @@ def prepare(args):
                         max_dbs=1, writemap=False, sync=True)
         try:
             with env.begin(write=True) as txn:
-                for row in candidates:
+                for label in labels:
                     if len(final_rows) == args.count:
                         break
-                    if row["ocr"] in selected_labels:
-                        skipped["duplicate_label"] += 1
-                        continue
-                    if row["source_image"] in selected_sources:
-                        skipped["duplicate_source_image"] += 1
-                        continue
-                    image_path = image_dir / row["source_image"]
-                    img = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
-                    if img is None:
-                        skipped["image_decode_failed"] += 1
-                        continue
-                    h, w = img.shape[:2]
-                    x1, y1, x2, y2 = row["box"]
-                    # Reject out-of-bounds boxes; do not clip away unknown plate content.
-                    if x1 < 0 or y1 < 0 or x2 > w or y2 > h:
-                        skipped["out_of_bounds_bbox"] += 1
-                        continue
-                    crop = img[y1:y2, x1:x2]
-                    if crop.size == 0:
-                        skipped["empty_crop"] += 1
-                        continue
-                    ok, encoded = cv2.imencode(".png", crop)
-                    if not ok:
-                        skipped["crop_encode_failed"] += 1
-                        continue
+                    for row in by_label[label]:
+                        if row["source_image"] in selected_sources:
+                            skipped["duplicate_source_image"] += 1
+                            continue
+                        image_path = image_dir / row["source_image"]
+                        img = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+                        if img is None:
+                            skipped["image_decode_failed"] += 1
+                            continue
+                        h, w = img.shape[:2]
+                        x1, y1, x2, y2 = row["box"]
+                        # Reject out-of-bounds boxes; do not clip away unknown plate content.
+                        if x1 < 0 or y1 < 0 or x2 > w or y2 > h:
+                            skipped["out_of_bounds_bbox"] += 1
+                            continue
+                        crop = img[y1:y2, x1:x2]
+                        if crop.size == 0:
+                            skipped["empty_crop"] += 1
+                            continue
+                        ok, encoded = cv2.imencode(".png", crop)
+                        if not ok:
+                            skipped["crop_encode_failed"] += 1
+                            continue
 
-                    track_id = f"track_{len(final_rows):06d}"
-                    crop_relpath = f"crops/{track_id}/lr-001.png"
-                    crop_path = stage / crop_relpath
-                    crop_path.parent.mkdir(parents=True, exist_ok=True)
-                    crop_path.write_bytes(encoded.tobytes())
-                    key = f"image-{len(final_rows):08d}".encode("ascii")
-                    txn.put(key, encoded.tobytes(), overwrite=False)
-                    meta = {
-                        "lmdb_key": key, "gt": row["ocr"], "split": "test",
-                        # The path is used by the evaluator to GROUP images, not to load bytes.
-                        "original_path": str(out / crop_relpath),
-                    }
-                    metadata.append(meta)
-                    final_rows.append({
-                        "track_id": track_id,
-                        "source_image": row["source_image"],
-                        "annotation_index": row["annotation_index"],
-                        "ocr": row["ocr"],
-                        "legibility": LEG_POOR,
-                        "camera_id": row["cam"], "time": row["time"],
-                        "day": row["day"], "rain": row["rain"],
-                        "faulty": row["faulty"], "xy": row["xy"],
-                        "crop_box_xyxy": [x1, y1, x2, y2],
-                        "source_width": w, "source_height": h,
-                        "crop_width": crop.shape[1], "crop_height": crop.shape[0],
-                        "crop_path": crop_relpath,
-                    })
-                    selected_labels.add(row["ocr"])
-                    selected_sources.add(row["source_image"])
-                    if len(final_rows) % 500 == 0:
-                        print(f"Prepared {len(final_rows)}/{args.count} unique crops")
+                        track_id = f"track_{len(final_rows):06d}"
+                        crop_relpath = f"crops/{track_id}/lr-001.png"
+                        crop_path = stage / crop_relpath
+                        crop_path.parent.mkdir(parents=True, exist_ok=True)
+                        crop_path.write_bytes(encoded.tobytes())
+                        key = f"image-{len(final_rows):08d}".encode("ascii")
+                        txn.put(key, encoded.tobytes(), overwrite=False)
+                        meta = {
+                            "lmdb_key": key, "gt": row["ocr"], "split": "test",
+                            # The path is used by the evaluator to GROUP images, not to load bytes.
+                            "original_path": str(out / crop_relpath),
+                        }
+                        metadata.append(meta)
+                        final_rows.append({
+                            "track_id": track_id,
+                            "source_image": row["source_image"],
+                            "annotation_index": row["annotation_index"],
+                            "ocr": row["ocr"],
+                            "legibility": LEG_POOR,
+                            "camera_id": row["cam"], "time": row["time"],
+                            "day": row["day"], "rain": row["rain"],
+                            "faulty": row["faulty"], "xy": row["xy"],
+                            "crop_box_xyxy": [x1, y1, x2, y2],
+                            "source_width": w, "source_height": h,
+                            "crop_width": crop.shape[1], "crop_height": crop.shape[0],
+                            "crop_path": crop_relpath,
+                        })
+                        selected_labels.add(row["ocr"])
+                        selected_sources.add(row["source_image"])
+                        if len(final_rows) % 500 == 0:
+                            print(f"Prepared {len(final_rows)}/{args.count} unique crops")
+                        break  # Stop after the first viable image for this label.
         finally:
             env.sync()
             env.close()
@@ -305,8 +313,8 @@ def prepare(args):
             "source_annotations_sha256": digest(ann_path),
             "legibility": "Poor", "legibility_id": LEG_POOR,
             "count": args.count, "seed": args.seed,
-            "selection_method": "seeded random permutation of prefiltered candidates; "
-                                "first valid candidate per distinct OCR string and source image",
+            "selection_method": "seeded permutation of unique OCR labels; shuffled "
+                                "candidates within each label; first image not already used",
             "eligibility": "leg=1, exact [A-Z0-9]{7}, non-occluded, valid in-bounds xy, "
                            "source image decodable; optional training/test label exclusion",
             "crop": "axis-aligned min/max envelope of 4 xy points; original pixels; "
