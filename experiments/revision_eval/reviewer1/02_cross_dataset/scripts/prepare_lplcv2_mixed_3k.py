@@ -13,6 +13,7 @@ dataset, annotation file, selection manifest or model predictions.
 import argparse
 import hashlib
 import json
+import math
 import pickle
 import random
 import re
@@ -203,26 +204,39 @@ def original_aspect(row):
 
 
 def aspect_filter_and_refill(base_tagged, all_illegible, all_poor,
-                             seed, threshold, refill_min, refill_max):
-    """Separate post-hoc variant: reject low-aspect crops and add unused Poor.
+                             seed, threshold, max_threshold,
+                             refill_min, refill_max):
+    """Post-hoc geometry variant: reject extreme native ratios; refill from Poor.
 
     Begin with EXACTLY the default seeded 905+2095 selection. Retain every
-    originally selected item at or above threshold. Never use predictions.
-    Replacement candidates must be in the frozen Poor LMDB, never already
-    selected, not overlapping an Illegible source/label, and near 3:1.
+    originally selected crop within [threshold, max_threshold] (if upper
+    bound is supplied). Never use model predictions. Replacements must
+    be unused, nonoverlapping frozen Poor crops with near-3:1 geometry.
     """
     if threshold is None:
+        if max_threshold is not None:
+            raise ValueError("Maximum native aspect requires a minimum bound")
         return base_tagged, None, set()
+    if not (math.isfinite(threshold) and
+            (max_threshold is None or math.isfinite(max_threshold)) and
+            math.isfinite(refill_min) and math.isfinite(refill_max)):
+        raise ValueError("Native aspect limits must be finite")
+    if not (1.0 <= threshold < refill_min <= refill_max):
+        raise ValueError("Require 1.0 <= minimum < refill_min <= refill_max")
+    if max_threshold is not None and not refill_max <= max_threshold:
+        raise ValueError("Refill upper bound cannot exceed final native aspect maximum")
+
+    def outside(row):
+        ratio = original_aspect(row)
+        return ratio < threshold or (max_threshold is not None and ratio > max_threshold)
     initial_selected_poor = {
         (r["source_image"], r["annotation_index"])
         for cls, r in base_tagged if cls == "Poor"
     }
     illegible_source_names = {r["source_image"] for r in all_illegible}
     illegible_ocr = {r["ocr"] for r in all_illegible}
-    removed = [(cls, row) for cls, row in base_tagged
-               if original_aspect(row) < threshold]
-    retained = [(cls, row) for cls, row in base_tagged
-                if original_aspect(row) >= threshold]
+    removed = [(cls, row) for cls, row in base_tagged if outside(row)]
+    retained = [(cls, row) for cls, row in base_tagged if not outside(row)]
     unused_near_ideal_poor = sorted(
         (row for row in all_poor
          if (row["source_image"], row["annotation_index"]) not in initial_selected_poor
@@ -258,11 +272,18 @@ def aspect_filter_and_refill(base_tagged, all_illegible, all_poor,
     report = {
         "enabled": True,
         "min_native_crop_aspect_ratio_inclusive": threshold,
+        "max_native_crop_aspect_ratio_inclusive": max_threshold,
         "refill_native_aspect_ratio_inclusive": [refill_min, refill_max],
+        "removed_below_min": dict(Counter(
+            cls for cls, row in removed if original_aspect(row) < threshold)),
+        "removed_above_max": dict(Counter(
+            cls for cls, row in removed
+            if max_threshold is not None and original_aspect(row) > max_threshold)),
         "base_pool": f"905 Illegible + 2095 seeded Poor; fixed seed {seed}",
         "sampling_policy": (
-            "Remove base-pool records below minimum ratio, then uniformly "
-            "sample exactly that many unused, collision-free, near-3:1 Poor "
+            "Remove base-pool records outside native-aspect acceptance range "
+            "(inclusive bounds), then uniformly sample exactly that many "
+            "unused, collision-free, near-3:1 Poor "
             "records with Random(seed+17); reshuffle using Random(seed+41)."
         ),
         "original_pool_counts": {"Illegible": 905, "Poor": 2095},
@@ -275,9 +296,11 @@ def aspect_filter_and_refill(base_tagged, all_illegible, all_poor,
         "removed_records": [identity(cls, row) for cls, row in removed],
         "replacement_records": [identity("Poor", row) for row in replacement_poor],
         "note": ("This is an intentionally post-hoc geometry-controlled variant, "
-                 "not the original all-Illegible mixed dataset. Illegible cases "
-                 "removed cannot be replenished from another known-labelled "
-                 "Illegible pool; the final category proportions therefore change.")
+                 "not the original all-Illegible mixed dataset. Samples with "
+                 "extreme narrow or wide native ratios can still be correctly "
+                 "annotated. Illegible cases removed cannot be replenished from "
+                 "another known-labelled Illegible pool; final class proportions "
+                 "therefore change.")
     }
     replacement_ids = {(row["source_image"], row["annotation_index"])
                        for row in replacement_poor}
@@ -371,9 +394,11 @@ def verify(folder, expected_hash=None):
         raise RuntimeError(f"Wrong class counts: {kinds}, expected {expected}")
     if native_aspect_selection:
         threshold = float(native_aspect_selection["min_native_crop_aspect_ratio_inclusive"])
+        maximum = native_aspect_selection.get("max_native_crop_aspect_ratio_inclusive")
         lower, upper = native_aspect_selection["refill_native_aspect_ratio_inclusive"]
-        if any(original_aspect(row) < threshold for row in rows):
-            raise RuntimeError("Native aspect-ratio filter was violated")
+        if any(original_aspect(row) < threshold or
+               (maximum is not None and original_aspect(row) > maximum) for row in rows):
+            raise RuntimeError("Native aspect-ratio acceptance interval was violated")
         replacements = [r for r in rows if r.get("selection_origin") == "near_ideal_poor_refill"]
         required = int(native_aspect_selection["removed_total"])
         if len(replacements) != required:
@@ -389,6 +414,18 @@ def verify(folder, expected_hash=None):
             raise RuntimeError("Removal record provenance/count mismatch")
         if sum(reported_removals.values()) != required:
             raise RuntimeError("Removed count inconsistent with per-record log")
+        below = Counter(
+            r["source_legibility"] for r in removal_rows
+            if r["original_aspect_ratio"] < threshold)
+        above = Counter(
+            r["source_legibility"] for r in removal_rows
+            if maximum is not None and r["original_aspect_ratio"] > maximum)
+        if dict(below) != native_aspect_selection["removed_below_min"]:
+            raise RuntimeError("Recorded below-minimum removals differ from summary")
+        if dict(above) != native_aspect_selection["removed_above_max"]:
+            raise RuntimeError("Recorded above-maximum removals differ from summary")
+        if sum(below.values()) + sum(above.values()) != required:
+            raise RuntimeError("Removed records do not violate the native aspect interval")
         expected_from_base = {
             "Illegible": 905 - reported_removals["Illegible"],
             "Poor": 2095 + reported_removals["Illegible"],
@@ -492,7 +529,7 @@ def build(args):
     base_tagged, excluded, available = sample_mix(ill, poor, 2095, args.seed)
     tagged, aspect_selection, replacement_ids = aspect_filter_and_refill(
         base_tagged, ill, poor, args.seed, args.min_native_aspect,
-        args.refill_aspect_min, args.refill_aspect_max)
+        args.max_native_aspect, args.refill_aspect_min, args.refill_aspect_max)
     preview = report_mix(tagged, excluded, available, args.seed, {
         "Illegible": ill_sha, "Poor": poor_sha}, model_geometry, aspect_selection)
     print(json.dumps(preview, indent=2), flush=True)
@@ -607,8 +644,11 @@ def main():
                    help="Frozen SVTRv2-AR config to validate 96x32 evaluation geometry")
     p.add_argument("--seed", type=int, default=2026)
     p.add_argument("--min-native-aspect", type=float, default=None,
-                   help="Create a DISTINCT aspect-controlled variant: remove all original "
-                        "selected crops with native width/height below this value (e.g. 1.7)")
+                   help="Distinct geometry-controlled variant: reject native width/height "
+                        "below this inclusive limit (e.g., 1.7)")
+    p.add_argument("--max-native-aspect", type=float, default=None,
+                   help="Optional inclusive native aspect maximum (e.g., 4.0); "
+                        "requires --min-native-aspect. Omitted for older lower-only variant.")
     p.add_argument("--refill-aspect-min", type=float, default=2.5,
                    help="Minimum native aspect ratio for replacement Poor crops (default 2.5)")
     p.add_argument("--refill-aspect-max", type=float, default=3.5,
@@ -618,11 +658,21 @@ def main():
     p.add_argument("--verify-only", action="store_true",
                    help="Verify already-built output against metadata and LMDB bytes")
     args = p.parse_args()
+    if args.max_native_aspect is not None and args.min_native_aspect is None:
+        p.error("--max-native-aspect requires --min-native-aspect")
     if args.min_native_aspect is not None:
+        limits = (args.min_native_aspect, args.refill_aspect_min,
+                  args.refill_aspect_max)
+        if args.max_native_aspect is not None:
+            limits += (args.max_native_aspect,)
+        if not all(math.isfinite(v) for v in limits):
+            p.error("Aspect bounds must be finite")
         if not 1.0 <= args.min_native_aspect < args.refill_aspect_min:
             p.error("--min-native-aspect must be >=1.0 and below --refill-aspect-min")
         if args.refill_aspect_max < args.refill_aspect_min:
             p.error("--refill-aspect-max must be >= --refill-aspect-min")
+        if args.max_native_aspect is not None and args.max_native_aspect < args.refill_aspect_max:
+            p.error("--max-native-aspect must be >= --refill-aspect-max")
     if args.verify_only:
         verify_model_geometry({"CNN-ViT": args.cnnvit_config,
                                "SVTRv2-AR": args.svtrv2_config})
