@@ -168,8 +168,9 @@ def validate_prepared(outdir, expected):
         raise RuntimeError("Repeated source image in selection")
     if not all(r["legibility"] == 1 for r in rows):
         raise RuntimeError("Non-Poor sample found")
-    with lmdb.open(str(outdir), readonly=True, lock=False, readahead=False,
-                   max_readers=4) as env:
+    env = lmdb.open(str(outdir), readonly=True, lock=False, readahead=False,
+                    max_readers=4)
+    try:
         with env.begin() as txn:
             for row, meta in zip(rows, metadata):
                 if meta["gt"] != row["ocr"] or meta["split"] != "test":
@@ -187,6 +188,8 @@ def validate_prepared(outdir, expected):
                     raise RuntimeError(f"Invalid crop in LMDB {row['track_id']}")
                 if not (outdir / row["crop_path"]).is_file():
                     raise RuntimeError(f"Crop file missing for {row['track_id']}")
+    finally:
+        env.close()
     return {"verified_samples": expected, "unique_labels": expected,
             "unique_source_images": expected, "all_legibility": "Poor (leg=1)",
             "lmdb_decoded": expected, "split": "test", "frames": 1}
@@ -320,7 +323,6 @@ def prepare(args):
             writer.writeheader()
             for row in final_rows:
                 writer.writerow(row)
-        conditions = Counter((str(r["time"]), str(r["camera_id"])) for r in final_rows)
         summary = {
             "total_candidates": dict(stats),
             "selection_rejections": dict(skipped),
