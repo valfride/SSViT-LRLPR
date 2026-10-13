@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prediction-blind, read-only visual QA of a frozen LPLCv2 evaluation subset.
 
-Generate pages for ALL samples showing the source image + selected box,
+Generate pages for ALL manifest samples showing the source image + selected box,
 a context zoom, and the original-pixel annotated crop. Separately render
 priority-flagged crops (image-edge proximity, low texture, unusual shape).
 Flags indicate items for *manual review*, NOT invalid annotation labels.
@@ -177,17 +177,23 @@ def audit(args):
     out.mkdir(parents=True)
     original = open_json(manifest_path)
     rows = original.get("samples")
-    if not isinstance(rows, list) or len(rows) != 3000:
-        raise ValueError("Expected frozen 3,000-sample selection manifest")
+    if not isinstance(rows, list) or len(rows) == 0:
+        raise ValueError("Expected a nonempty frozen selection manifest")
     image_root = root / "images"
     records = []
+    seen_track_ids = set()
+    seen_annotation_ids = set()
     seen_labels = set()
     seen_images = set()
     counts = Counter()
     for n, row in enumerate(rows):
         label, filename = row["ocr"], row["source_image"]
-        if label in seen_labels or filename in seen_images:
-            raise ValueError(f"Frozen selection not unique at index {n}")
+        track_id = row["track_id"]
+        ann_id = (filename, int(row["annotation_index"]))
+        if track_id in seen_track_ids or ann_id in seen_annotation_ids:
+            raise ValueError(f"Duplicate track or annotated plate identity at index {n}")
+        seen_track_ids.add(track_id)
+        seen_annotation_ids.add(ann_id)
         seen_labels.add(label)
         seen_images.add(filename)
         rec = {k: row.get(k, "") for k in FIELDS if k not in {
@@ -245,6 +251,9 @@ def audit(args):
         "dataset_root": str(root), "manifest": str(manifest_path),
         "manifest_sha256": sha256(manifest_path),
         "samples": len(records), "flags_are_review_priorities_not_exclusions": True,
+        "unique_ocr_labels": len(seen_labels),
+        "unique_source_images": len(seen_images),
+        "unique_annotated_plates": len(seen_annotation_ids),
         "criteria": {
             "near_source_boundary": "bbox within 3.5% of any source-image edge",
             "low_gray_variation": f"grayscale standard deviation < {args.low_std}",
