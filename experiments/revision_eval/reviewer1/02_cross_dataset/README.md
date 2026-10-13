@@ -800,3 +800,18 @@ frozen results remain unchanged. The builder validates parent
 selection SHA-256s and will refuse the build if insufficient
 Poor candidates remain. Run the dry-run from the linked protocol
 and inspect counts *before* construction or inference.
+
+
+### Frozen model-input aspect-ratio consistency
+
+Both submitted CNN–ViT and SVTRv2-AR F=1 validation wrappers
+**directly bicubic-resize** all decoded crops to **96×32 (3:1)**,
+with no padding. The mixed-set builder now validates both frozen
+configs, measures original crop aspect-ratio distributions by
+legibility, and simulates the 96×32 bicubic resize for all mixed
+LMDB records during verification. It does not change the original
+lossless crop bytes. Native source crops need not be exactly 3:1;
+the resizing can stretch non-3:1 crops. See the dedicated
+[MIXED_POOR_ILLEGIBLE_3K.md](MIXED_POOR_ILLEGIBLE_3K.md)
+aspect-ratio protocol. Any aspect-preserving letterbox
+evaluation would be a separate preprocessing variant.
