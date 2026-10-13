@@ -760,8 +760,12 @@ annotation was `UNKNOWN`, so the 905 retained plates pass
 bounding-box geometry preflight. Unlike the 3,000-plate Poor
 subset, this version does not deduplicate labels/sources or
 silently exclude motorcycles, occlusions or missing vehicle types.
-It requires `--require-plate-format`, uses a separate LMDB
-(`LPLCv2_IllegibleBrazilianOCR_TEST`), and needs independent
-image-target QA before inference. Do not present visually
+The corrected `--require-plate-format` LMDB
+(`LPLCv2_IllegibleBrazilianOCR_TEST`) has now been built and
+`--verify-only` succeeded: **905 decodable records, 905 unique
+annotation IDs, 890 unique labels, 891 source photographs, 25
+known motorcycles, 318 missing vehicle types, zero occluded and
+zero clipped crops**. Independent source-image/target QA remains
+pending before inference. Do not present visually
 unverifiable labels as confirmed OCR ground truth or revise the
 original frozen Poor benchmark after observing these samples.
