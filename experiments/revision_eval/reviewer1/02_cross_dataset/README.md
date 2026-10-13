@@ -848,7 +848,14 @@ and **2,985 distinct OCR strings**, and zero cross-class
 source-photo or label overlap. The LMDB build **completed**, and the builder's internal staging
 verification ran before publication. Its frozen manifest SHA-256 is
 `3d64cb68c98732fc5803a3de40950efa1da1cb9421c0c653ba18b915bed30d05`.
-A separate **post-build** `--verify-only` run is still pending. Both the frozen Poor-only
+The independent post-build `--verify-only` **passed**:
+`verified: 3000`, `all_test_split: true`,
+`all_crops_lmdb_match: true`, and
+`all_model_inputs_96x32_bicubic: true`, with the
+exact same selection-manifest SHA-256. The frozen 842/2,158
+aspect-controlled variant is now ready for F=1 evaluation
+of both fixed CNN–ViT and SVTRv2-AR models. See the linked
+protocol for the independent result directories and commands. Both the frozen Poor-only
 result and unfiltered mixed-selection protocol remain unchanged.
 This is a post-hoc geometry sensitivity analysis, not
 an official LPLCv2 OCR test distribution.
