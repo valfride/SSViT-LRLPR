@@ -341,6 +341,13 @@ def build(args):
               f"records excluded; {len(candidates)} remain.")
         if len(candidates) == 0:
             raise RuntimeError("No annotations with recognized Brazilian plate formats")
+        # Recalculate geometry for the ACTUAL retained annotation population.
+        # Otherwise a rejected placeholder with an out-of-frame box would
+        # incorrectly block building the valid-label subset.
+        geometric = preflight_geometry(candidates, photos)
+        print("Retained plate-format geometry preflight:")
+        print(json.dumps({**geometric, "problems": geometric["problems"][:30]},
+                         indent=2))
     # Preflight every instance BEFORE staging an LMDB. No candidate is silently
     # discarded. An explicitly requested clipping policy is permitted only
     # for intersecting boxes above the chosen retained-area threshold.
