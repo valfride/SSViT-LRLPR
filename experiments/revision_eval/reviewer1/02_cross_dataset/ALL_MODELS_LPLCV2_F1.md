@@ -39,6 +39,34 @@ We have not independently re-read the local Table-I checkpoint-selection
 logs; filenames and `test.py` selection mechanics justify candidates
 but not an unconditional claim about previously executed Table-I runs.
 
+## Independent preflight confirmed on daugman (13 October 2026)
+
+The user ran `--write-lock-template`, then `--preflight` and
+`--run`. Both preflights passed, validating the frozen manifest
+hash, all eight checkpoint paths, and the presence/protocol of the
+two existing aggregate evaluations. The `--run` call **started
+MDiff4STR**; its completion and the remaining six-run metrics
+are not yet confirmed. Do not claim all eight runs completed.
+
+The following are the actual SHA-256 values printed by `--preflight`
+for the local frozen checkpoint files (not GitHub uploads):
+
+| Model | Selected checkpoint SHA-256 |
+| --- | --- |
+| MDiff4STR | `e7ec4524f397a15fe1ce7629b40c7cf7415028434eec2a3be0d092c9d64f5143` |
+| CPPD | `1de6f9cd0d424e714cb2c7721747ea296a82760f8a786f1849793fe5c1e7e89f` |
+| IGTR | `5d6a367dbb888a65e540b3491779cfa1fefa8dd69e33048c35d3faaa8d9d75d0` |
+| LISTER | `6cfa22a0707f03d5cd35d3df3f99b343d978212c990b038e5c7b4bd1fbe578c5` |
+| SVTRv2 | `3dc8d3af7664dd554aa8a02816380326fac2bbb838d1ede0b3398f7c02018e69` |
+| OTE | `2a64e2fcee16e1aaa1ebd2fdfa93a140d55e31231d8c44f4608b831fe47408a1` |
+| SVTRv2-AR | `c6f89c74deed70ab9dcc7ca46d7dd0f7c21cb0b3074a4dd15313689eb8692838` |
+| Ours | `1a7a640dafc368a8dda9ed6a18239b2d54a1f39e9aa0b581a5a405ec0697b11a` |
+
+The output also confirmed:
+`SVTRv2-AR: complete, will skip`;
+`Ours: complete, will skip`; and
+the other six models pending at the time of launch.
+
 ## Local checkpoint-locking and inference
 
 Pull the existing evaluation branch and inspect the candidates:
