@@ -845,8 +845,10 @@ The **two-sided [1.7, 4.0] dry-run now succeeded** with
 **842 Illegible and 2,158 Poor (3,000 total)**, original-crop
 aspect ratio **1.7059–4.0**, **2,986 distinct source photos**
 and **2,985 distinct OCR strings**, and zero cross-class
-source-photo or label overlap. Its LMDB build and independent
-verification are **still pending**. Both the frozen Poor-only
+source-photo or label overlap. The LMDB build **completed**, and the builder's internal staging
+verification ran before publication. Its frozen manifest SHA-256 is
+`3d64cb68c98732fc5803a3de40950efa1da1cb9421c0c653ba18b915bed30d05`.
+A separate **post-build** `--verify-only` run is still pending. Both the frozen Poor-only
 result and unfiltered mixed-selection protocol remain unchanged.
 This is a post-hoc geometry sensitivity analysis, not
 an official LPLCv2 OCR test distribution.
