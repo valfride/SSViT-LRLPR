@@ -1,9 +1,10 @@
 # Reviewer 1.2 — frozen LPLCv2 Poor-only cross-dataset experiment
 
 **Status:** the revised vehicle-type-filtered 3,000-sample LMDB was
-successfully prepared on daugman (13 October 2026). The motorcycle-excluded
-selection and SHA-256 are now recorded below. **Visual crop QA, overlap audit,
-and frozen-model inference are still pending**. The previous LMDB is retained.
+prepared and integrity-verified on daugman (13 October 2026). Its manifest
+hash and 19-label overlap audit have been recorded. The frozen CNN–ViT F=1
+inference has now been reported (24.57% RR); the SVTRv2-AR external baseline
+and detailed visual crop QA remain outstanding. The previous LMDB is retained.
 
 ## Scientific scope
 
@@ -325,3 +326,64 @@ observed 0.63% cross-test-label overlap.
 **Still pending before inference:** visual crop QA using the new
 `contact_sheet.jpg`; no model predictions have been used to select
 or remove external samples.
+
+## Frozen CNN–ViT external F=1 evaluation — 13 October 2026
+
+The **user-reported local evaluator output** for the frozen submitted-model
+checkpoint, using the motorcycle-excluded, label-unique 3,000-sample LPLCv2
+Poor test set at F=1, is:
+
+| Metric | Result |
+| --- | ---: |
+| Full seven-character exact-match RR | **24.57% (737/3000)** |
+| Character accuracy (corresponding slots) | **72.22% (15166/21000)** |
+| Character error rate (Levenshtein edits per GT character) | **27.73% (5824/21000)** |
+| At least 6/7 correct | 47.63% (1429/3000) |
+| At least 5/7 correct | 66.40% (1992/3000) |
+| Incorrect complete plates | 2,263 |
+| Old Brazilian layout | 33.95% (202/595) |
+| Mercosur layout | 22.25% (535/2405) |
+
+The difference between positional mismatches (21000 - 15166 = 5834)
+and reported edit errors (5824) is not necessarily an arithmetic mistake:
+the evaluator's slot metric and CER have different error definitions.
+Verify using the machine-readable evaluator JSON before manuscript insertion.
+
+The canonical LRLPR-26 F=1 result is 60.60%, corresponding to a
+**36.03 percentage point lower RR** on this *different, deliberately
+Poor-conditioned* external sample. The difference cannot be attributed
+solely to domain shift (sampling and legibility selection differ).
+These 3,000 individual plates are not 3,000 five-frame tracklets.
+
+Confidence-threshold summary from the same evaluator:
+
+| Minimum confidence | Retained | Coverage | Exact plate accuracy |
+| --- | ---: | ---: | ---: |
+| 0.00 | 3000 | 100.00% | 24.57% |
+| 0.50 | 2956 | 98.53% | 24.93% |
+| 0.70 | 2579 | 85.97% | 28.46% |
+| 0.80 | 1987 | 66.23% | 36.13% |
+| 0.90 | 1098 | 36.60% | 55.37% |
+| 0.95 | 621 | 20.70% | 71.66% |
+| 0.98 | 331 | 11.03% | 87.92% |
+| 0.99 | 210 | 7.00% | 92.86% |
+
+Mean confidence correct: 0.9466; incorrect: 0.8011; difference:
+0.1455. This indicates *discrimination* by score, not necessarily
+well-calibrated probabilities: no ECE/Brier/reliability analysis was
+reported. Accuracy at confidence thresholds is **selective coverage**,
+not all-sample accuracy.
+
+Local machine-generated outputs (not committed; preserve for provenance):
+
+- results/lplcv2_poor_ours/F1_bayes.json
+- results/lplcv2_poor_ours/F1_bayes_predictions.csv
+- results/lplcv2_poor_ours/matrix_manifest.json
+
+**Remaining:** verify attached contact sheet (including native crops as
+small as 9 pixels high); independently check metrics JSON/model checkpoint
+provenance; run frozen SVTRv2-AR baseline on the *same manifest* at F=1;
+report both models consistently in the manuscript and response letter.
+The 19/3000 overlap with LRLPR-26 test labels (0.63%) was audited but
+did not change the frozen selection. Report the restriction to
+vehicle-type-annotated non-motorcycle Poor samples.
