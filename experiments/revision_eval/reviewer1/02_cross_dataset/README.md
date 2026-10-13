@@ -419,3 +419,59 @@ F=1 RR was **41.33%** old Brazilian (248/600), **65.42%** Mercosur
 (202/595), **22.25%** Mercosur (535/2405). Interpret cautiously as
 legibility, acquisition conditions, crop scale, and plate format may be
 confounded; no isolated format-causal conclusion follows.
+
+
+## Native-resolution and cross-legibility sample audit (pending local run)
+
+**Motivation:** an external *Poor-legibility* label is **not** a
+native-low-resolution ground-truth label. LPLCv2 covers Perfect, Good,
+Poor, and Illegible plates with OCR text available on many plates
+outside Poor. The official README reports 36,414 OCR-annotated LPs
+overall; the local number of strict seven-character OCR labels in
+each class has **not** yet been measured. The LPLCv2 paper defines
+Poor by substantial distortions while still allowing recognition;
+it does not constrain native bounding-box pixel dimensions.
+
+Our external LPLCv2 result of 24.57% exact RR therefore supports
+**zero-shot transfer to selected Poor-legibility images**, but cannot
+be used by itself to claim performance on naturally low-resolution
+LPs. The model forcibly resizes each crop to 96x32, including large
+native crops, which must be distinguished from native acquisition LR.
+
+An independent, **read-only** local QA script has been added at
+`scripts/audit_lplcv2_samples.py`; it does not change the frozen
+dataset or use model predictions. On daugman:
+
+    cd ~/doc2025/project1
+    git pull --ff-only
+    python3 experiments/revision_eval/reviewer1/02_cross_dataset/scripts/audit_lplcv2_samples.py \
+      --dataset-root ~/doc2025/LMDB-Datasets/LPLC_dataset \
+      --manifest ~/doc2025/LMDB-Datasets/LPLCv2_PoorNonMotoUnique_TEST_3k/selection_manifest.json \
+      --output-dir ~/doc2025/LMDB-Datasets/LPLCv2_quality_audit_20261013 \
+      --seed 2026
+
+It writes `audit_summary.json`, including class-wise counts of OCR
+strings valid under our exact `[A-Z0-9]{7}` protocol; native
+bounding-box width/height distributions by legibility; and size
+statistics for the frozen 3,000-plate subset (e.g., native width
+above/below 96 px and height above/below 32 px).
+
+It also creates seven contact sheets: `legibility_perfect.jpg`,
+`legibility_good.jpg`, `legibility_poor.jpg`,
+`legibility_illegible.jpg`, `selected_random.jpg`,
+`selected_smallest_heights.jpg`, and
+`selected_largest_widths.jpg`. Each sample shows its full source
+image with the annotated plate box, original-pixel plate crop
+(display-scaled for human inspection), and the model's bicubic 96x32
+version (displayed 2x). All outputs must stay local or be shared
+only as allowed by the dataset's request-based license.
+
+**Interpretation warning:** plate dimensions alone cannot establish
+natural degradation: blur, compression, and lighting require
+visual assessment. Also, requiring a recorded non-motorcycle
+`car.type` removed 3,450 eligible seven-character Poor plate
+annotations with missing vehicle types; this type-known restriction
+may introduce further selection bias. If we expand evaluation to
+Perfect/Good or geometry-stratified subsets, define it as a clearly
+labeled **supplementary** analysis, preserving the original manifest
+and its 24.57% result without post-hoc editing.
