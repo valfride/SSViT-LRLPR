@@ -747,3 +747,15 @@ QA and report sensitivity analyses separately, without
 retroactive undocumented sample exclusion.
 
 Keep all restricted sample imagery and manual reports local.
+
+## Separate complete Illegible OCR subset (pending)
+
+For a supplementary *all OCR-labelled Illegible* (`leg=0`)
+evaluation, see [ILLEGIBLE_ALL_OCR.md](ILLEGIBLE_ALL_OCR.md). The
+local annotation audit found 1,189 exact seven-character Illegible
+labels. Unlike the 3,000-plate Poor subset, this complete variant
+does not deduplicate labels/sources or silently exclude motorcycle,
+occluded, or type-unknown annotations. It uses a separate output LMDB,
+a complete manifest and mandatory image-target QA. Do not interpret
+a visually unverifiable Illegible GT as necessarily erroneous or
+use the optional result to revise the frozen Poor benchmark.
