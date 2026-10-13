@@ -37,6 +37,68 @@ Do **not** turn LPLCv2 crops into JPEG 95, enforce HR/LR median-area ratios, or 
 
 Before freezing the new dataset we should inspect the **actual LRLPR-26 original LR crop native dimension/aspect histogram** if available; it is more relevant for cross-domain matching than extrapolating the `CompetitionDatasetV2` example configuration.
 
+## Important acquisition-time 20%-padding verification
+
+The user correctly identified an earlier **acquisition** step that is
+not visible from the curator's selection configuration alone.
+
+- [`config/intelbrasPTZvip.yaml`](https://github.com/valfride/DatasetAcquisition/blob/main/config/intelbrasPTZvip.yaml)
+  sets `camera.args.padding_ratio: 0.2`.
+- [`cameras/rtsp_pipeline.py`](https://github.com/valfride/DatasetAcquisition/blob/main/cameras/rtsp_pipeline.py):
+  `process_results` first calls
+  `crop_xywh(frame, detector_xywh, 0.0)` for `lp_type()`
+  classification, then `append_track` calls
+  `crop_xywh(frame, detector_xywh, self.padding_ratio)` for
+  the **actually saved** track crop.
+- In `crop_xywh`, `px=w*padding` and `py=h*padding`,
+  and `floor/ceil` box coordinates add **20% of original
+  bounding-box width/height on each of the two corresponding
+  sides**, before source-frame clipping. Unclipped geometry is
+  approximately `1.4*w x 1.4*h`, hence **1.96 times** the
+  original detector-box area.
+- The acquisition's `lp_type()` checks the **tight (zero-padding)
+  detector crop** against car/motorcycle aspect-range constraints;
+  `crop_xywh` also requires `min_crop_width: 24`,
+  `min_crop_height: 8` and `min_crop_area: 192` **by default**
+  (these are separate from the curator's later 8x4 floor).
+  Check the actual acquisition runtime's overrides before
+  calling these default minimums enforced production values.
+- Acquisition saves the initial `lp_*.jpg` crops at **JPEG
+  quality 90**; the later
+  [`lrlpr_curator/exporter.py`](https://github.com/valfride/DatasetAcquisition/blob/main/lrlpr_curator/exporter.py)
+  re-encodes the selected crops at **JPEG quality 95**.
+
+**Implication:** the original LPLCv2 builders crop the tight
+floor/ceil axis-aligned envelope of each quadrilateral label and
+write lossless PNGs. They **do not add the 20%-per-side acquisition
+padding**, so the plate occupies a different fraction of the
+96x32 input tensor. This may affect architecture comparisons
+under domain shift. Do not equate the LPLCv2 annotation rectangle
+with the acquisition detector's original bbox without explaining
+the proxy. Moreover, the public acquisition code relates to a
+particular acquisition pipeline and does **not prove that every
+crop in the frozen competition LRLPR-26 train/test set** went
+through it, especially the inherited dataset records.
+
+The read-only geometry audit now reports BOTH tight native-box
+dimensions and a **diagnostic 20%-per-side expansion**, including
+padded dimensions after frame clipping, how often padding would
+clip at the frame boundary, how often the complete expanded box
+retains a 2-pixel source-frame margin, and how many tight boxes
+pass the camera's default 24x8/192 pixel crop check. The
+`--min-aspect` and `--min-width` filters still refer to the
+**tight original annotation rectangle**, not the padded one.
+**No image pixels are altered or new LMDB built in the audit.**
+
+After inspecting the totals, a **new, explicitly named padded
+LPLCv2 LMDB** can be built for an acquisition-context
+sensitivity comparison with all eight frozen models, alongside
+the existing unpadded LPLCv2 results. Both the padding rule
+and any clipping/2-pixel-margin exclusion decisions must be
+fixed for **all architectures** before inference. Avoid
+replacing the original benchmark with a padded-only result
+chosen after observing which model performs better.
+
 ## Actual production configuration supplied by the user (13 October 2026)
 
 The production config from peixoto has `images_per_role=5`,
@@ -118,7 +180,7 @@ python3 "$AUDIT" \
 
 The script reads the **original full annotation source**; it accepts `leg=1` Poor and `leg=0` Illegible, **old Brazilian or Mercosur 7-character OCR format**, a decoded source image and a fully in-bounds original axis-aligned crop, then applies inclusive native aspect and minimum native width/height. It does **not** exclude motorcycles, occlusion, unknown vehicle types, repeated source images, or repeated OCR labels. It never reads recognizer predictions. All included plate crops will receive the unchanged frozen 96x32 bicubic resize during later evaluation (no padding).
 
-The audit prints **only aggregates**, including totals before and after geometry filtering, exclusion counts, original-annotation SHA-256, source/label repeat counts, native width and height percentiles, native aspect percentiles, zero/under-2px source-image border margin counts, and how many selected annotations survive progressively stronger width/height cutoffs (24x8, 30x10, 36x12, 42x14, 48x16).
+The audit prints **only aggregates**, including totals before and after geometry filtering, exclusion counts, original-annotation SHA-256, source/label repeat counts, native width and height percentiles, native aspect percentiles, zero/under-2px source-image border margin counts, acquisition-like 20%-per-side padded-crop geometry and clipping diagnostics, and how many selected annotations survive progressively stronger width/height cutoffs (24x8, 30x10, 36x12, 42x14, 48x16).
 
 The optional `--output-json` should point **outside the public Git checkout** or be kept excluded from Git.
 
