@@ -1,9 +1,10 @@
 # LPLCv2 mixed Poor/Illegible: native aspect-controlled 3,000-crop F=1 test
 
-**Status:** aspect-filtered **dry-run completed successfully** on daugman.
-The selected 3,000-crop population now contains **844 Illegible and 2,156 Poor**;
-its original crop aspect ratio has minimum **1.7059**. The completed
-LMDB build and `--verify-only` output have **not yet been supplied**.
+**Status:** previous **minimum-only** (`native aspect >=1.7`) dry-run completed
+on daugman with 844 Illegible and 2,156 Poor plate crops.
+**The revised [1.7, 4.0] two-sided variant has NOT been dry-run
+or built yet.** Its final counts and hash remain unknown.
+The old minimum-only preview is retained below as historical evidence.
 This is an explicitly post-hoc, new test **variant**. Never overwrite
 the previous mixed 905 Illegible + 2,095 Poor dataset, or replace
 the earlier frozen Poor-only 3,000-case external evaluation.
@@ -21,12 +22,11 @@ deterministically by `prepare_lplcv2_mixed_3k.py` (seed 2026):
 Then use the **native** lossless crop width and height already
 recorded in the source manifests:
 
-1. Remove **every** initially selected crop with native
-   width / native height **below 1.7**. This applies to
-   both the Illegible and Poor portions; a crop with
-   aspect ratio exactly 1.7 is retained.
-2. Keep every initially selected crop with aspect ratio **>= 1.7**;
-   do not preferentially discard other samples or change their GT.
+1. Remove **every** initially selected crop with native aspect ratio
+   **below 1.7 or above 4.0**, from either Illegible or Poor.
+   Bounds are inclusive: exactly **1.7 and 4.0 are retained**.
+2. Keep every initially selected crop with ratio **in [1.7, 4.0]**;
+   do not change its OCR label, pixels or inclusion for other reasons.
 3. Replace removed entries 1-for-1 with **unused** crops from the
    already frozen Poor-3k source pool, with native crop ratios in
    **[2.5, 3.5]** inclusive and no overlapping Illegible source
@@ -63,17 +63,19 @@ but the remaining crops may still be geometrically stretched.
 fine-tuning or checkpoint changes** are introduced.
 
 This deliberately changes the evaluated population, especially by
-dropping unusual-perspective plate crops. It therefore cannot be
+dropping unusual-perspective narrow and wide plate crops, some of
+which can be legitimate. It therefore cannot be
 reported as the same dataset or as an unbiased improvement of OCR
 performance. Any comparison to the unfiltered mixed set is a
 **post-hoc geometry sensitivity analysis**, and the prior
 Poor-only external RR of 24.57% remains unchanged.
 
-## Observed aspect-controlled dry-run — 13 October 2026
+## Historical lower-bound-only dry-run — 13 October 2026
 
-The user ran the builder's geometry-controlled preview on `daugman` and
-supplied the following end-state and geometry figures. **These are
-dry-run statistics; no completed dataset has been verified.**
+The user ran the old builder with **only** `--min-native-aspect 1.7`,
+without a maximum, and supplied the following statistics.
+**These results do NOT represent the revised [1.7,4.0] filter.**
+The new dry-run must still establish its class counts.
 
 | Property | Original mixed 3,000 | Geometry-controlled preview |
 | --- | ---: | ---: |
@@ -88,7 +90,9 @@ dry-run statistics; no completed dataset has been verified.**
 | Native aspect deviation >10% from 3:1 | 1,419 | **1,369** |
 | Native aspect deviation >20% from 3:1 | 438 | **363** |
 
-Sixty-one Illegible samples were removed (905 → 844).
+Sixty-one Illegible samples were removed by the **old minimum-only**
+filter (905 → 844). Additional Illegible samples over 4.0 may
+be removed by the new two-sided filter.
 The total number of removed and replenished Poor samples
 cannot be determined from the *final class totals alone*; inspect
 `native_aspect_selection.removed_counts` and
@@ -120,17 +124,33 @@ Model configuration SHA-256s checked by the dry-run:
   `f8c656f5486018553c88746678de842d7dd5ff3ebb30f1697ad48a3e8dc0a31f`
 
 Both configs specify the same direct bicubic resize to **96×32**,
-without padding. The crop filter applies **only the lower native
-aspect bound (1.7)**; retained extreme wide crops above 3.5
-are intentionally not removed. The 75-case reduction in
+without padding. The **historical** filter applied only the lower
+bound (1.7), allowing very wide crops. The **revised** filter
+also rejects aspect ratios above 4.0. The historical 75-case
+reduction in
 `>20%` native-aspect deviations is descriptive and does not
 establish improved OCR accuracy or annotation correctness.
 
 The existing baseline datasets and evaluation scores remain
-unchanged. The next step is to run the non-dry command below in
-a **new output directory**, verify all 3,000 crops, freeze the
+unchanged. The next step is to run the **new two-sided dry-run**
+below, inspect removal and replacement supply, and then build
+in a **new output directory** if viable; verify all 3,000 crops, freeze the
 resulting new selection manifest SHA-256, and run the frozen
 models with independent result output paths.
+
+### Selection regression tests
+
+From the repository root, run:
+
+```bash
+python3 -m unittest discover \
+  -s experiments/revision_eval/reviewer1/02_cross_dataset/scripts \
+  -p 'test_prepare_lplcv2_mixed_3k.py' -v
+```
+
+The tests check inclusive [1.7,4.0] boundaries, separately counted
+narrow/wide removals, deterministic no-overlap Poor replenishment,
+failure on insufficient supplies, and the old unfiltered/lower-only modes.
 
 ## Phase 1: dry-run on daugman (do this FIRST)
 
@@ -141,9 +161,10 @@ git pull --ff-only
 python3 experiments/revision_eval/reviewer1/02_cross_dataset/scripts/prepare_lplcv2_mixed_3k.py \
   --illegible ~/doc2025/LMDB-Datasets/LPLCv2_IllegibleBrazilianOCR_TEST \
   --poor ~/doc2025/LMDB-Datasets/LPLCv2_PoorNonMotoUnique_TEST_3k \
-  --output ~/doc2025/LMDB-Datasets/LPLCv2_MixedAspectControlled_TEST_3k \
+  --output ~/doc2025/LMDB-Datasets/LPLCv2_MixedAspect1p7to4p0_TEST_3k \
   --seed 2026 \
   --min-native-aspect 1.7 \
+  --max-native-aspect 4.0 \
   --refill-aspect-min 2.5 \
   --refill-aspect-max 3.5 \
   --dry-run
@@ -153,10 +174,10 @@ Inspect `native_aspect_selection`:
 `removed_counts`, `removed_total`,
 `unused_near_ideal_poor_candidates`,
 `added_near_ideal_poor`, and `final_counts`.
-It will report the original sample identities and aspects for
-every removal and replacement. It should retain exactly
-3,000 crops with no native ratios below 1.7, but the
-final number of Illegible examples is unknown until this run.
+It will report `removed_below_min` and `removed_above_max`,
+the actual candidate inventory and all removal/replacement identities.
+Every retained crop must fall within **[1.7, 4.0]**; exactly
+3,000 crops must remain. The new Illegible count is unknown.
 
 If the shortage safeguard triggers, inspect the actual inventory
 before negotiating a documented alternative. Do NOT silently
@@ -171,9 +192,10 @@ without `--dry-run`:
 python3 experiments/revision_eval/reviewer1/02_cross_dataset/scripts/prepare_lplcv2_mixed_3k.py \
   --illegible ~/doc2025/LMDB-Datasets/LPLCv2_IllegibleBrazilianOCR_TEST \
   --poor ~/doc2025/LMDB-Datasets/LPLCv2_PoorNonMotoUnique_TEST_3k \
-  --output ~/doc2025/LMDB-Datasets/LPLCv2_MixedAspectControlled_TEST_3k \
+  --output ~/doc2025/LMDB-Datasets/LPLCv2_MixedAspect1p7to4p0_TEST_3k \
   --seed 2026 \
   --min-native-aspect 1.7 \
+  --max-native-aspect 4.0 \
   --refill-aspect-min 2.5 \
   --refill-aspect-max 3.5
 ```
@@ -182,7 +204,7 @@ python3 experiments/revision_eval/reviewer1/02_cross_dataset/scripts/prepare_lpl
 python3 experiments/revision_eval/reviewer1/02_cross_dataset/scripts/prepare_lplcv2_mixed_3k.py \
   --illegible ~/doc2025/LMDB-Datasets/LPLCv2_IllegibleBrazilianOCR_TEST \
   --poor ~/doc2025/LMDB-Datasets/LPLCv2_PoorNonMotoUnique_TEST_3k \
-  --output ~/doc2025/LMDB-Datasets/LPLCv2_MixedAspectControlled_TEST_3k \
+  --output ~/doc2025/LMDB-Datasets/LPLCv2_MixedAspect1p7to4p0_TEST_3k \
   --verify-only
 ```
 
