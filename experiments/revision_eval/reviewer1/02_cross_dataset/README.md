@@ -879,3 +879,17 @@ per-track predictions. These are exploratory, as-annotated
 post-hoc geometry-controlled results, **not** the older
 Poor-only cross-dataset result.
 
+
+
+## Full Table-I cross-dataset matrix (eight models)
+
+See [ALL_MODELS_LPLCV2_F1.md](ALL_MODELS_LPLCV2_F1.md) for the new
+checkpoint-locked F=1 runner. Frozen CNN–ViT and SVTRv2-AR results
+are complete on the identical independently verified 3,000-crop
+mixed-aspect LMDB; MDiff4STR, CPPD, IGTR, LISTER, SVTRv2 (CTC),
+and OTE are pending on daugman. The runner first inventories
+candidate local checkpoints, requires an explicit local lock for
+all eight prior LRLPR-26 validation-selected weights, skips
+completed runs without overwriting them, and prints a Table-I-style
+7/7, >=6, >=5 summary when requested. Do not commit restricted
+crop records or per-image predictions.
