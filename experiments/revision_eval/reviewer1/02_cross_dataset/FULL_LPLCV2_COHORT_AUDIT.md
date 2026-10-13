@@ -13,6 +13,30 @@ The user proposed original crop width/height in **[2.5, 3.5]** (rather than the 
 The committed [DatasetAcquisition example configuration](https://github.com/valfride/DatasetAcquisition/blob/main/config/lrlpr_extension.example.yaml) sets `selection.minimum_crop_width: 8` and `selection.minimum_crop_height: 4`.
 Its [curator selector](https://github.com/valfride/DatasetAcquisition/blob/main/lrlpr_curator/selection.py) supports an **optional lower-only** `minimum_crop_aspect_ratio` but **no upper bound**. The example configuration does not enable that aspect filter. Thus [2.5, 3.5] is **our explicitly stricter LPLCv2 selection**, not a rule copied from DatasetAcquisition. The acquisition size minimum (8x4) is a **permissive integrity floor**, not a guarantee of useful OCR information.
 
+## Verified DatasetAcquisition curator semantics and cross-evaluation fairness
+
+Read directly from the current public `valfride/DatasetAcquisition` `main` branch:
+
+- [`lrlpr_curator/source.py`](https://github.com/valfride/DatasetAcquisition/blob/main/lrlpr_curator/source.py): `validate_observation_crop` decodes the **already cropped** source image and checks its actual width and height against the configured minimums (8x4 if unspecified). Its ROI/detector metadata is not used to recrop the exported plate.
+- [`lrlpr_curator/selection.py`](https://github.com/valfride/DatasetAcquisition/blob/main/lrlpr_curator/selection.py): each candidate **track** requires at least 2 x (5 images + 2 skipped edges) = 14 observations. The first five after the skipped start are HR; the last five before the skipped end are LR. This is **temporal ordering**, not deterministic native-pixel-size ranking. Optional `minimum_crop_aspect_ratio` is **lower-only**; optional `minimum_hr_lr_median_area_ratio` applies to a **track's HR/LR median areas**, not to an isolated F=1 crop. Neither option is enabled in the tracked example configuration.
+- [`lrlpr_curator/common.py`](https://github.com/valfride/DatasetAcquisition/blob/main/lrlpr_curator/common.py): accepted labels follow the two Brazilian seven-character formats.
+- [`lrlpr_curator/curator_run.py`](https://github.com/valfride/DatasetAcquisition/blob/main/lrlpr_curator/curator_run.py): the example policy enforces *global* unique labels for exported tracks, also preventing exact repeated selected-content fingerprints.
+- [`lrlpr_curator/exporter.py`](https://github.com/valfride/DatasetAcquisition/blob/main/lrlpr_curator/exporter.py): exported track crops are read back and written as JPEG quality 95; no new detector-box crop or resize is performed at export.
+- [`scripts/audit_curated_track_image_geometry.py`](https://github.com/valfride/DatasetAcquisition/blob/main/scripts/audit_curated_track_image_geometry.py): the **separate post-hoc audit** defaults to a 2.0 *minimum* native aspect ratio and checks HR/LR median-area ratios of 1.25 and 1.5. These are **audit thresholds**, not evidence that those filters were enforced by the curator or by the official LRLPR-26 train/test partitions.
+- The active scenario-specific `config/lrlpr_extension.yaml` is deliberately [Git-ignored](https://github.com/valfride/DatasetAcquisition/blob/main/.gitignore). **We cannot infer the actual production curation thresholds from the public example.** Also, `CompetitionDatasetV2` includes inherited pre-curated V1 tracks; this curator's defaults do not establish the geometry distribution of the published, frozen LRLPR-26 dataset.
+
+### Fairness decision for the new full-source external experiment
+
+**Fairness between the eight frozen recognizers** requires the same image identities, valid label handling, original crop geometry, the **existing identical 96x32 bicubic preprocessing**, no checkpoint retuning, and no model-dependent exclusion. All models must be evaluated on exactly the same fixed output LMDB.
+
+**Training-domain comparability** is a separate objective. The proposed 2.5-3.5 native ratio band is **stricter than DatasetAcquisition's tracked curation configuration** and therefore defines a **geometry-matched sensitivity cohort**, not the unbiased full LPLCv2 population or an exact reconstruction of the official LRLPR-26 curation. The 8x4 floor matches the repository default for basic crop validity, **not** an OCR-quality minimum. Preserve the read-only audit's broader `all_valid_geometry_before_ratio_filter` totals and report rejection rates by Poor/Illegible. Do not call the selected population simply “all LPLCv2.”
+
+Keep every qualifying original annotation including motorcycles, occluded records, missing vehicle types, and repeated source photos/plate strings; the latter are counted and should be disclosed. Imposing the curator's **global label-uniqueness policy** on this external dataset would create a *different*, potentially less representative selected cohort and is not necessary for equal-input comparison. If desired, a separately labelled unique-label sensitivity check may be conducted after the primary evaluation, without replacing it.
+
+Do **not** turn LPLCv2 crops into JPEG 95, enforce HR/LR median-area ratios, or sort F=1 samples temporally just to mimic the multi-frame acquisition curator: those would alter the published input distribution or impose undefined single-frame conditions. Keep LPLCv2 source PNG crops unchanged and note acquisition/export compression as one uncontrolled domain difference.
+
+Before freezing the new dataset we should inspect the **actual LRLPR-26 original LR crop native dimension/aspect histogram** if available; it is more relevant for cross-domain matching than extrapolating the `CompetitionDatasetV2` example configuration.
+
 ## Read-only audit on daugman (no inference or crops written)
 
 ```bash
