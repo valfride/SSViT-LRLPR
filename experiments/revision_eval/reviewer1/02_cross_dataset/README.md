@@ -621,3 +621,67 @@ justified, define objective image-only exclusion rules and report
 it explicitly as a secondary sensitivity analysis; never silently
 remove hard examples after reading OCR predictions. The crop QA
 has not yet been completed for all 3,000 samples.
+
+
+## Annotation-target correctness concern — 13 October 2026
+
+After the first native-resolution contact-sheet audit, the source
+photograph associated with the selected annotation "AYL8217" was
+inspected with its original red annotation bounding rectangle.
+
+**Observed:** the box sits on a partially visible vehicle at the
+**top edge of the source image**, and its crop looks like an almost
+uniform gray strip with a dark border. A prominent silver SUV
+occupies the foreground, but **its plate is NOT inside the
+annotated box**. Because the source contains multiple vehicles,
+this does **not** demonstrate that the OCR label belongs to the
+foreground SUV. It could be a legitimate annotation of a different,
+partially visible vehicle, with ground truth unavailable from
+this particular frame; it could also be a mismatched/incorrect
+annotation. Only a source-aware review can distinguish these cases.
+
+**Scientific consequence:** the 24.57% external CNN–ViT exact-match
+result is a reproducible output on the *as-annotated* frozen subset,
+but **annotation-target quality is not yet independently verified**.
+Do not present it as a fully quality-audited external accuracy or
+conclude that the errors arise only from natural degradation.
+
+To assess potential prevalence, new read-only script
+\`scripts/audit_lplcv2_annotation_quality.py\` produces review pages
+for **all 3,000 samples**, plus pages of priority cases selected
+without looking at model predictions. Each item displays: a full
+source image with the original rectangle, a detailed crop-neighborhood
+view, and the extracted image patch. The outputs never alter or
+overwrite the frozen LMDB/manifest/predictions.
+
+    cd ~/doc2025/project1
+    git pull --ff-only
+    python3 experiments/revision_eval/reviewer1/02_cross_dataset/scripts/audit_lplcv2_annotation_quality.py \
+      --dataset-root ~/doc2025/LMDB-Datasets/LPLC_dataset \
+      --manifest ~/doc2025/LMDB-Datasets/LPLCv2_PoorNonMotoUnique_TEST_3k/selection_manifest.json \
+      --output-dir ~/doc2025/LMDB-Datasets/LPLCv2_annotation_QA_20261013
+
+Outputs:
+- \`qa_summary.json\`: objective priority-flag counts and manifest SHA;
+- \`qa_samples.csv\`: 3,000 rows, with blank \`manual_status\`
+  and \`manual_note\` columns for independent manual inspection;
+- \`priority_pages/page_*.jpg\`: edge-adjacent, low-contrast or unusual
+  aspect-ratio crops prioritized for manual review;
+- \`all_pages/page_*.jpg\`: **all** 3,000 instances for denominator-wide
+  visual review (24 per image).
+
+**Priority rules are diagnostic flags, NOT exclusion criteria.**
+Edge-adjacent plates can be legitimate; dark/low-texture samples can
+be genuinely Poor. A reviewer should distinguish (i) correctly
+localized but difficult plates, (ii) partial/out-of-frame plates,
+(iii) incorrect/mismatched box, and (iv) unverifiable OCR GT. The
+annotated plate may refer to a **different vehicle** from the most
+prominent one in the photograph. Do not reconstruct or substitute
+another vehicle's visible plate as the target.
+
+Record the number of reviewed, suspect, and confirmed invalid
+annotations *before* any secondary quality-controlled evaluation.
+Retain the **original 3,000-sample results unaltered**, explicitly
+labeling any future filtered analysis as an additional, post-hoc
+sensitivity check. Data assets and review sheets remain local,
+subject to LPLCv2 redistribution restrictions.
