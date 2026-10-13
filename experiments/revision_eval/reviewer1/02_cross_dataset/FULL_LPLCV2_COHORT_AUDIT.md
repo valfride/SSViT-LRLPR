@@ -1,8 +1,10 @@
 # Full eligible LPLCv2 Poor + Illegible geometry audit
 
-**Status:** read-only audit committed; **no full-cohort LMDB has been built or evaluated**. All earlier 3,000-crop mixed and Poor-only experiments remain frozen and unchanged.
+**Status (13 October 2026):** The 7,023-sample evaluation set has been built and independently verified in both tight and 20%-context crop representations. All eight frozen recognizers were evaluated on the padded representation only, and the completed aggregate results are recorded below. The tight representation was not evaluated; the earlier 3,000-image diagnostic experiments remain unchanged.
 
-## Why a new population?
+## Historical pre-build selection analysis
+
+The following sections preserve the original selection decisions and pre-build checks for provenance. The completed verification and inference results appear later in this report.
 
 The current 3,000-crop mixed LPLCv2 test set was sampled from a **previously sampled, 3,000-crop non-motorcycle Poor LMDB** and an Illegible pool. Its Poor group excludes several vehicle types, and this eligibility differs from the Illegible pool. To evaluate **all eligible annotations**, use the original local `LPLC_dataset/annotations_v2.json` and `LPLC_dataset/images/` directly. Do not take the union of old LMDBs or refill to 3,000.
 
