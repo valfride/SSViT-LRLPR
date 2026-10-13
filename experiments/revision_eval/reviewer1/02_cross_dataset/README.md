@@ -843,5 +843,10 @@ the frozen Poor-only external evaluation.
 
 See [MIXED_ASPECT_CONTROLLED_3K.md](MIXED_ASPECT_CONTROLLED_3K.md)
 for the dry-run/build/verify commands and caveats. The
-actual filtered class counts are **not yet known** and
-should not be guessed before running the local dry-run.
+**successful dry-run** selected 844 Illegible and 2,156 Poor
+plate crops (3,000 total), retaining 2,986 distinct source
+photographs and 2,985 OCR strings with zero cross-class
+overlap. Native crop min aspect ratio became 1.7059;
+the >20%-off-3:1 count fell from 438 to 363. The model
+input remains 96×32 direct bicubic. **LMDB creation and
+full validation are still pending.**
