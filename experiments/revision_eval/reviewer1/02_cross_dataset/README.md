@@ -822,3 +822,26 @@ the resizing can stretch non-3:1 crops. See the dedicated
 [MIXED_POOR_ILLEGIBLE_3K.md](MIXED_POOR_ILLEGIBLE_3K.md)
 aspect-ratio protocol. Any aspect-preserving letterbox
 evaluation would be a separate preprocessing variant.
+
+
+## New post-hoc native-aspect-controlled mixed variant (pending)
+
+A distinct **3,000-plate** variant removes only source crop
+aspect ratios below **1.7:1** from the previously seeded mixed
+905-Illegible/2,095-Poor selection, then replenishes with an
+equal number of **unused Poor** crops having aspect ratios
+between **2.5:1 and 3.5:1**. The replacement pool excludes
+photographs or OCR labels overlapping with Illegible.
+Hence the remaining Illegible count may be below 905, with
+the corresponding number added to Poor. All model inputs
+remain 96×32 bicubic; actual crop bytes remain unchanged.
+The builder checks both parent manifest hashes and records
+every removal/replacement. The original mixed dataset
+remains unchanged and the new experiment is explicitly
+**post-hoc geometry sensitivity**, not a replacement for
+the frozen Poor-only external evaluation.
+
+See [MIXED_ASPECT_CONTROLLED_3K.md](MIXED_ASPECT_CONTROLLED_3K.md)
+for the dry-run/build/verify commands and caveats. The
+actual filtered class counts are **not yet known** and
+should not be guessed before running the local dry-run.
