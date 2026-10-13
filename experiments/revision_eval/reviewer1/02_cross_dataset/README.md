@@ -540,3 +540,49 @@ evidence of causal impact from size alone.
 
 The original frozen test selection and predictions are read-only.
 Keep the output within the restricted local dataset workspace.
+
+
+## Measured native-size accuracy on frozen LPLCv2 Poor test — 13 October 2026
+
+The read-only local `analyze_accuracy_by_native_size.py` was run on
+the **unchanged** frozen 3,000-sample selection and submitted CNN–ViT
+F=1 prediction CSV; overall accuracy reconciled at **737/3000 =
+24.567%**. Selected annotation geometry in both axes <=96×32
+comprised **2,768/3,000 = 92.27%**. This is an image-annotation
+dimension measure, *not* proof of untouched sensor resolution.
+
+### Accuracy by original bounding-box width
+
+| Native width (px) | Plates | Exact RR | Character-slot accuracy | CER |
+| --- | ---: | ---: | ---: | ---: |
+| <=32 | 39 | 23.08% | 60.07% | 39.93% |
+| 33–48 | 2,067 | 23.17% | 72.12% | 27.84% |
+| 49–64 | 498 | **34.94%** | 77.51% | 22.43% |
+| 65–96 | 208 | 19.71% | 67.38% | 32.49% |
+| >96 | 188 | 18.09% | 67.17% | 32.83% |
+
+### Accuracy by original bounding-box height
+
+| Native height (px) | Plates | Exact RR | Character-slot accuracy | CER |
+| --- | ---: | ---: | ---: | ---: |
+| <=12 | 147 | 12.93% | 55.01% | 44.90% |
+| 13–16 | 1,456 | 19.30% | 70.10% | 29.86% |
+| 17–24 | 993 | **35.95%** | 79.63% | 20.34% |
+| 25–32 | 173 | 23.70% | 69.20% | 30.55% |
+| >32 | 231 | 16.88% | 66.91% | 33.09% |
+
+**Interpretation:** apparent accuracy is not monotonic in bounding-box
+dimensions: medium-height / medium-width samples performed better
+than the very small and larger-crop groups. This is an exploratory
+**post-hoc** finding and may reflect plate layout, camera/source,
+illumination, distortion, selection bias, and other confounders.
+Do not infer causal dependence or advocate filtering larger plates
+based on these test results.
+
+**Next diagnostic (read-only):** the analysis script now also emits
+`by_layout` and `by_time_of_day` tables with native-width/height
+bin counts and accuracies. Run it again with a **new** output filename
+(e.g., `accuracy_by_native_size_stratified.json`) rather than
+overwriting the old output; examine whether the nonmonotonic
+pattern persists separately within Brazilian/Mercosur classes. The
+sample and model prediction CSV must remain unchanged.
