@@ -210,7 +210,9 @@ def choose_balanced(by_track: dict, results: dict, source: Path, seed: int):
             raise ValueError("Retained source metadata mismatch for " + tid)
         ours = results["Ours"][tid].matches
         peers = max(results[m][tid].matches for m in MODEL_ORDER[1:])
-        if (category == "full" and (ours != 7 or peers > thresholds.get("full_max_peer", 6))
+        if (category == "full" and (ours != 7 or
+                    results["Ours"][tid].text != row["ocr"] or
+                    peers > thresholds.get("full_max_peer", 6))
                 or category == "one_error" and (ours != 6 or peers > thresholds.get("partial_max_peer", 5))
                 or category == "two_three_errors" and
                 (ours not in (4, 5) or peers > thresholds.get("hard_max_peer", 3))):
@@ -230,7 +232,8 @@ def choose_balanced(by_track: dict, results: dict, source: Path, seed: int):
     candidates = [
         tid for tid, row in by_track.items()
         if row["source_legibility"] == "Illegible"
-        and all(results[m][tid].matches == 7 for m in MODEL_ORDER)
+        and all(results[m][tid].matches == 7 and
+                results[m][tid].text == row["ocr"] for m in MODEL_ORDER)
     ]
     rng = random.Random(seed)
     rng.shuffle(candidates)
