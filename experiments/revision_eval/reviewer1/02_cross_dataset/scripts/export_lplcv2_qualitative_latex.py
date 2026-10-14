@@ -128,7 +128,9 @@ def colored_prediction(pred: str, truth: str) -> str:
 def latex_card(example) -> str:
     number, category, _crop, size, truth, checked = example
     letter = chr(ord("a") + number - 1)
-    category_title = (f"{7 - checked['Ours'].matches} wrong positions"\n                      if category == "two_three_errors"\n                      else CATEGORY_TITLES[category])
+    category_title = (f"{7 - checked['Ours'].matches} wrong positions"
+                      if category == "two_three_errors"
+                      else CATEGORY_TITLES[category])
     parts = [
         r"\begin{minipage}[t]{0.235\textwidth}",
         r"\vspace{0pt}\centering",
@@ -154,7 +156,13 @@ def latex_card(example) -> str:
 
 
 def render_figure(examples) -> str:
-    cards = [latex_card(e) for e in examples]\n    last_matches = [e[5]["Ours"].matches for e in examples[6:]]\n    last_clause = (\n        f"{last_matches[0]} in both (g) and (h)."\n        if last_matches[0] == last_matches[1]\n        else f"{last_matches[0]} in (g) and {last_matches[1]} in (h)."\n    )
+    cards = [latex_card(e) for e in examples]
+    last_matches = [e[5]["Ours"].matches for e in examples[6:]]
+    last_clause = (
+        f"{last_matches[0]} in both (g) and (h)."
+        if last_matches[0] == last_matches[1]
+        else f"{last_matches[0]} in (g) and {last_matches[1]} in (h)."
+    )
     grid = (" &\n".join(cards[:4]) + r" \\[2.5mm]" + "\n"
             + " &\n".join(cards[4:]) + r" \\" + "\n")
     return "\n".join([
