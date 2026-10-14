@@ -128,19 +128,19 @@ def colored_prediction(pred: str, truth: str) -> str:
 def latex_card(example) -> str:
     number, category, _crop, size, truth, checked = example
     letter = chr(ord("a") + number - 1)
-    category_title = CATEGORY_TITLES[category]
+    category_title = (f"{7 - checked['Ours'].matches} wrong positions"\n                      if category == "two_three_errors"\n                      else CATEGORY_TITLES[category])
     parts = [
         r"\begin{minipage}[t]{0.235\textwidth}",
         r"\vspace{0pt}\centering",
-        r"{\scriptsize\bfseries (" + letter + ") " + category_title + r"}\par\vspace{1mm}",
+        r"{\fontsize{7.5}{9}\selectfont\bfseries (" + letter + ") " + category_title + r"}\par\vspace{1mm}",
         r"{\setlength{\fboxsep}{1pt}"
         r"\fbox{\includegraphics[width=\dimexpr\linewidth-2\fboxsep-2\fboxrule\relax,"
-        r"height=0.65in,keepaspectratio]{\LPLQualPath/crops/example_"
+        r"height=0.73in,keepaspectratio]{\LPLQualPath/crops/example_"
         + f"{number:02d}" + r".png}}}\par",
-        r"{\fontsize{5.7}{6.8}\selectfont\color{gray}"
+        r"{\fontsize{6.5}{7.7}\selectfont\color{gray}"
         + "Illegible; native " + str(size[0]) + r"$\times$" + str(size[1])
         + r" px}\par\vspace{0.7mm}",
-        r"{\fontsize{6.6}{8}\selectfont",
+        r"{\fontsize{8}{9.8}\selectfont",
         r"\begin{tabular}{@{}l@{\hspace{2pt}}l@{\hspace{2pt}}r@{}}",
         r"\textbf{GT} & {\ttfamily " + truth + r"} & --\\",
     ]
@@ -154,7 +154,7 @@ def latex_card(example) -> str:
 
 
 def render_figure(examples) -> str:
-    cards = [latex_card(e) for e in examples]
+    cards = [latex_card(e) for e in examples]\n    last_matches = [e[5]["Ours"].matches for e in examples[6:]]\n    last_clause = (\n        f"{last_matches[0]} in both (g) and (h)."\n        if last_matches[0] == last_matches[1]\n        else f"{last_matches[0]} in (g) and {last_matches[1]} in (h)."\n    )
     grid = (" &\n".join(cards[:4]) + r" \\[2.5mm]" + "\n"
             + " &\n".join(cards[4:]) + r" \\" + "\n")
     return "\n".join([
@@ -169,15 +169,18 @@ def render_figure(examples) -> str:
         grid.rstrip("\n"),
         r"\end{tabular}",
         r"\endgroup",
-        r"\caption{\VN{Eight illustrative, model-performance-conditioned examples from",
-        r"the Illegible-labelled LPLCv2 evaluation set ($F=1$). The first four",
-        r"examples are fully correct for our model, the next two have one wrong",
-        r"position, and the last two have two or three wrong positions.",
-        r"Character colors indicate agreement (green) or disagreement (red)",
-        r"with the dataset transcription at each position. Native padded crops",
-        r"are displayed without altering the evaluation images. These selected",
-        r"examples are not representative of the complete evaluation set;",
-        r"Illegible is a source annotation, not independently established unreadability.}}",
+        r"\caption{\VN{Eight performance-selected examples from the LPLCv2",
+        r"subset labelled Illegible ($F=1$). In (a)--(d), our model matches all",
+        r"seven annotated characters while both comparison models do not; it",
+        r"matches six in (e)--(f) and " + last_clause,
+        r"Green and red characters indicate position-wise agreement and",
+        r"disagreement with the source transcription, respectively.",
+        r"Panels show native-resolution padded crops enlarged for",
+        r"visualization; all recognizers were evaluated on the corresponding",
+        r"crops bicubically resized to $96\times32$.",
+        r"Illegible is a source annotation, not independently verified",
+        r"human unreadability. These deliberately selected examples are not",
+        r"representative of the full evaluation set.}}",
         r"\label{fig:lplcv2_qualitative}",
         r"\end{figure*}",
         "",
