@@ -27,6 +27,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 BASE = Path(__file__).resolve().parents[1]
 DEFAULT_DATASET = Path.home() / "doc2025/LMDB-Datasets/LPLCv2_AcqStrict_Padded20pct_7023"
 DEFAULT_OUTPUT = BASE / "results/qualitative_illegible_7023"
+BALANCED_OUTPUT = BASE / "results/qualitative_illegible_7023_balanced"
 MANIFEST_SHA256 = "107d53e3c2f48ecfe118bb222a828080f6750632b7c9b51a523ef186347ffb48"
 EXPECTED_COUNT = 7023
 EXPECTED_GROUPS = {"Poor": 6240, "Illegible": 783}
@@ -178,6 +179,84 @@ def choose(by_track: dict, results: dict, excluded: set[str], seed: int,
     return chosen, counts
 
 
+def choose_balanced(by_track: dict, results: dict, source: Path, seed: int):
+    """Add two unanimous successes; retain old panels 3--8 unchanged.
+
+    The original eight-example selection is verified against all three frozen
+    prediction sets, and new images are picked without repeating a retained
+    source photograph or plate transcription. Old output remains untouched.
+    """
+    source = source.expanduser().resolve(strict=True)
+    doc = json.loads(source.read_text(encoding="utf-8"))
+    examples = doc.get("examples", [])
+    if doc.get("manifest_sha256") != MANIFEST_SHA256:
+        raise ValueError("Original selection has a different frozen manifest")
+    if ([e.get("category") for e in examples] !=
+            ["full"] * 4 + ["one_error"] * 2 + ["two_three_errors"] * 2):
+        raise ValueError("Expected the original ordered 4+2+2 selection")
+    thresholds = doc.get("thresholds", {})
+    seen_photos, seen_labels, seen_tids = set(), set(), set()
+    reused = []
+    # Preserve original (c)--(h), which become new (c)--(h).
+    for item in examples[2:]:
+        tid, category = item["track_id"], item["category"]
+        if tid not in by_track or tid in seen_tids:
+            raise ValueError("Unknown or duplicated retained track: " + tid)
+        row = by_track[tid]
+        if (row["source_legibility"] != "Illegible" or
+                row["ocr"] != item["ground_truth"] or
+                row["source_image"] != item["source_image"] or
+                row["annotation_index"] != item["annotation_index"]):
+            raise ValueError("Retained source metadata mismatch for " + tid)
+        ours = results["Ours"][tid].matches
+        peers = max(results[m][tid].matches for m in MODEL_ORDER[1:])
+        if (category == "full" and (ours != 7 or peers > thresholds.get("full_max_peer", 6))
+                or category == "one_error" and (ours != 6 or peers > thresholds.get("partial_max_peer", 5))
+                or category == "two_three_errors" and
+                (ours not in (4, 5) or peers > thresholds.get("hard_max_peer", 3))):
+            raise ValueError("Retained selection category no longer valid: " + tid)
+        for model in MODEL_ORDER:
+            old = item["predictions"][model]
+            now = results[model][tid]
+            if old["text"] != now.text or old["matching_positions"] != now.matches:
+                raise ValueError("Retained prediction mismatch: " + tid + " / " + model)
+        if row["source_image"] in seen_photos or row["ocr"] in seen_labels:
+            raise ValueError("Retained examples repeat a source photo or plate label")
+        seen_photos.add(row["source_image"])
+        seen_labels.add(row["ocr"])
+        seen_tids.add(tid)
+        reused.append((category, tid))
+
+    candidates = [
+        tid for tid, row in by_track.items()
+        if row["source_legibility"] == "Illegible"
+        and all(results[m][tid].matches == 7 for m in MODEL_ORDER)
+    ]
+    rng = random.Random(seed)
+    rng.shuffle(candidates)
+    new = []
+    for tid in candidates:
+        row = by_track[tid]
+        if (tid in seen_tids or row["source_image"] in seen_photos
+                or row["ocr"] in seen_labels):
+            continue
+        new.append(("all_correct", tid))
+        seen_tids.add(tid)
+        seen_photos.add(row["source_image"])
+        seen_labels.add(row["ocr"])
+        if len(new) == 2:
+            break
+    counts = {"all_correct": len(candidates), "full": 2,
+              "one_error": 2, "two_three_errors": 2}
+    if len(new) != 2:
+        raise ValueError(
+            "Only " + str(len(new)) + " non-overlapping unanimous-success "
+            "examples were found; need two. Do not fabricate examples. "
+            "Consider choosing a different source-label group explicitly."
+        )
+    return new + reused, counts
+
+
 def font(size: int, bold=False):
     files = (
         ["/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
@@ -214,7 +293,8 @@ def render_panel(label: str, example_no: int, row: dict, preds: dict,
     panel = Image.new("RGB", (PANEL_W, PANEL_H), BG)
     d = ImageDraw.Draw(panel)
     d.rounded_rectangle((5, 5, PANEL_W-6, PANEL_H-6), radius=12, outline="#bfc7d1", width=2)
-    headers = {"full": "Exact match (both baselines wrong)",
+    headers = {"all_correct": "All three models: exact match",
+               "full": "Ours exact (baselines wrong)",
                "one_error": "Our model: one wrong position",
                "two_three_errors": "Our model: 2-3 wrong positions"}
     d.text((18, 14), f"{example_no:02d}  {headers[label]}", font=font(19, True), fill=DARK)
@@ -286,6 +366,7 @@ def render_outputs(args, chosen, by_track, predictions, counts, dataset):
         "purpose":"Human-review selection only; not a statistical sample",
         "selected_from":"frozen padded LPLCv2 7,023 annotations; source legibility Illegible",
         "manifest_sha256":MANIFEST_SHA256,"seed":args.seed,"ranking":args.selection,
+        "layout":getattr(args, "layout", "original"),
         "thresholds":{"full_max_peer":args.full_max_peer,"partial_max_peer":args.partial_max_peer,
                       "hard_max_peer":args.hard_max_peer},"eligible_counts":counts,
         "examples":private},indent=2,ensure_ascii=False)+"\n",encoding="utf-8")
@@ -309,7 +390,13 @@ def render_outputs(args, chosen, by_track, predictions, counts, dataset):
 def main():
     parser=argparse.ArgumentParser(description=__doc__,formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--dataset",type=Path,default=DEFAULT_DATASET)
-    parser.add_argument("--output",type=Path,default=DEFAULT_OUTPUT)
+    parser.add_argument("--output",type=Path,default=None,
+                        help="Output directory (default depends on --layout)")
+    parser.add_argument("--layout",choices=("original","balanced"),default="original",
+                        help="Original 4+2+2 or new 2+2+2+2 with panels (c)-(h) reused")
+    parser.add_argument("--reuse-selection",type=Path,
+                        default=DEFAULT_OUTPUT / "selection_private.json",
+                        help="Original local 4+2+2 selection for --layout balanced")
     parser.add_argument("--seed",type=int,default=2026)
     parser.add_argument("--selection",choices=("contrast","random"),default="contrast")
     parser.add_argument("--full-max-peer",type=int,choices=range(0,7),default=6,
@@ -331,8 +418,19 @@ def main():
         unknown=excluded-set(by_track)
         if unknown:
             raise ValueError(f"Unrecognized excluded track IDs: {sorted(unknown)[:5]}")
-    chosen,counts=choose(by_track,predictions,excluded,args.seed,
-                         args.full_max_peer,args.partial_max_peer,args.hard_max_peer,args.selection)
+    if args.output is None:
+        args.output = BALANCED_OUTPUT if args.layout == "balanced" else DEFAULT_OUTPUT
+    if args.layout == "balanced":
+        if excluded:
+            raise ValueError(
+                "--exclude is not supported with balanced reuse; review the "
+                "new panels and use an alternate original selection if needed")
+        chosen, counts = choose_balanced(
+            by_track, predictions, args.reuse_selection, args.seed)
+    else:
+        chosen,counts=choose(by_track,predictions,excluded,args.seed,
+                             args.full_max_peer,args.partial_max_peer,
+                             args.hard_max_peer,args.selection)
     print("Eligible candidates by category:",counts)
     print("Selection:",[(group,tid) for group,tid in chosen])
     if not args.dry_run:
