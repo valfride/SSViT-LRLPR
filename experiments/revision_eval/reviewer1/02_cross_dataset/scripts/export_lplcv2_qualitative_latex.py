@@ -107,7 +107,8 @@ def verify_selection(selection: Path, dataset: Path):
         ours = checked["Ours"].matches
         peers = max(checked[m].matches for m in MODEL_ORDER[1:])
         if category == "all_correct":
-            valid = all(checked[m].matches == 7 for m in MODEL_ORDER)
+            valid = all(checked[m].matches == 7 and
+                        checked[m].text == truth for m in MODEL_ORDER)
         else:
             valid = (
                 (category == "full" and ours == 7)
