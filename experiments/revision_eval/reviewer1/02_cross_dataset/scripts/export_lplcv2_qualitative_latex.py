@@ -20,21 +20,25 @@ from pathlib import Path
 from PIL import Image
 
 from select_lplcv2_qualitative_examples import (
-    DEFAULT_DATASET, DEFAULT_OUTPUT, MANIFEST_SHA256, MODEL_KEYS,
+    BALANCED_OUTPUT, DEFAULT_DATASET, DEFAULT_OUTPUT, MANIFEST_SHA256, MODEL_KEYS,
     MODEL_ORDER, normalize, position_matches, read_manifest, read_predictions,
     sha256,
 )
 
 DEFAULT_SELECTION = DEFAULT_OUTPUT / "selection_private.json"
 DEFAULT_LATEX_OUTPUT = DEFAULT_OUTPUT / "latex_figure"
-EXPECTED_CATEGORIES = {"full": 4, "one_error": 2, "two_three_errors": 2}
+EXPECTED_CATEGORIES = {
+    "original": {"full": 4, "one_error": 2, "two_three_errors": 2},
+    "balanced": {"all_correct": 2, "full": 2, "one_error": 2, "two_three_errors": 2},
+}
 PEER_LIMIT_KEYS = {
     "full": "full_max_peer",
     "one_error": "partial_max_peer",
     "two_three_errors": "hard_max_peer",
 }
 CATEGORY_TITLES = {
-    "full": "Exact match",
+    "all_correct": "All models correct",
+    "full": "Ours exact",
     "one_error": "One wrong position",
     "two_three_errors": "Two--three wrong",
 }
@@ -50,8 +54,16 @@ def verify_selection(selection: Path, dataset: Path):
         raise ValueError("Selection belongs to a different frozen manifest")
     if not isinstance(examples, list) or len(examples) != 8:
         raise ValueError("Expected exactly eight previously selected examples")
-    if Counter(e.get("category") for e in examples) != EXPECTED_CATEGORIES:
-        raise ValueError("Selection does not have the original 4+2+2 categories")
+    layout = doc.get("layout", "original")
+    if layout not in EXPECTED_CATEGORIES:
+        raise ValueError("Unknown selection layout: " + str(layout))
+    required = EXPECTED_CATEGORIES[layout]
+    if Counter(e.get("category") for e in examples) != required:
+        raise ValueError(f"Selection does not match {layout}: {required}")
+    if [e["category"] for e in examples] != [
+        name for name, amount in required.items() for _ in range(amount)
+    ]:
+        raise ValueError("Selection categories must be in publication panel order")
 
     by_track = read_manifest(dataset)
     predictions = {
@@ -94,10 +106,15 @@ def verify_selection(selection: Path, dataset: Path):
 
         ours = checked["Ours"].matches
         peers = max(checked[m].matches for m in MODEL_ORDER[1:])
-        if (category == "full" and ours != 7
-                or category == "one_error" and ours != 6
-                or category == "two_three_errors" and ours not in (4, 5)
-                or peers > thresholds[PEER_LIMIT_KEYS[category]]):
+        if category == "all_correct":
+            valid = all(checked[m].matches == 7 for m in MODEL_ORDER)
+        else:
+            valid = (
+                (category == "full" and ours == 7)
+                or (category == "one_error" and ours == 6)
+                or (category == "two_three_errors" and ours in (4, 5))
+            ) and peers <= thresholds[PEER_LIMIT_KEYS[category]]
+        if not valid:
             raise ValueError("Selection category rules no longer hold: " + tid)
 
         crop = dataset / "crops" / tid / "lr-001.png"
@@ -109,7 +126,7 @@ def verify_selection(selection: Path, dataset: Path):
             size = im.size
             im.verify()
         verified.append((i, category, crop, size, truth, checked))
-    return verified
+    return verified, layout
 
 
 def colored_prediction(pred: str, truth: str) -> str:
@@ -155,7 +172,7 @@ def latex_card(example) -> str:
     return "\n".join(parts)
 
 
-def render_figure(examples) -> str:
+def render_figure(examples, layout: str) -> str:
     cards = [latex_card(e) for e in examples]
     last_matches = [e[5]["Ours"].matches for e in examples[6:]]
     last_clause = (
@@ -177,10 +194,20 @@ def render_figure(examples) -> str:
         grid.rstrip("\n"),
         r"\end{tabular}",
         r"\endgroup",
-        r"\caption{\VN{Eight performance-selected examples from the LPLCv2",
-        r"subset labelled Illegible ($F=1$). In (a)--(d), our model matches all",
-        r"seven annotated characters while both comparison models do not; it",
-        r"matches six in (e)--(f) and " + last_clause,
+        *(
+            [
+                r"\caption{\VN{Eight performance-selected examples from the",
+                r"LPLCv2 subset labelled Illegible ($F=1$). All three models",
+                r"correctly transcribe (a)--(b); only our model is fully",
+                r"correct in (c)--(d). Our model matches six positions in",
+                r"(e)--(f) and " + last_clause,
+            ] if layout == "balanced" else [
+                r"\caption{\VN{Eight performance-selected examples from the LPLCv2",
+                r"subset labelled Illegible ($F=1$). In (a)--(d), our model matches all",
+                r"seven annotated characters while both comparison models do not; it",
+                r"matches six in (e)--(f) and " + last_clause,
+            ]
+        ),
         r"Green and red characters indicate position-wise agreement and",
         r"disagreement with the source transcription, respectively.",
         r"Panels show native-resolution padded crops enlarged for",
@@ -212,7 +239,7 @@ def preview_source() -> str:
     ])
 
 
-def write_package(output: Path, examples):
+def write_package(output: Path, examples, layout: str):
     if output.exists():
         raise FileExistsError("Refusing to overwrite existing output: " + str(output))
     # Destination is private by default; no file is written outside output.
@@ -224,7 +251,7 @@ def write_package(output: Path, examples):
         shutil.copyfile(path, destination)  # preserve original crop bytes
         if sha256(path) != sha256(destination):
             raise RuntimeError("Copied image differs from the frozen source")
-    (output / "figure.tex").write_text(render_figure(examples), encoding="utf-8")
+    (output / "figure.tex").write_text(render_figure(examples, layout), encoding="utf-8")
     (output / "preview.tex").write_text(preview_source(), encoding="utf-8")
     (output / "REVIEW_FIRST.txt").write_text(
         "PRIVATE QUALITATIVE FIGURE: figure.tex reveals full transcriptions "
@@ -243,24 +270,30 @@ def write_package(output: Path, examples):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--selection", type=Path, default=DEFAULT_SELECTION,
+    parser.add_argument("--layout", choices=("original", "balanced"),
+                        default="original", help="Match the saved 4+2+2 or 2+2+2+2 selection")
+    parser.add_argument("--selection", type=Path, default=None,
                         help="Previously generated, local selection_private.json")
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
-    parser.add_argument("--output", type=Path, default=DEFAULT_LATEX_OUTPUT,
+    parser.add_argument("--output", type=Path, default=None,
                         help="New local output directory; must not already exist")
     parser.add_argument("--dry-run", action="store_true",
                         help="Validate saved selection and all predictions, without writing")
     args = parser.parse_args()
-    selection = args.selection.expanduser().resolve(strict=True)
+    base = BALANCED_OUTPUT if args.layout == "balanced" else DEFAULT_OUTPUT
+    selection_path = args.selection or base / "selection_private.json"
+    selection = selection_path.expanduser().resolve(strict=True)
     dataset = args.dataset.expanduser().resolve(strict=True)
-    examples = verify_selection(selection, dataset)
+    examples, layout = verify_selection(selection, dataset)
+    if layout != args.layout:
+        raise ValueError(f"Selection uses {layout}, but --layout is {args.layout}")
     counts = Counter(category for _, category, *_ in examples)
     print("Verified existing eight examples:", dict(counts))
     print("Original padded PNG crops and all three model outputs match the frozen results.")
     if args.dry_run:
         return
-    output = args.output.expanduser().absolute()
-    write_package(output, examples)
+    output = (args.output or base / "latex_figure").expanduser().absolute()
+    write_package(output, examples, layout)
     print("LaTeX package saved:", output)
     print("Preview: cd " + str(output) +
           " && pdflatex -interaction=nonstopmode -halt-on-error preview.tex")
