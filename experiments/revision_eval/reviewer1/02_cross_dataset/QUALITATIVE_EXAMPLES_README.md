@@ -66,3 +66,77 @@ The output directory is beneath `results/`, which is Git-ignored by this reposit
 Once the images are cleared for sharing, copy **only the selected contact sheet and panel PNGs** into a separately reviewed publication folder. Alternatively, attach just the overview image in this chat for visual feedback without publishing the underlying dataset files in a repository.
 
 A suitable manuscript description is: *"Eight illustrative examples selected from the Illegible-labelled LPLCv2 evaluation set; model-performance-conditioned selection is not representative of the full dataset."* The quantitative comparisons must continue to use all 7,023 eligible samples, unchanged.
+
+## LaTeX figure export (same eight already selected images)
+
+The new exporter produces a *native LaTeX* 4-by-2 comparison, using the
+**existing fixed selection**, without loading checkpoints, rerunning inference,
+reselecting samples, or altering any source image. LaTeX typesets the labels
+and model predictions under each original padded crop, with green/red
+per-position comparisons.
+
+On daugman, from the experiment repository root:
+
+```bash
+conda activate yolov11
+cd ~/doc2025/project1
+git pull --ff-only
+EXPORT=experiments/revision_eval/reviewer1/02_cross_dataset/scripts/export_lplcv2_qualitative_latex.py
+python "$EXPORT" --dry-run
+python "$EXPORT"
+cd experiments/revision_eval/reviewer1/02_cross_dataset/results/qualitative_illegible_7023/latex_figure
+pdflatex -interaction=nonstopmode -halt-on-error preview.tex
+```
+
+The script reads the local `selection_private.json`, validates all eight
+entries against the frozen padded dataset and all three original prediction
+CSVs, and verifies their 4+2+2 categories and selection constraints.
+It refuses to overwrite an existing output directory.
+
+A new ignored `latex_figure/` directory is created alongside the
+existing PNG panels. It contains:
+
+- `figure.tex`: a two-column-width `figure*`, four examples per row,
+  with original crop, source legibility label, ground truth, the three
+  model predictions and their matching-position counts.
+- `crops/example_01.png` through `example_08.png`: byte-for-byte
+  copies of the native padded license plate crops, with no resizing or text.
+- `preview.tex`: a standalone preview requiring standard LaTeX
+  packages `graphicx`, `xcolor`, and `geometry`.
+- `REVIEW_FIRST.txt`: a reminder about permission and review.
+
+The generated figure caption uses the paper's `\VN{...}` revision
+convention. The source itself defines `\LPLQualPath` to the default
+manuscript-relative path `4-experiments/qualitative_lplcv2`.
+The standalone preview overrides that path to the local directory.
+
+After **independently checking publication/redistribution permission,
+privacy, the transcription quality, and the visual crops**, copy only
+the reviewed image files and generated figure source to the paper
+repository:
+
+```bash
+cd ~/doc2025/project1
+SOURCE=experiments/revision_eval/reviewer1/02_cross_dataset/results/qualitative_illegible_7023/latex_figure
+PAPER=~/doc2025/CNN-ViT-LRLPR-paper
+mkdir -p "$PAPER/4-experiments/qualitative_lplcv2/crops"
+cp "$SOURCE/figure.tex" "$PAPER/4-experiments/qualitative_lplcv2/"
+cp "$SOURCE"/crops/*.png "$PAPER/4-experiments/qualitative_lplcv2/crops/"
+```
+
+Then add this line in the Cross-Dataset Experimental Results subsection:
+
+```tex
+\input{4-experiments/qualitative_lplcv2/figure.tex}
+```
+
+Neither repository's manuscript source is edited automatically. Compile the
+paper normally after you insert the figure. If images are not cleared
+for public redistribution, keep the generated package local or share
+it privately for visual review. In particular, **the generated LaTeX
+contains real transcriptions and predictions**, so do not force-add it,
+the crops, the selection metadata, or the full prediction CSVs to a
+public repository without clearance.
+
+To export a different vetted selection, supply `--selection PATH`.
+To create another output without overwriting, use `--output NEW_PATH`.
