@@ -140,3 +140,62 @@ public repository without clearance.
 
 To export a different vetted selection, supply `--selection PATH`.
 To create another output without overwriting, use `--output NEW_PATH`.
+
+
+## Balanced 2+2+2+2 revision (preferred for the paper)
+
+The original illustrated figure uses 4+2+2 cases and is retained unchanged.
+For a more balanced qualitative comparison, the selector now supports
+`--layout balanced`. It creates **two examples in each category**,
+all from the same frozen Illegible-labelled LPLCv2 evaluation:
+
+1. Panels **(a)–(b):** Ours, SVTRv2 and SVTRv2-AR all recognize the complete plate (7/7 each).
+2. Panels **(c)–(d):** Ours is fully correct (7/7); both other models are incorrect.
+3. Panels **(e)–(f):** Ours matches 6/7; both other models match at most 5/7.
+4. Panels **(g)–(h):** Ours matches 4/7 or 5/7; both other models match at most 3/7.
+
+**Six previously reviewed crops are preserved:** original (c)–(h) remain
+the new (c)–(h), including their predictions. Only the first two examples
+are newly chosen, reproducibly (seed 2026), among the Illegible-labelled
+samples on which all three models achieve 7/7. New cases cannot repeat
+the existing six source photographs or transcriptions. If fewer than
+two eligible nonoverlapping examples exist, selection **fails clearly**
+instead of relaxing the criteria or fabricating cases.
+
+From `~/doc2025/project1`:
+
+```bash
+conda activate yolov11
+cd ~/doc2025/project1
+git switch revision/reviewer-eval-tooling
+git pull --ff-only
+
+BASE=experiments/revision_eval/reviewer1/02_cross_dataset
+SELECT="$BASE/scripts/select_lplcv2_qualitative_examples.py"
+EXPORT="$BASE/scripts/export_lplcv2_qualitative_latex.py"
+
+python "$SELECT" --layout balanced --dry-run
+python "$SELECT" --layout balanced
+
+python "$EXPORT" --layout balanced --dry-run
+python "$EXPORT" --layout balanced
+
+cd "$BASE/results/qualitative_illegible_7023_balanced/latex_figure"
+pdflatex -interaction=nonstopmode -halt-on-error preview.tex
+```
+
+The balanced outputs live in the **new, Git-ignored** folder
+`results/qualitative_illegible_7023_balanced/`; they do not overwrite
+the earlier figure, existing crops, or frozen prediction files.
+
+After visual review, copy only the approved new `figure.tex` and
+`crops/example_*.png` into the paper repository's existing
+`4-experiments/qualitative_lplcv2/` folder, replacing the old
+qualitative figure assets **together**. The figure and manuscript
+description must be updated in the same paper commit so that the
+claims for panels (a)–(d) reflect the new grouping; the paper still
+describes the old figure until this replacement is explicitly made.
+
+Remember: these are deliberately prediction-conditioned examples, not
+representative samples or evidence of independently verified visual
+readability. Confirm rights to redistribute the new crops before pushing.
