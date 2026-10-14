@@ -249,8 +249,8 @@ def choose_balanced(by_track: dict, results: dict, source: Path, seed: int):
         seen_labels.add(row["ocr"])
         if len(new) == 2:
             break
-    counts = {"all_correct": len(candidates), "full": 2,
-              "one_error": 2, "two_three_errors": 2}
+    counts = {"all_correct": len(candidates), "retained_full": 2,
+              "retained_one_error": 2, "retained_two_three_errors": 2}
     if len(new) != 2:
         raise ValueError(
             "Only " + str(len(new)) + " non-overlapping unanimous-success "
