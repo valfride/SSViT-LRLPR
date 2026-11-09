@@ -1,6 +1,6 @@
 # Paper commands
 
-From the source root, set `WEIGHTS` to your private JSON asset mapping, `TEST` to frozen3,000track test LMDB, `VAL` to frozen1,000track validation, `LPLCV2` to exact padded7,023LMDB, and `OUT` to a fresh private parent outside this checkout. Plans/preflight/reference checks do not run models. Every expensive example requires separate execution authorization and the original approved data/weights. None was executed during preparation.
+From the source root, set `WEIGHTS` to your private JSON asset mapping, `TEST` to frozen3,000track test LMDB, `VAL` to frozen 1,000track validation, `LPLCV2` to exact padded7,023LMDB, and `OUT` to a fresh private parent outside this checkout. Plans/preflight/reference checks do not run models. Every expensive example requires separate execution authorization and the original approved data/weights. None was executed during preparation.
 
 ## Tables1–3
 
@@ -22,7 +22,7 @@ python -m reproducibility.verify --aggregate "$OUT/table2/aggregate.json"
 python -m reproducibility.verify --aggregate "$OUT/table3/aggregate.json"
 ```
 
-Table1:24 evaluations,exact/partial counts. Table2:64 post-selection controls,8 models xF3/F5 x4methods. Table3:8F1evaluations and private per-annotation subgroup joins. PRF retains `--fusion bayes`; other final rules are `average`,`majority`,`char_majority`. Underlying mode is `val` for metrics with explicit test phase; no checkpoint selection. `logit_average` remains compatible but is not final Table2.
+Table1: 24 evaluations,exact/partial counts. Table2: 64 post-selection controls,8 models xF3/F5 x4methods. Table3:8F1evaluations and private per-annotation subgroup joins. PRF retains `--fusion bayes`; other final rules are `average`,`majority`,`char_majority`. Underlying mode is `val` for metrics with explicit test phase; no checkpoint selection. `logit_average` remains compatible but is not final Table2.
 
 `--models ours` supports partial diagnostics; complete-table verification requires all 8 models. Frozen validation choice remains PRF in 16 settings; a separately authorized **replay**, never reselection, can use Table2 `--validation --dataset "$VAL"`. Existing selection aggregates are in `VALIDATION_SELECTION.csv`. The wrapper never changes choices from new validation or test scores.
 
