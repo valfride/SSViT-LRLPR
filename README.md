@@ -8,7 +8,6 @@ upsampling and a fixed-length cross-attention recognizer.
 This clean repository preserves the validated model implementations, frozen
 configurations and evaluation protocols. Model usability was checked against the
 original checkpoints; full numerical experiments were not repeated for release.
-Tables 1–5 were compared read-only against manuscript snapshot `775a045acae01770859a4c51ea2a788dd436c5ed`. This check covers displayed values, not a new experiment or complete prose review.
 
 ## Setup
 
@@ -28,22 +27,12 @@ clean CUDA installation remains unverified. See [reader guidance](docs/READER_ST
 
 ## Original CNN–ViT checkpoint
 
-Only the proposed model’s **original validation-selected EMA epoch58** is approved
-for this repository’s release. The asset is named `ema_weights.pth`; its original
-paper-evaluation filename is `last.pth`. They identify the same immutable bytes:
-
-- SHA-256: `1a7a640dafc368a8dda9ed6a18239b2d54a1f39e9aa0b581a5a405ec0697b11a`
-- Size: **64,267,208 bytes**
-- Configuration: [original CE snapshot](experiments/revision_eval/submitted_model/config_snapshot.yaml)
-
 [Download the original EMA checkpoint](https://github.com/valfride/SSViT-LRLPR/releases/download/ema-epoch58-v1.0.0/ema_weights.pth) from the
 [single-model release](https://github.com/valfride/SSViT-LRLPR/releases/tag/ema-epoch58-v1.0.0). The uploaded asset was independently downloaded
 and verified against the exact digest and byte size above.
 [Weight access and mapping](docs/MODEL_WEIGHTS.md) distinguish distribution
 authorization from the source-code license.
 
-The example below passed strict loading/native decoding with finite `[1,7,38]`
-CPU FP32 scores using the original EMA. The candidate includes the 32 consolidated CPU checks and three single-image interface checks.
 After obtaining the original file, verify it locally and run a bounded synthetic
 single-image example. CPU FP32 is explicit here; this does not reproduce CUDA FP16
 paper metrics. The checkpoint remains outside the checkout:
