@@ -68,21 +68,8 @@ annotations, sample identifiers or plate transcriptions are included.
 [paper/code mapping](docs/PAPER_TRACEABILITY.md) distinguish frozen inference,
 prospective from-scratch training, three-seed ablations and efficiency measurement.
 Exact original configurations,checkpoint/data hashes and native decoders are retained.
-The proposed paper model uses **Cross-Entropy,AdamW,ReduceLROnPlateau,patience60
-and EMA warmup5**. The original continued training trajectory cannot be reconstructed completely.
-
-Verify aggregate references without loading weights or datasets:
-
-```bash
-python -m reproducibility.verify --references --strict-paper-display
-python -m reproducibility.run plan --table 1
-```
-
-Tables1–5 retain the original reported results. Table3 displays80.5%,67.7%,63.8%
-remain separate from the exact integer-count arithmetic and approved historical
-display disclosures. No checkpoints,results,selections or metrics were changed.
-X3 remains deferred. Dataset and unavailable-weight access limits prevent claiming
-that a fresh reader can independently reproduce every numerical table today.
+The proposed paper model uses **Cross-Entropy, AdamW, ReduceLROnPlateau, patience60
+and EMA warmup5**.
 
 ## License and citation
 
