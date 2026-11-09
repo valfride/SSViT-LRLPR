@@ -69,8 +69,7 @@ annotations, sample identifiers or plate transcriptions are included.
 prospective from-scratch training, three-seed ablations and efficiency measurement.
 Exact original configurations,checkpoint/data hashes and native decoders are retained.
 The proposed paper model uses **Cross-Entropy,AdamW,ReduceLROnPlateau,patience60
-and EMA warmup5**. Legacy POLY configurations are historical, not the paper recipe.
-The original continued training trajectory cannot be reconstructed completely.
+and EMA warmup5**. The original continued training trajectory cannot be reconstructed completely.
 
 Verify aggregate references without loading weights or datasets:
 
