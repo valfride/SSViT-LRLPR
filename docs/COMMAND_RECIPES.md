@@ -1,6 +1,6 @@
 # Paper commands
 
-From the source root, set `WEIGHTS` to your private JSON asset mapping, `TEST` to frozen3,000track test LMDB, `VAL` to frozen 1,000 track validation, `LPLCV2` to exact padded7,023LMDB, and `OUT` to a fresh private parent outside this checkout. Plans/preflight/reference checks do not run models. Every expensive example requires separate execution authorization and the original approved data/weights. None was executed during preparation.
+From the source root, set `WEIGHTS` to your private JSON asset mapping, `TEST` to frozen3,000track test LMDB, `VAL` to frozen 1,000 track validation, `LPLCV2` to exact padded 7,023 LMDB, and `OUT` to a fresh private parent outside this checkout. Plans/preflight/reference checks do not run models. Every expensive example requires separate execution authorization and the original approved data/weights. None was executed during preparation.
 
 ## Tables1–3
 
